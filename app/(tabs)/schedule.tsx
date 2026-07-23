@@ -72,18 +72,37 @@ export default function ScheduleScreen() {
     const [editingClass, setEditingClass] = useState<any>(null);
     const [showEditModal, setShowEditModal] = useState(false);
     const viewShotRef = React.useRef<any>(null);
+    const viewShotDarkRef = React.useRef<any>(null);
 
     const [previewUri, setPreviewUri] = useState<string | null>(null);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [exportDark, setExportDark] = useState(true);
 
     const handleExportSchedule = async () => {
-        if (!viewShotRef.current) return;
+        const ref = exportDark ? viewShotDarkRef : viewShotRef;
+        if (!ref.current) return;
         try {
-            const uri = await viewShotRef.current.capture();
+            // Delay to ensure image assets are decoded before capture
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const uri = await ref.current.capture();
             setPreviewUri(uri);
             setShowPreviewModal(true);
         } catch (e: any) {
             AlertService.alert('Export Failed', e.message);
+        }
+    };
+
+    const handleToggleExportTheme = async () => {
+        const newDark = !exportDark;
+        setExportDark(newDark);
+        const ref = newDark ? viewShotDarkRef : viewShotRef;
+        if (!ref.current) return;
+        try {
+            await new Promise(resolve => setTimeout(resolve, 400));
+            const uri = await ref.current.capture();
+            setPreviewUri(uri);
+        } catch (e: any) {
+            // silent fail - keep current preview
         }
     };
 
@@ -761,26 +780,70 @@ export default function ScheduleScreen() {
                                     }}
                                 />
 
-                                {/* Hidden view for screenshot export */}
-                                <View style={{ position: 'absolute', top: -10000, left: -10000 }}>
-                                    <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 1 }}>
-                                        <View className="bg-white" style={{ width: 890, borderRadius: 24, overflow: 'hidden' }}>
-                                            {/* Beautiful Banner */}
-                                            <ImageBackground 
-                                                source={require('../../assets/images/ExportBg.png')} 
-                                                style={{ width: 890, height: 280, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 40, paddingBottom: 40 }}
-                                                imageStyle={{ resizeMode: 'cover', width: 890, height: 280 }}
+                                {/* Hidden views for screenshot export */}
+                                {/* Dark theme export */}
+                                <View style={{ position: 'absolute', top: 0, left: 0, zIndex: -1, opacity: 0 }}>
+                                    <ViewShot ref={viewShotDarkRef} options={{ format: 'jpg', quality: 1 }}>
+                                        <View style={{ width: 890, backgroundColor: '#0f172a', borderRadius: 24, overflow: 'hidden' }}>
+                                            <ImageBackground
+                                                source={require('../../assets/images/ExportBg.png')}
+                                                style={{ width: 890, height: 220 }}
+                                                imageStyle={{ resizeMode: 'cover', width: 890, height: 220 }}
                                             >
-                                                {/* Text Overlay on the left */}
-                                                <View style={{ backgroundColor: 'rgba(255,255,255,0.95)', padding: 32, borderRadius: 32, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 20 }}>
-                                                    <Text style={{ fontSize: 48, fontWeight: '900', color: '#1e3a8a' }}>FinScholar</Text>
-                                                    <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#3b82f6', marginTop: 8 }}>My Schedule • {currentSem.name}</Text>
+                                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 40, paddingBottom: 26, backgroundColor: 'rgba(15,23,42,0.4)' }}>
+                                                    <View>
+                                                        <Text style={{ fontSize: 38, fontWeight: '900', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 }}>FinScholar</Text>
+                                                        <Text style={{ fontSize: 17, fontWeight: '700', color: 'rgba(255,255,255,0.92)', marginTop: 4, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 }}>My Schedule • {currentSem.name}</Text>
+                                                    </View>
+                                                    <View style={{ backgroundColor: 'rgba(99,102,241,0.3)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(129,140,248,0.5)' }}>
+                                                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#c7d2fe' }}>{currentYear?.name || ''}</Text>
+                                                    </View>
                                                 </View>
                                             </ImageBackground>
-
-                                            {/* Schedule Grid */}
-                                            <View style={{ padding: 0 }}>
-                                                <View style={{ width: 890 }}>
+                                            <View style={{ padding: 16, paddingTop: 12 }}>
+                                                <View style={{ width: 858, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: '#334155', backgroundColor: '#1e293b' }}>
+                                                    <TimetableGrid 
+                                                        classes={currentSem.classes} 
+                                                        isDark={true} 
+                                                        isQuickEditMode={false}
+                                                        isExportMode={true}
+                                                        onUpdateClass={() => {}} 
+                                                        onPressClass={() => {}}
+                                                    />
+                                                </View>
+                                            </View>
+                                            {/* Footer */}
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingBottom: 18, paddingTop: 0 }}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                    <Ionicons name="school" size={14} color="#6366f1" style={{ marginRight: 6 }} />
+                                                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#6366f1' }}>FinScholar</Text>
+                                                </View>
+                                                <Text style={{ fontSize: 10, fontWeight: '600', color: '#475569' }}>Generated {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
+                                            </View>
+                                        </View>
+                                    </ViewShot>
+                                </View>
+                                {/* Light theme export */}
+                                <View style={{ position: 'absolute', top: 0, left: 0, zIndex: -1, opacity: 0 }}>
+                                    <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 1 }}>
+                                        <View style={{ width: 890, backgroundColor: '#f1f5f9', borderRadius: 24, overflow: 'hidden' }}>
+                                            <ImageBackground
+                                                source={require('../../assets/images/ExportBg.png')}
+                                                style={{ width: 890, height: 220 }}
+                                                imageStyle={{ resizeMode: 'cover', width: 890, height: 220 }}
+                                            >
+                                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 40, paddingBottom: 26, backgroundColor: 'rgba(15,23,42,0.22)' }}>
+                                                    <View>
+                                                        <Text style={{ fontSize: 38, fontWeight: '900', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 }}>FinScholar</Text>
+                                                        <Text style={{ fontSize: 17, fontWeight: '700', color: '#ffffff', marginTop: 4, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 }}>My Schedule • {currentSem.name}</Text>
+                                                    </View>
+                                                    <View style={{ backgroundColor: 'rgba(255,255,255,0.25)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.5)' }}>
+                                                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }}>{currentYear?.name || ''}</Text>
+                                                    </View>
+                                                </View>
+                                            </ImageBackground>
+                                            <View style={{ padding: 16, paddingTop: 12 }}>
+                                                <View style={{ width: 858, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#ffffff' }}>
                                                     <TimetableGrid 
                                                         classes={currentSem.classes} 
                                                         isDark={false} 
@@ -790,6 +853,14 @@ export default function ScheduleScreen() {
                                                         onPressClass={() => {}}
                                                     />
                                                 </View>
+                                            </View>
+                                            {/* Footer */}
+                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingBottom: 18, paddingTop: 0 }}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                    <Ionicons name="school" size={14} color="#4f46e5" style={{ marginRight: 6 }} />
+                                                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#4f46e5' }}>FinScholar</Text>
+                                                </View>
+                                                <Text style={{ fontSize: 10, fontWeight: '600', color: '#94a3b8' }}>Generated {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
                                             </View>
                                         </View>
                                     </ViewShot>
@@ -881,9 +952,30 @@ export default function ScheduleScreen() {
             <Modal visible={showPreviewModal} transparent={true} animationType="fade">
                 <View className="flex-1 bg-black/90 justify-center items-center">
                     <View className="w-11/12 bg-white rounded-3xl overflow-hidden shadow-2xl p-6">
-                        <Text className="text-xl font-bold text-center mb-4 text-slate-800">Preview Schedule</Text>
+                        <Text className="text-xl font-bold text-center mb-3 text-slate-800">Preview Schedule</Text>
+                        {/* Theme Toggle */}
+                        <View style={{ flexDirection: 'row', alignSelf: 'center', marginBottom: 14, backgroundColor: '#f1f5f9', borderRadius: 12, padding: 3 }}>
+                            <TouchableOpacity
+                                onPress={() => { if (exportDark) handleToggleExportTheme(); }}
+                                style={{ paddingHorizontal: 18, paddingVertical: 9, borderRadius: 10, backgroundColor: !exportDark ? '#ffffff' : 'transparent', borderWidth: !exportDark ? 1 : 0, borderColor: '#e2e8f0' }}
+                            >
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <Ionicons name="sunny-outline" size={15} color={!exportDark ? '#f59e0b' : '#94a3b8'} />
+                                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: !exportDark ? '#1e293b' : '#94a3b8', marginLeft: 5 }}>Light</Text>
+                                </View>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={() => { if (!exportDark) handleToggleExportTheme(); }}
+                                style={{ paddingHorizontal: 18, paddingVertical: 9, borderRadius: 10, backgroundColor: exportDark ? '#1e293b' : 'transparent' }}
+                            >
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <Ionicons name="moon-outline" size={15} color={exportDark ? '#818cf8' : '#94a3b8'} />
+                                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: exportDark ? '#ffffff' : '#94a3b8', marginLeft: 5 }}>Dark</Text>
+                                </View>
+                            </TouchableOpacity>
+                        </View>
                         {previewUri && (
-                            <View className="border border-slate-200 rounded-2xl overflow-hidden mb-6 bg-slate-100">
+                            <View className="border border-slate-200 rounded-2xl overflow-hidden mb-5 bg-slate-100">
                                 <Image source={{ uri: previewUri }} className="w-full h-[400px]" resizeMode="contain" />
                             </View>
                         )}

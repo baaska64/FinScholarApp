@@ -713,19 +713,19 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
 
             {/* AutoConfig Modal (Transparent Popup) */}
             <Modal visible={autoConfigOpen} animationType="fade" transparent={true} onRequestClose={() => setAutoConfigOpen(false)}>
-                <View className="flex-1 bg-black/50 justify-center items-center px-4">
+                <View className="flex-1 bg-black/50 justify-center px-4">
                     <View className={`w-full rounded-[32px] p-6 shadow-xl ${isDark ? 'bg-slate-900' : 'bg-slate-50'}`}>
-                        <View className="flex-row justify-between items-center mb-8">
-                            <View className="flex-row items-center">
-                                <View className="w-12 h-12 rounded-full bg-indigo-100 items-center justify-center mr-3">
+                        <View className="flex-row justify-between items-start mb-8">
+                            <View className="flex-row items-center flex-1 mr-4">
+                                <View className="w-12 h-12 rounded-full bg-indigo-100 items-center justify-center mr-3 shrink-0">
                                     <Ionicons name="color-wand" size={24} color="#6366f1" />
                                 </View>
-                                <View>
+                                <View className="flex-1">
                                     <Text className={`text-2xl font-extrabold ${isDark ? 'text-white' : 'text-slate-800'}`}>AutoConfig</Text>
-                                    <Text className={isDark ? 'text-slate-400' : 'text-slate-500'}>Paste your syllabus below or let Fin scan it</Text>
+                                    <Text className={`${isDark ? 'text-slate-400' : 'text-slate-500'} flex-wrap`} numberOfLines={2}>Paste your syllabus below or let Fin scan it</Text>
                                 </View>
                             </View>
-                            <TouchableOpacity onPress={() => setAutoConfigOpen(false)} className={`p-3 rounded-full ${isDark ? 'bg-slate-800' : 'bg-white shadow-sm'}`}>
+                            <TouchableOpacity onPress={() => setAutoConfigOpen(false)} className={`p-3 rounded-full shrink-0 ${isDark ? 'bg-slate-800' : 'bg-white shadow-sm'}`}>
                                 <Ionicons name="close" size={16} color={isDark ? "#94a3b8" : "#64748b"} />
                             </TouchableOpacity>
                         </View>
@@ -734,7 +734,7 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                             <TouchableOpacity 
                                 onPress={pickImage}
                                 className={`flex-1 border-2 border-dashed rounded-[24px] p-4 items-center justify-center ${isDark ? 'border-slate-700 bg-slate-800' : 'border-slate-200 bg-slate-50'}`}
-                                style={{ height: 120 }}
+                                style={{ height: 100 }}
                             >
                                 {autoConfigImage ? (
                                     <View className="w-full h-full relative rounded-[16px] overflow-hidden">
@@ -748,8 +748,8 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                                     </View>
                                 ) : (
                                     <>
-                                        <Ionicons name="image-outline" size={32} color={isDark ? "#6366f1" : "#818cf8"} />
-                                        <Text className={`text-sm font-bold mt-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Add Image</Text>
+                                        <Ionicons name="image-outline" size={28} color={isDark ? "#6366f1" : "#818cf8"} />
+                                        <Text className={`text-sm font-bold mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`} numberOfLines={1}>Add Image</Text>
                                     </>
                                 )}
                             </TouchableOpacity>
@@ -758,10 +758,10 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                                 multiline 
                                 value={syllabusText}
                                 onChangeText={setSyllabusText}
-                                placeholder="Or type instructions here..."
+                                placeholder="Or type instructions..."
                                 placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                                 className={`flex-1 p-4 rounded-[24px] text-sm shadow-sm border ${isDark ? 'bg-slate-800 text-white border-slate-700' : 'bg-white text-slate-800 border-slate-100'}`}
-                                style={{ textAlignVertical: 'top', height: 120 }}
+                                style={{ textAlignVertical: 'top', height: 100 }}
                             />
                         </View>
 

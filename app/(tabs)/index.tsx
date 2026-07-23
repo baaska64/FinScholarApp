@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, Image, Animated, Platform } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, RefreshControl, Image, Animated, Platform, Dimensions } from 'react-native';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
@@ -14,6 +14,8 @@ import { DashboardSkeleton } from '@/components/ui/LoadingSkeleton';
 import SectionHeader from '@/components/ui/SectionHeader';
 import AnimatedPressable from '@/components/ui/AnimatedPressable';
 import Badge from '@/components/ui/Badge';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
 
 const FIN_QUOTES = [
     "Believe you can and you're halfway there!",
@@ -288,36 +290,49 @@ export default function DashboardScreen() {
                 <FadeInItem index={1}>
                     <View style={{ paddingHorizontal: 24, marginBottom: 32 }}>
                         <View style={{
-                            borderRadius: Radius['4xl'], width: '100%', flexDirection: 'row',
-                            alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, paddingVertical: 32,
-                            overflow: 'hidden',
+                            borderRadius: Radius['4xl'], width: '100%',
                             backgroundColor: isDark ? '#0f766e' : '#34d399',
                             ...Platform.select({ ios: { shadowColor: '#34d399', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 16 }, android: { elevation: 8 } }),
                         }}>
-                            {/* Left: Year GWA */}
-                            <View style={{ flex: 1, zIndex: 10 }}>
-                                <View style={{ backgroundColor: 'rgba(0,0,0,0.15)', paddingHorizontal: 14, paddingVertical: 12, borderRadius: Radius.xl, alignSelf: 'flex-start', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' }}>
-                                    <Text style={{ fontFamily: 'Nunito_700Bold', color: 'rgba(255,255,255,0.9)', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 2, textAlign: 'center' }}>Year GWA</Text>
-                                    <Text style={{ fontFamily: 'Nunito_900Black', color: '#ffffff', fontSize: 24, textAlign: 'center' }}>
-                                        {system === 'PERCENT' ? (yrRes.percent > 0 ? yrRes.percent.toFixed(2) : '--') : (yrRes.equivalent > 0 ? yrRes.equivalent.toFixed(2) : '--')}
-                                    </Text>
+                            <View style={{
+                                borderRadius: Radius['4xl'], width: '100%', flexDirection: 'row',
+                                alignItems: 'center', justifyContent: 'space-between',
+                                overflow: 'hidden',
+                            }}>
+                                {/* Left: Year GWA */}
+                                <View style={{ paddingLeft: 16, paddingVertical: 24, zIndex: 10 }}>
+                                    <View style={{ backgroundColor: 'rgba(0,0,0,0.15)', paddingHorizontal: 12, paddingVertical: 10, borderRadius: Radius.xl, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' }}>
+                                        <Text style={{ fontFamily: 'Nunito_700Bold', color: 'rgba(255,255,255,0.9)', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 2, textAlign: 'center' }}>Year GWA</Text>
+                                        <Text style={{ fontFamily: 'Nunito_900Black', color: '#ffffff', fontSize: 22, textAlign: 'center' }}>
+                                            {system === 'PERCENT' ? (yrRes.percent > 0 ? yrRes.percent.toFixed(2) : '--') : (yrRes.equivalent > 0 ? yrRes.equivalent.toFixed(2) : '--')}
+                                        </Text>
+                                    </View>
                                 </View>
-                            </View>
 
-                            {/* Center: Mascot */}
-                            <Image 
-                                source={require('../../assets/images/FinDashboard.png')} 
-                                style={{ width: 220, height: 260, position: 'absolute', top: -20, left: '50%', transform: [{ translateX: -110 }], zIndex: 0 }}
-                                resizeMode="contain" 
-                            />
+                                {/* Center: Mascot */}
+                                <View style={{ flex: 1, height: Math.max(105, SCREEN_WIDTH * 0.28), overflow: 'hidden', zIndex: 0 }}>
+                                    <Image 
+                                        source={require('../../assets/images/FinDashboard.png')} 
+                                        style={{ 
+                                            position: 'absolute',
+                                            width: SCREEN_WIDTH * 0.48, 
+                                            height: SCREEN_WIDTH * 0.48,
+                                            left: '50%',
+                                            marginLeft: -(SCREEN_WIDTH * 0.24), // Center horizontally
+                                            top: -(SCREEN_WIDTH * 0.035), // Shift up to show books and crop 5px below them
+                                        }}
+                                        resizeMode="contain" 
+                                    />
+                                </View>
 
-                            {/* Right: Semester GWA */}
-                            <View style={{ flex: 1, alignItems: 'flex-end', zIndex: 10 }}>
-                                <View style={{ backgroundColor: 'rgba(0,0,0,0.15)', paddingHorizontal: 14, paddingVertical: 12, borderRadius: Radius.xl, alignSelf: 'flex-end', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' }}>
-                                    <Text style={{ fontFamily: 'Nunito_700Bold', color: 'rgba(255,255,255,0.9)', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 2, textAlign: 'center' }}>Sem GWA</Text>
-                                    <Text style={{ fontFamily: 'Nunito_900Black', color: '#ffffff', fontSize: 24, textAlign: 'center' }}>
-                                        {system === 'PERCENT' ? (semRes.percent > 0 ? semRes.percent.toFixed(2) : '--') : (semRes.equivalent > 0 ? semRes.equivalent.toFixed(2) : '--')}
-                                    </Text>
+                                {/* Right: Semester GWA */}
+                                <View style={{ paddingRight: 16, paddingVertical: 24, zIndex: 10 }}>
+                                    <View style={{ backgroundColor: 'rgba(0,0,0,0.15)', paddingHorizontal: 12, paddingVertical: 10, borderRadius: Radius.xl, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' }}>
+                                        <Text style={{ fontFamily: 'Nunito_700Bold', color: 'rgba(255,255,255,0.9)', fontSize: 9, textTransform: 'uppercase', letterSpacing: 1.5, marginBottom: 2, textAlign: 'center' }}>Sem GWA</Text>
+                                        <Text style={{ fontFamily: 'Nunito_900Black', color: '#ffffff', fontSize: 22, textAlign: 'center' }}>
+                                            {system === 'PERCENT' ? (semRes.percent > 0 ? semRes.percent.toFixed(2) : '--') : (semRes.equivalent > 0 ? semRes.equivalent.toFixed(2) : '--')}
+                                        </Text>
+                                    </View>
                                 </View>
                             </View>
                         </View>
