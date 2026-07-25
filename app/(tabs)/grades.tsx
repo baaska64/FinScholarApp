@@ -270,12 +270,25 @@ export default function GradeLedgerTab() {
                 system={system}
                 onBack={() => setActiveSubId(null)}
                 onChange={(newSubject: any) => {
-                    const nd = {...data};
-                    const sem = nd.years.find((y: any) => y.id === activeYearId).semesters.find((s: any) => s.id === activeSemId);
-                    const idx = sem.subjects.findIndex((s: any) => s.id === activeSubId);
-                    if (idx !== -1) {
-                        sem.subjects[idx] = newSubject;
-                        saveData(nd);
+                    const nd = JSON.parse(JSON.stringify(data));
+                    const sem = nd.years.find((y: any) => y.id === activeYearId)?.semesters.find((s: any) => s.id === activeSemId);
+                    if (sem) {
+                        const idx = sem.subjects.findIndex((s: any) => s.id === activeSubId);
+                        if (idx !== -1) {
+                            const oldName = sem.subjects[idx].name;
+                            sem.subjects[idx] = newSubject;
+                            
+                            // IF renamed, update all connected schedule blocks!
+                            if (newSubject.name !== oldName && sem.classes) {
+                                sem.classes.forEach((c: any) => {
+                                    if (c.subjectId === activeSubId) {
+                                        c.name = newSubject.name;
+                                    }
+                                });
+                            }
+                            
+                            saveData(nd);
+                        }
                     }
                 }}
             />

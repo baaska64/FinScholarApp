@@ -6,7 +6,8 @@ import { supabase } from '../../services/supabaseClient';
 import { SyncService } from '../../services/SyncService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Tabs from '@/components/ledger/Tabs';
-import TimetableGrid from '@/components/schedule/TimetableGrid';
+import TimetableGrid, { LIGHT_COLORS, DARK_COLORS } from '@/components/schedule/TimetableGrid';
+import ScheduleListView from '@/components/schedule/ScheduleListView';
 import AttendanceTracker from '@/components/schedule/AttendanceTracker';
 import ScheduleScannerModal from '@/components/schedule/ScheduleScannerModal';
 import { ClassDetailsModal, ClassEditModal } from '@/components/schedule/ClassModals';
@@ -62,7 +63,7 @@ export default function ScheduleScreen() {
   };
     
     const params = useLocalSearchParams();
-    const [viewMode, setViewMode] = useState<'grid' | 'attendance'>(params.viewMode === 'attendance' ? 'attendance' : 'grid');
+    const [viewMode, setViewMode] = useState<'grid' | 'attendance' | 'list'>(params.viewMode === 'attendance' ? 'attendance' : 'grid');
     const [isQuickEditMode, setIsQuickEditMode] = useState(false);
     const [showScanner, setShowScanner] = useState(false);
     const [syncStatus, setSyncStatus] = useState<'offline' | 'syncing' | 'saved'>('offline');
@@ -73,14 +74,21 @@ export default function ScheduleScreen() {
     const [showEditModal, setShowEditModal] = useState(false);
     const viewShotRef = React.useRef<any>(null);
     const viewShotDarkRef = React.useRef<any>(null);
+    const viewShotListRef = React.useRef<any>(null);
+    const quickEditSaveTimeout = React.useRef<NodeJS.Timeout | null>(null);
 
     const [previewUri, setPreviewUri] = useState<string | null>(null);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
     const [exportDark, setExportDark] = useState(true);
 
     const handleExportSchedule = async () => {
-        const ref = exportDark ? viewShotDarkRef : viewShotRef;
-        if (!ref.current) return;
+        let ref;
+        if (viewMode === 'list') {
+            ref = viewShotListRef;
+        } else {
+            ref = exportDark ? viewShotDarkRef : viewShotRef;
+        }
+        if (!ref?.current) return;
         try {
             // Delay to ensure image assets are decoded before capture
             await new Promise(resolve => setTimeout(resolve, 500));
@@ -221,15 +229,27 @@ export default function ScheduleScreen() {
     };
 
     const onUpdateClasses = (updatesList: {id: string, updates: any}[]) => {
-        const nd = {...data};
-        const sem = nd.years.find((y: any) => y.id === activeYearId).semesters.find((s: any) => s.id === activeSemId);
-        updatesList.forEach(({id, updates}) => {
-            const idx = sem.classes.findIndex((c: any) => c.id === id);
-            if (idx !== -1) {
-                sem.classes[idx] = { ...sem.classes[idx], ...updates };
+        setData((prevData: any) => {
+            const nd = { ...prevData };
+            const yrIdx = nd.years.findIndex((y: any) => y.id === activeYearId);
+            if (yrIdx !== -1) {
+                const semIdx = nd.years[yrIdx].semesters.findIndex((s: any) => s.id === activeSemId);
+                if (semIdx !== -1) {
+                    nd.years[yrIdx].semesters[semIdx].classes = nd.years[yrIdx].semesters[semIdx].classes.map((c: any) => {
+                        const update = updatesList.find(u => u.id === c.id);
+                        return update ? { ...c, ...update.updates } : c;
+                    });
+                }
             }
+
+            // Debounce the heavy disk write
+            if (quickEditSaveTimeout.current) clearTimeout(quickEditSaveTimeout.current);
+            quickEditSaveTimeout.current = setTimeout(() => {
+                SyncService.pushLocalChanges(nd);
+            }, 350);
+
+            return nd;
         });
-        saveData(nd);
     };
 
     const normalizeDay = (day: any) => {
@@ -370,9 +390,24 @@ export default function ScheduleScreen() {
     const handleSaveClass = (newClassData: any) => {
         if (!newClassData.name.trim() || !newClassData.schedules || newClassData.schedules.length === 0) return;
         
+        let oldSubjectIdToRefresh = null;
+        let initialData = JSON.parse(JSON.stringify(data));
+        if (editingClass && editingClass.name.trim().toLowerCase() !== newClassData.name.trim().toLowerCase()) {
+            const tempSem = initialData.years.find((y: any) => y.id === activeYearId)?.semesters.find((s: any) => s.id === activeSemId);
+            if (tempSem && tempSem.subjects) {
+                const targetNameExists = tempSem.subjects.some((s: any) => s.name.trim().toLowerCase() === newClassData.name.trim().toLowerCase());
+                const oldSub = tempSem.subjects.find((s: any) => s.name.trim().toLowerCase() === editingClass.name.trim().toLowerCase());
+                if (!targetNameExists && oldSub) {
+                    oldSub.name = newClassData.name.trim();
+                } else if (targetNameExists && oldSub) {
+                    oldSubjectIdToRefresh = oldSub.id;
+                }
+            }
+        }
+
         // ── Register subject in the global registry ──────────────────────
         const regResult = ensureSubjectExists(
-            data, activeYearId, activeSemId, newClassData.name, { fromSchedule: true }
+            initialData, activeYearId, activeSemId, newClassData.name, { fromSchedule: true }
         );
         let nd = regResult.data;
         const subjectId = regResult.subjectId;
@@ -407,8 +442,13 @@ export default function ScheduleScreen() {
         sem.classes = [...sem.classes, ...newBlocks];
 
         // Mark this subject as having a schedule
-        const subjectEntry = sem.subjects?.find((s: any) => s.id === subjectId);
+        const updatedSem = nd.years.find((y: any) => y.id === activeYearId).semesters.find((s: any) => s.id === activeSemId);
+        const subjectEntry = updatedSem.subjects?.find((s: any) => s.id === subjectId);
         if (subjectEntry) subjectEntry.hasSchedule = true;
+
+        if (oldSubjectIdToRefresh) {
+            nd = refreshHasSchedule(nd, activeYearId, activeSemId, oldSubjectIdToRefresh);
+        }
 
         saveData(nd);
         setShowEditModal(false);
@@ -516,13 +556,11 @@ export default function ScheduleScreen() {
         }
     }
     
-    const COLORS = [
-      { bg: '#2997ff', border: '#2997ff', text: 'white' },
-      { bg: '#30d158', border: '#30d158', text: 'white' },
-      { bg: '#bf5af2', border: '#bf5af2', text: 'white' },
-      { bg: '#ff9f0a', border: '#ff9f0a', text: 'white' },
-      { bg: '#ff453a', border: '#ff453a', text: 'white' },
-      { bg: '#64d2ff', border: '#64d2ff', text: 'white' },
+    const palette = [
+        { bg: isDark ? 'rgba(56, 162, 255, 0.22)' : 'rgba(41, 151, 255, 0.1)', border: isDark ? '#56aaff' : '#2997ff', text: isDark ? '#8ec5ff' : '#1a7fd4' },
+        { bg: isDark ? 'rgba(60, 220, 100, 0.2)' : 'rgba(48, 209, 88, 0.1)', border: isDark ? '#4ade80' : '#30d158', text: isDark ? '#7defa0' : '#1da34a' },
+        { bg: isDark ? 'rgba(200, 100, 252, 0.2)' : 'rgba(191, 90, 242, 0.1)', border: isDark ? '#c084fc' : '#bf5af2', text: isDark ? '#d8b4fe' : '#a03cd1' },
+        { bg: isDark ? 'rgba(110, 220, 255, 0.2)' : 'rgba(100, 210, 255, 0.1)', border: isDark ? '#7dd3fc' : '#64d2ff', text: isDark ? '#a5e1fc' : '#00aae6' },
     ];
     
     return (
@@ -577,6 +615,17 @@ export default function ScheduleScreen() {
                         >
                             <Ionicons name="grid" size={14} color={viewMode === 'grid' ? (isDark ? '#e2e8f0' : '#0f172a') : (isDark ? '#64748b' : '#64748b')} />
                             <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'grid' ? (isDark ? '#e2e8f0' : '#1e293b') : (isDark ? '#64748b' : '#64748b') }}>Grid</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity 
+                            onPress={() => setViewMode('list')}
+                            style={{
+                                paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, flexDirection: 'row', alignItems: 'center',
+                                backgroundColor: viewMode === 'list' ? (isDark ? '#475569' : '#ffffff') : 'transparent',
+                                ...(!isDark && viewMode === 'list' ? { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 3, elevation: 2 } : {}),
+                            }}
+                        >
+                            <Ionicons name="albums" size={14} color={viewMode === 'list' ? (isDark ? '#e2e8f0' : '#0f172a') : (isDark ? '#64748b' : '#64748b')} />
+                            <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'list' ? (isDark ? '#e2e8f0' : '#1e293b') : (isDark ? '#64748b' : '#64748b') }}>Glass</Text>
                         </TouchableOpacity>
                         <TouchableOpacity 
                             onPress={() => setViewMode('attendance')}
@@ -718,9 +767,9 @@ export default function ScheduleScreen() {
                                                 return `${dh}${mins > 0 ? `:${mins.toString().padStart(2, '0')}` : ''}${ampm}`;
                                             };
                                             return (
-                                                <View key={i} className="flex-row items-center mr-3 px-2 py-1 rounded-md" style={{backgroundColor: COLORS[cls.colorIdx%COLORS.length].bg}}>
-                                                    <Text className="text-xs font-bold text-white mr-1">{cls.name}</Text>
-                                                    <Text className="text-[10px] text-white/80">{formatTime(cls.startHour)}</Text>
+                                                <View key={i} className="flex-row items-center mr-3 px-2 py-1 rounded-md border" style={{backgroundColor: palette[cls.colorIdx%palette.length].bg, borderColor: palette[cls.colorIdx%palette.length].border}}>
+                                                    <Text className="text-xs font-bold mr-1" style={{color: palette[cls.colorIdx%palette.length].text}}>{cls.name}</Text>
+                                                    <Text className="text-[10px]" style={{color: palette[cls.colorIdx%palette.length].text, opacity: 0.8}}>{formatTime(cls.startHour)}</Text>
                                                 </View>
                                             );
                                         })
@@ -784,24 +833,24 @@ export default function ScheduleScreen() {
                                 {/* Dark theme export */}
                                 <View style={{ position: 'absolute', top: 0, left: 0, zIndex: -1, opacity: 0 }}>
                                     <ViewShot ref={viewShotDarkRef} options={{ format: 'jpg', quality: 1 }}>
-                                        <View style={{ width: 890, backgroundColor: '#0f172a', borderRadius: 24, overflow: 'hidden' }}>
+                                        <View style={{ width: 3084, backgroundColor: '#0f172a', borderRadius: 24, overflow: 'hidden' }}>
                                             <ImageBackground
                                                 source={require('../../assets/images/ExportBg.png')}
-                                                style={{ width: 890, height: 220 }}
-                                                imageStyle={{ resizeMode: 'cover', width: 890, height: 220 }}
+                                                style={{ width: 3084, height: 380 }}
+                                                imageStyle={{ resizeMode: 'cover', width: 3084, height: 380 }}
                                             >
-                                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 40, paddingBottom: 26, backgroundColor: 'rgba(15,23,42,0.4)' }}>
+                                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 80, paddingBottom: 40, backgroundColor: 'rgba(15,23,42,0.6)' }}>
                                                     <View>
-                                                        <Text style={{ fontSize: 38, fontWeight: '900', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 }}>FinScholar</Text>
-                                                        <Text style={{ fontSize: 17, fontWeight: '700', color: 'rgba(255,255,255,0.92)', marginTop: 4, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 }}>My Schedule • {currentSem.name}</Text>
+                                                        <Text style={{ fontSize: 72, fontWeight: '900', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 4 }, textShadowRadius: 12 }}>FinScholar</Text>
+                                                        <Text style={{ fontSize: 36, fontWeight: '700', color: 'rgba(255,255,255,0.95)', marginTop: 8, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 }}>My Schedule • {currentSem.name}</Text>
                                                     </View>
-                                                    <View style={{ backgroundColor: 'rgba(99,102,241,0.3)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(129,140,248,0.5)' }}>
-                                                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#c7d2fe' }}>{currentYear?.name || ''}</Text>
+                                                    <View style={{ backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)' }}>
+                                                        <Text style={{ fontSize: 28, fontWeight: '700', color: '#ffffff' }}>{currentYear?.name || ''}</Text>
                                                     </View>
                                                 </View>
                                             </ImageBackground>
                                             <View style={{ padding: 16, paddingTop: 12 }}>
-                                                <View style={{ width: 858, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: '#334155', backgroundColor: '#1e293b' }}>
+                                                <View style={{ width: 3052, borderRadius: 20, overflow: 'hidden', borderWidth: 3, borderColor: '#3B82F6', backgroundColor: '#1e293b' }}>
                                                     <TimetableGrid 
                                                         classes={currentSem.classes} 
                                                         isDark={true} 
@@ -826,24 +875,24 @@ export default function ScheduleScreen() {
                                 {/* Light theme export */}
                                 <View style={{ position: 'absolute', top: 0, left: 0, zIndex: -1, opacity: 0 }}>
                                     <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 1 }}>
-                                        <View style={{ width: 890, backgroundColor: '#f1f5f9', borderRadius: 24, overflow: 'hidden' }}>
+                                        <View style={{ width: 3084, backgroundColor: '#f1f5f9', borderRadius: 24, overflow: 'hidden' }}>
                                             <ImageBackground
                                                 source={require('../../assets/images/ExportBg.png')}
-                                                style={{ width: 890, height: 220 }}
-                                                imageStyle={{ resizeMode: 'cover', width: 890, height: 220 }}
+                                                style={{ width: 3084, height: 380 }}
+                                                imageStyle={{ resizeMode: 'cover', width: 3084, height: 380 }}
                                             >
-                                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 40, paddingBottom: 26, backgroundColor: 'rgba(15,23,42,0.22)' }}>
+                                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 80, paddingBottom: 40, backgroundColor: 'rgba(15,23,42,0.4)' }}>
                                                     <View>
-                                                        <Text style={{ fontSize: 38, fontWeight: '900', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 }}>FinScholar</Text>
-                                                        <Text style={{ fontSize: 17, fontWeight: '700', color: '#ffffff', marginTop: 4, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 }}>My Schedule • {currentSem.name}</Text>
+                                                        <Text style={{ fontSize: 72, fontWeight: '900', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 4 }, textShadowRadius: 12 }}>FinScholar</Text>
+                                                        <Text style={{ fontSize: 36, fontWeight: '700', color: '#ffffff', marginTop: 8, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 }}>My Schedule • {currentSem.name}</Text>
                                                     </View>
-                                                    <View style={{ backgroundColor: 'rgba(255,255,255,0.25)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.5)' }}>
-                                                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }}>{currentYear?.name || ''}</Text>
+                                                    <View style={{ backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)' }}>
+                                                        <Text style={{ fontSize: 28, fontWeight: '700', color: '#ffffff' }}>{currentYear?.name || ''}</Text>
                                                     </View>
                                                 </View>
                                             </ImageBackground>
                                             <View style={{ padding: 16, paddingTop: 12 }}>
-                                                <View style={{ width: 858, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#ffffff' }}>
+                                                <View style={{ width: 3052, borderRadius: 20, overflow: 'hidden', borderWidth: 3, borderColor: '#60A5FA', backgroundColor: '#ffffff' }}>
                                                     <TimetableGrid 
                                                         classes={currentSem.classes} 
                                                         isDark={false} 
@@ -865,6 +914,27 @@ export default function ScheduleScreen() {
                                         </View>
                                     </ViewShot>
                                 </View>
+                            </View>
+                        ) : viewMode === 'list' ? (
+                            <View className="mb-8" style={{ minHeight: 650 }}>
+                                <TouchableOpacity 
+                                    onPress={handleExportSchedule}
+                                    className={`mb-4 flex-row items-center justify-center py-4 rounded-3xl border-2 ${isDark ? 'bg-indigo-600 border-indigo-500' : 'bg-indigo-50 border-indigo-200'}`}
+                                >
+                                    <Ionicons name="download" size={20} color={isDark ? "#ffffff" : "#4f46e5"} />
+                                    <Text className={`ml-2 text-base font-extrabold ${isDark ? 'text-white' : 'text-indigo-700'}`}>
+                                        Export as Image
+                                    </Text>
+                                </TouchableOpacity>
+                                
+                                <ViewShot ref={viewShotListRef} options={{ format: 'jpg', quality: 1 }}>
+                                    <ScheduleListView 
+                                        classes={currentSem.classes} 
+                                        isDark={isDark}
+                                        currentSem={currentSem}
+                                        currentYear={currentYear}
+                                    />
+                                </ViewShot>
                             </View>
                         ) : (
                             <AttendanceTracker 

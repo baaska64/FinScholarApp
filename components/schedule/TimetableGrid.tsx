@@ -4,15 +4,35 @@ import { Ionicons } from '@expo/vector-icons';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const FULL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const HOUR_HEIGHT = 60; // Pixels per hour
-const TIME_COL_WIDTH = 44;
+const getHourHeight = (isExport: boolean) => isExport ? 160 : 90;
+const getTimeColWidth = (isExport: boolean) => isExport ? 70 : 44;
 const SCREEN_WIDTH = Dimensions.get('window').width;
+
 // Responsive day column width: fit all visible days within screen
-const getDayWidth = (numDays: number) => {
-    const available = SCREEN_WIDTH - TIME_COL_WIDTH - 32; // account for container padding
+const getDayWidth = (numDays: number, isExport: boolean) => {
+    if (isExport) return 420;
+    const available = SCREEN_WIDTH - getTimeColWidth(false) - 32;
     const fitWidth = Math.floor(available / numDays);
-    return Math.max(80, Math.min(fitWidth, 140)); // clamp between 80-140
+    return Math.max(200, Math.min(fitWidth, 260)); // Extra wide cells for landscape feel
 };
+
+const TYPOGRAPHY = {
+  subjectTitle: { fontSize: 13, fontWeight: '700', lineHeight: 16 },
+  time: { fontSize: 10, fontWeight: '500' }
+};
+
+const getThemeStyles = (isDark: boolean, isExportMode: boolean) => ({
+  gridBg: isDark ? '#0F172A' : '#FCFCFD',
+  headerBg: isDark ? 'rgba(59, 130, 246, 0.12)' : '#EFF6FF',
+  hourBg: isDark ? 'rgba(59, 130, 246, 0.12)' : '#EFF6FF', 
+  gridLine: isDark ? 'rgba(255,255,255,0.08)' : '#E2E8F0',
+  textColor: isDark ? '#F8FAFC' : '#1E293B',
+  timeTextColor: isDark ? '#94A3B8' : '#64748B',
+  outerBorderColor: isDark ? '#3B82F6' : '#60A5FA',
+  borderWidth: 1, 
+  outerBorderWidth: isExportMode ? 0 : 3,
+  borderRadius: isExportMode ? 0 : 20,
+});
 
 const COLORS = [
   { bg: 'rgba(41, 151, 255, 0.2)', border: '#2997ff', text: '#2997ff' },
@@ -23,7 +43,6 @@ const COLORS = [
   { bg: 'rgba(100, 210, 255, 0.2)', border: '#64d2ff', text: '#64d2ff' },
 ];
 
-// Brighter, more saturated colors for dark mode export
 const EXPORT_DARK_COLORS = [
   { bg: 'rgba(56, 162, 255, 0.22)', border: '#56aaff', text: '#8ec5ff' },
   { bg: 'rgba(60, 220, 100, 0.2)', border: '#4ade80', text: '#7defa0' },
@@ -33,7 +52,6 @@ const EXPORT_DARK_COLORS = [
   { bg: 'rgba(110, 220, 255, 0.2)', border: '#7dd3fc', text: '#a5e1fc' },
 ];
 
-// Softer, pastel colors for light mode export
 const EXPORT_LIGHT_COLORS = [
   { bg: 'rgba(41, 151, 255, 0.1)', border: '#2997ff', text: '#1a7fd4' },
   { bg: 'rgba(48, 209, 88, 0.1)', border: '#30d158', text: '#1da34a' },
@@ -50,8 +68,11 @@ const ClassBlock = memo(({
   const exportColors = isDark ? EXPORT_DARK_COLORS : EXPORT_LIGHT_COLORS;
   const color = isExportMode ? exportColors[cls.colorIdx % exportColors.length] : COLORS[cls.colorIdx % COLORS.length];
   
-  const top = (cls.startHour - START_HOUR) * HOUR_HEIGHT + 10;
-  const height = cls.duration * HOUR_HEIGHT;
+  const hourHeight = getHourHeight(isExportMode);
+  const timeColWidth = getTimeColWidth(isExportMode);
+  
+  const top = (cls.startHour - START_HOUR) * hourHeight + 10;
+  const height = cls.duration * hourHeight;
   const blockWidth = (dayWidth - 4) / (cls.maxCol || 1);
   const left = displayDayIndices.indexOf(cls.day) * dayWidth + ((cls.col || 0) * blockWidth);
 
@@ -77,16 +98,20 @@ const ClassBlock = memo(({
         }}
         style={{
           flex: 1,
-          backgroundColor: isExportMode ? color.bg : (isDark ? color.bg : `${color.border}15`),
-          borderLeftColor: color.border,
-          borderLeftWidth: isExportMode ? 3 : 4,
-          borderRadius: isExportMode ? 10 : 14,
+          backgroundColor: isDark ? `${color.border}60` : `${color.border}15`,
+          borderLeftColor: isSelected ? (isDark ? 'white' : 'black') : color.border,
+          borderBottomColor: isSelected ? (isDark ? 'white' : 'black') : color.border,
+          borderTopColor: isSelected ? (isDark ? 'white' : 'black') : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
+          borderRightColor: isSelected ? (isDark ? 'white' : 'black') : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
+          borderLeftWidth: isSelected ? 2 : (isExportMode ? 3 : 4),
+          borderBottomWidth: isSelected ? 2 : (isExportMode ? 3 : 4),
+          borderTopWidth: isSelected ? 2 : (isExportMode ? 1 : 1),
+          borderRightWidth: isSelected ? 2 : (isExportMode ? 1 : 1),
+          borderRadius: isExportMode ? 14 : 10,
           marginLeft: 2,
           marginRight: isExportMode ? 2 : 0,
-          padding: isExportMode ? 6 : 4,
+          padding: isExportMode ? 12 : 8,
           overflow: 'hidden',
-          borderWidth: isSelected ? 2 : (isExportMode ? 1 : 0),
-          borderColor: isSelected ? (isDark ? 'white' : 'black') : (isExportMode ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)') : 'transparent'),
         }}
       >
           {isSelected && (
@@ -94,11 +119,17 @@ const ClassBlock = memo(({
                   <Ionicons name="checkmark" size={12} color={isDark ? 'black' : 'white'} />
               </View>
           )}
-          <Text style={{ color: color.text, fontWeight: 'bold', fontSize: isExportMode ? 12 : 11, marginBottom: 2 }} numberOfLines={1}>
+          <Text style={{ color: isDark ? '#ffffff' : color.text, fontSize: isExportMode ? 18 : 13, fontWeight: '800', lineHeight: isExportMode ? 22 : 16, marginBottom: isExportMode ? 6 : 3 }} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
             {cls.name}
           </Text>
+          {cls.room ? (
+            <Text style={{ color: isDark ? 'rgba(255,255,255,0.9)' : color.text, opacity: isDark ? 1 : 0.9, fontSize: isExportMode ? 14 : 10, fontWeight: '700', marginBottom: isExportMode ? 4 : 2 }} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
+              <Ionicons name="location" size={isExportMode ? 14 : 10} /> {cls.room}
+            </Text>
+          ) : null}
           {cls.duration >= 0.75 && (
-            <Text style={{ color: isExportMode ? (isDark ? '#8b9cb3' : '#64748b') : (isDark ? '#94a3b8' : '#64748b'), fontSize: isExportMode ? 10 : 9, fontWeight: isExportMode ? '500' : '400' }} numberOfLines={2}>
+            <View style={{ marginTop: 'auto' }}>
+              <Text style={{ color: isDark ? 'rgba(255,255,255,0.9)' : color.text, opacity: isDark ? 1 : 0.85, fontSize: isExportMode ? 13 : 10, fontWeight: '600' }} numberOfLines={2}>
               {(() => {
                 const formatH = (h: number) => {
                   const totalMins = Math.round(h * 60);
@@ -117,9 +148,10 @@ const ClassBlock = memo(({
                   if (mins > 0) str += `${hrs > 0 ? ' ' : ''}${mins}m`;
                   return str || '0m';
                 };
-                return `${formatH(cls.startHour)} - ${formatH(cls.startHour + cls.duration)} (${formatDuration(cls.duration)})`;
+                return `${formatH(cls.startHour)} - ${formatH(cls.startHour + cls.duration)}\n${formatDuration(cls.duration)}`;
               })()}
             </Text>
+            </View>
           )}
       </TouchableOpacity>
     </View>
@@ -139,10 +171,13 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
   const HOURS_COUNT = END_HOUR - START_HOUR;
   const HOURS = Array.from({ length: HOURS_COUNT }, (_, i) => START_HOUR + i);
 
+  const styles = getThemeStyles(isDark, isExportMode);
   const headerScrollRef = useRef<ScrollView>(null);
   const hasSundayClass = classes?.some((c: any) => c.day === 6);
   const displayDayIndices = isExportMode ? [6, 0, 1, 2, 3, 4, 5] : (hasSundayClass ? [6, 0, 1, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5]);
-  const DAY_WIDTH = isExportMode ? 116 : getDayWidth(displayDayIndices.length);
+  const DAY_WIDTH = getDayWidth(displayDayIndices.length, isExportMode);
+  const hourHeight = getHourHeight(isExportMode);
+  const timeColWidth = getTimeColWidth(isExportMode);
 
   const [selectedClassIds, setSelectedClassIds] = useState<Set<string>>(new Set());
 
@@ -211,44 +246,70 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
     return `${displayH} ${ampm}`;
   };
 
-  // Pre-process classes to find overlaps and assign them columns
   const processedClasses = classes?.map((c: any) => ({ ...c, col: 0, maxCol: 1 })) || [];
   displayDayIndices.forEach(dayIdx => {
     const dayClasses = processedClasses.filter((c: any) => c.day === dayIdx).sort((a: any, b: any) => a.startHour - b.startHour);
-    const columns: any[][] = [];
     
-    dayClasses.forEach((cls: any) => {
-      let placed = false;
-      for (let i = 0; i < columns.length; i++) {
-        const lastClassInCol = columns[i][columns[i].length - 1];
-        if (lastClassInCol.startHour + lastClassInCol.duration <= cls.startHour) {
-          columns[i].push(cls);
-          cls.col = i;
-          placed = true;
-          break;
-        }
-      }
-      if (!placed) {
-        cls.col = columns.length;
-        columns.push([cls]);
-      }
-    });
+    // Group overlapping classes into contiguous blocks
+    const groups: any[][] = [];
+    let currentGroup: any[] = [];
+    let groupEnd = -1;
 
     dayClasses.forEach((cls: any) => {
-      cls.maxCol = columns.length;
+      if (currentGroup.length === 0) {
+        currentGroup.push(cls);
+        groupEnd = cls.startHour + cls.duration;
+      } else if (cls.startHour >= groupEnd) {
+        // No overlap with current group, push and start new group
+        groups.push(currentGroup);
+        currentGroup = [cls];
+        groupEnd = cls.startHour + cls.duration;
+      } else {
+        // Overlaps with current group
+        currentGroup.push(cls);
+        groupEnd = Math.max(groupEnd, cls.startHour + cls.duration);
+      }
+    });
+    if (currentGroup.length > 0) {
+      groups.push(currentGroup);
+    }
+
+    // Now layout each group independently
+    groups.forEach(group => {
+      const columns: any[][] = [];
+      group.forEach((cls: any) => {
+        let placed = false;
+        for (let i = 0; i < columns.length; i++) {
+          const lastClassInCol = columns[i][columns[i].length - 1];
+          // We can place it in this column if it starts after the last class ends
+          if (lastClassInCol.startHour + lastClassInCol.duration <= cls.startHour) {
+            columns[i].push(cls);
+            cls.col = i;
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) {
+          cls.col = columns.length;
+          columns.push([cls]);
+        }
+      });
+      // All classes in this connected group get the same maxCol
+      group.forEach((cls: any) => {
+        cls.maxCol = columns.length;
+      });
     });
   });
 
   return (
-    <View style={{ height: isExportMode ? undefined : 600, backgroundColor: isDark ? '#0f172a' : '#ffffff', borderRadius: isExportMode ? 0 : 28, overflow: 'hidden', borderWidth: isExportMode ? 0 : 1.5, borderColor: isDark ? '#1e293b' : '#e2e8f0' }}>
-      {/* Header: Days */}
-      <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0', backgroundColor: isDark ? '#162032' : '#f8fafc' }}>
-        <View style={{ width: TIME_COL_WIDTH, borderRightWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0' }} />
+    <View style={{ height: isExportMode ? undefined : 600, backgroundColor: styles.gridBg, borderRadius: styles.borderRadius, overflow: 'hidden', borderWidth: styles.outerBorderWidth, borderColor: styles.outerBorderColor }}>
+      <View style={{ flexDirection: 'row', backgroundColor: styles.headerBg }}>
+        <View style={{ width: timeColWidth, borderRightWidth: isExportMode ? 2 : 1, borderColor: styles.gridLine }} />
         {isExportMode ? (
           <View style={{ flexDirection: 'row' }}>
             {displayDayIndices.map((dayIdx, idx) => (
-              <View key={idx} style={{ width: DAY_WIDTH, alignItems: 'center', borderRightWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0' }}>
-                <Text style={{ fontSize: 13, fontWeight: '800', color: isDark ? '#e2e8f0' : '#334155', paddingVertical: 12, letterSpacing: 0.3 }}>{FULL_DAYS[dayIdx]}</Text>
+              <View key={idx} style={{ width: DAY_WIDTH, alignItems: 'center', borderRightWidth: 2, borderColor: styles.gridLine }}>
+                <Text style={{ fontSize: 18, fontWeight: '800', color: styles.textColor, paddingVertical: 18, letterSpacing: 0.5 }}>{FULL_DAYS[dayIdx]}</Text>
               </View>
             ))}
           </View>
@@ -268,10 +329,10 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: 'row' }}>
             {/* Time Column */}
-            <View style={{ width: TIME_COL_WIDTH, borderRightWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0', paddingTop: 10 }}>
+            <View style={{ width: timeColWidth, borderRightWidth: 2, borderColor: isDark ? '#334155' : '#e2e8f0', paddingTop: 10 }}>
               {HOURS.map((h, i) => (
-                <View key={i} style={{ height: HOUR_HEIGHT, justifyContent: 'flex-start', alignItems: 'center' }}>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? '#64748b' : '#94a3b8', marginTop: i === 0 ? 0 : -6, backgroundColor: isDark ? '#1e293b' : '#ffffff', paddingHorizontal: 3 }}>
+                <View key={i} style={{ height: hourHeight, justifyContent: 'flex-start', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 15, fontWeight: '800', color: isDark ? '#64748b' : '#94a3b8', marginTop: i === 0 ? 0 : -9, backgroundColor: isDark ? '#1e293b' : '#ffffff', paddingHorizontal: 6 }}>
                     {formatTime(h)}
                   </Text>
                 </View>
@@ -280,7 +341,7 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
 
             {/* Grid Area */}
             <View>
-              <View style={{ width: displayDayIndices.length * DAY_WIDTH, height: HOURS_COUNT * HOUR_HEIGHT, paddingTop: 10 }}>
+              <View style={{ width: displayDayIndices.length * DAY_WIDTH, height: HOURS_COUNT * hourHeight, paddingTop: 10 }}>
                 {/* Weekend shading */}
                 {isExportMode && displayDayIndices.map((dayIdx, i) => (
                   (dayIdx === 5 || dayIdx === 6) ? (
@@ -289,10 +350,10 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
                 ))}
                 {/* Grid Lines */}
                 {HOURS.map((_, i) => (
-                  <View key={i} style={{ position: 'absolute', top: i * HOUR_HEIGHT + 10, width: '100%', height: 1, backgroundColor: isDark ? '#1e293b' : '#f1f5f9' }} />
+                  <View key={i} style={{ position: 'absolute', top: i * hourHeight + 10, width: '100%', height: 2, backgroundColor: isDark ? '#1e293b' : '#f1f5f9' }} />
                 ))}
                 {displayDayIndices.map((_, i) => (
-                  <View key={i} style={{ position: 'absolute', left: i * DAY_WIDTH, width: 1, height: '100%', backgroundColor: isDark ? '#1e293b' : '#f1f5f9' }} />
+                  <View key={i} style={{ position: 'absolute', left: i * DAY_WIDTH, width: 2, height: '100%', backgroundColor: isDark ? '#1e293b' : '#f1f5f9' }} />
                 ))}
 
                 {/* Classes */}
@@ -320,10 +381,10 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
         <ScrollView style={{ flex: 1 }} nestedScrollEnabled={true}>
           <View style={{ flexDirection: 'row' }}>
             {/* Time Column */}
-            <View style={{ width: TIME_COL_WIDTH, borderRightWidth: 1, borderColor: isDark ? '#1e293b' : '#e2e8f0', paddingTop: 10 }}>
+            <View style={{ width: timeColWidth, borderRightWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0', paddingTop: 10 }}>
               {HOURS.map((h, i) => (
-                <View key={i} style={{ height: HOUR_HEIGHT, justifyContent: 'flex-start', alignItems: 'center' }}>
-                  <Text style={{ fontSize: 10, color: isDark ? '#64748b' : '#94a3b8', marginTop: i === 0 ? 0 : -6, backgroundColor: isDark ? '#0f172a' : '#ffffff', paddingHorizontal: 2 }}>
+                <View key={i} style={{ height: hourHeight, justifyContent: 'flex-start', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? '#64748b' : '#94a3b8', marginTop: i === 0 ? 0 : -6, backgroundColor: styles.gridBg, paddingHorizontal: 3 }}>
                     {formatTime(h)}
                   </Text>
                 </View>
@@ -343,10 +404,10 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
               }}
               scrollEventThrottle={16}
             >
-              <View style={{ width: displayDayIndices.length * DAY_WIDTH, height: HOURS_COUNT * HOUR_HEIGHT, paddingTop: 10 }}>
+              <View style={{ width: displayDayIndices.length * DAY_WIDTH, height: HOURS_COUNT * hourHeight, paddingTop: 10 }}>
                 {/* Grid Lines */}
                 {HOURS.map((_, i) => (
-                  <View key={i} style={{ position: 'absolute', top: i * HOUR_HEIGHT + 10, width: '100%', height: 1, backgroundColor: isDark ? '#1e293b' : '#e2e8f0' }} />
+                  <View key={i} style={{ position: 'absolute', top: i * hourHeight + 10, width: '100%', height: 1, backgroundColor: styles.gridLine }} />
                 ))}
                 {displayDayIndices.map((_, i) => (
                   <View key={i} style={{ position: 'absolute', left: i * DAY_WIDTH, width: 1, height: '100%', backgroundColor: isDark ? '#1e293b' : '#e2e8f0' }} />

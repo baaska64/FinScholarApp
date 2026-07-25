@@ -181,7 +181,7 @@ export default function DashboardScreen() {
 
     const currentYear = data.years.find((y: any) => y.id === activeYearId);
     const currentSem = currentYear?.semesters.find((s: any) => s.id === activeSemId);
-    const system = data.settings?.gradingSystem || 'PERCENT';
+    const system = data.settings?.gradingSystem || '1_IS_BEST';
     
     const semRes = currentSem ? Calculator.calculateSemester(currentSem, system) : { percent: 0, equivalent: 0 };
     const yrRes = currentYear ? Calculator.calculateYear(currentYear, system) : { percent: 0, equivalent: 0 };
