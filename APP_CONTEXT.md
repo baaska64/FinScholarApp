@@ -14,10 +14,11 @@ This document serves as the single source of truth for the app's current state, 
 4. **Track Tasks:** To-do list for assignments and exams.
 5. **Flashcards:** Study tool for students.
 
-## 🚀 Future Roadmap & Monetization
-- **Current State:** The app currently has a Supabase authentication system (login/signup) but no in-app purchases.
-- **Planned Premium Update:** 
-  - Introduce a **one-time payment** tier.
-  - Premium will unlock advanced **AI features**.
-  - **Early Adopter Perk:** The first 50 users will get these premium AI features for free/unlocked.
-  - *Note: Privacy policies and Google Play declarations should only be updated to reflect payments once this is actually coded and released.*
+## 🚀 Monetization & Premium (Implemented)
+- **Current State:** The app currently integrates Google Play Billing via RevenueCat (`react-native-purchases`).
+- **Premium Features:** 
+  - Premium unlocks advanced **AI features** (like the Schedule Scanner).
+- **Early Adopter Perk (First 80 Users):** 
+  - A Supabase PostgreSQL trigger automatically grants `is_premium = true` to the first 80 users who sign up in the `profiles` table.
+  - The frontend `SyncService` fetches this flag. If the user is premium, they bypass the RevenueCat paywall entirely.
+  - *Note: Privacy policies and Google Play declarations must reflect that you process payments and offer digital goods.*

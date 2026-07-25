@@ -9,7 +9,8 @@ import './global.css';
 
 import { NotificationService } from '../services/NotificationService';
 import { widgetTaskHandler } from '../widget/WidgetTaskHandler';
-import { LogBox, View, ActivityIndicator, Text, Appearance, Image } from 'react-native';
+import { LogBox, View, ActivityIndicator, Text, Appearance, Image, Platform } from 'react-native';
+import Purchases, { LOG_LEVEL } from 'react-native-purchases';
 
 LogBox.ignoreLogs(['Unable to activate keep awake']);
 
@@ -64,6 +65,14 @@ export default function RootLayout() {
   useEffect(() => {
     // Hide native splash screen immediately to show our beautiful custom React Native loading screen
     SplashScreen.hideAsync();
+  }, []);
+
+  useEffect(() => {
+    // Initialize RevenueCat for In-App Purchases
+    Purchases.setLogLevel(LOG_LEVEL.DEBUG);
+    if (Platform.OS === 'android') {
+      Purchases.configure({ apiKey: "REPLACE_WITH_YOUR_REVENUECAT_GOOGLE_API_KEY" });
+    }
   }, []);
 
   if (!loaded) {

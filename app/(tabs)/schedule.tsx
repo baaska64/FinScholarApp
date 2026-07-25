@@ -10,6 +10,7 @@ import TimetableGrid, { LIGHT_COLORS, DARK_COLORS } from '@/components/schedule/
 import ScheduleListView from '@/components/schedule/ScheduleListView';
 import AttendanceTracker from '@/components/schedule/AttendanceTracker';
 import ScheduleScannerModal from '@/components/schedule/ScheduleScannerModal';
+import PremiumPaywallModal from '@/components/PremiumPaywallModal';
 import { ClassDetailsModal, ClassEditModal } from '@/components/schedule/ClassModals';
 import { useColorScheme } from 'nativewind';
 import { useFocusEffect, router, useLocalSearchParams } from 'expo-router';
@@ -66,6 +67,7 @@ export default function ScheduleScreen() {
     const [viewMode, setViewMode] = useState<'grid' | 'attendance' | 'list'>(params.viewMode === 'attendance' ? 'attendance' : 'grid');
     const [isQuickEditMode, setIsQuickEditMode] = useState(false);
     const [showScanner, setShowScanner] = useState(false);
+    const [showPaywall, setShowPaywall] = useState(false);
     const [syncStatus, setSyncStatus] = useState<'offline' | 'syncing' | 'saved'>('offline');
     const [showAiWarning, setShowAiWarning] = useState(false);
     const [upcomingMilestones, setUpcomingMilestones] = useState<any[]>([]);
@@ -667,7 +669,13 @@ export default function ScheduleScreen() {
                         {/* Scan + Add Actions (prominent, at top) */}
                         <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
                             <TouchableOpacity 
-                                onPress={() => setShowScanner(true)} 
+                                onPress={() => {
+                                    if (SyncService.getIsPremium()) {
+                                        setShowScanner(true);
+                                    } else {
+                                        setShowPaywall(true);
+                                    }
+                                }} 
                                 style={{
                                     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 16,
                                     backgroundColor: isDark ? '#4f46e5' : '#6366f1',
@@ -960,6 +968,11 @@ export default function ScheduleScreen() {
                 visible={showScanner} 
                 onClose={() => setShowScanner(false)} 
                 onApply={handleScannedClasses} 
+            />
+
+            <PremiumPaywallModal 
+                visible={showPaywall} 
+                onClose={() => setShowPaywall(false)} 
             />
 
             <ClassDetailsModal 

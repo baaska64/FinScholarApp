@@ -11,6 +11,11 @@ class SyncServiceClass {
   private conflictListeners: ((localData: any, remoteData: any) => void)[] = [];
   private dataChangeListeners: (() => void)[] = [];
   private currentState: SyncState = 'offline';
+  private isPremiumUser: boolean = false;
+
+  public getIsPremium() {
+    return this.isPremiumUser;
+  }
 
   public subscribe(listener: (state: SyncState) => void) {
     this.listeners.push(listener);
@@ -106,6 +111,11 @@ class SyncServiceClass {
     this.setState('syncing');
 
     try {
+      const { data: profileData } = await supabase.from('profiles').select('is_premium').eq('id', user.id).single();
+      if (profileData) {
+          this.isPremiumUser = profileData.is_premium;
+      }
+
       const { data: dbData } = await supabase.from('user_ledgers').select('ledger_data').eq('id', user.id).single();
       const remoteData = dbData?.ledger_data;
       
