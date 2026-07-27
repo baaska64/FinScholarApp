@@ -15,7 +15,14 @@ This document serves as the single source of truth for the app's current state, 
 5. **Flashcards:** Study tool for students.
 
 ## 🚀 Monetization & Premium (Implemented)
-- **Current State:** The app currently integrates Google Play Billing via RevenueCat (`react-native-purchases`).
+- **Current State:** The app integrates Google Play Billing via RevenueCat (`react-native-purchases`).
+- **Subscription Details:**
+  - **Type:** Auto-renewing Monthly Subscription
+  - **Product ID:** `finscholar_premium` (Configured identically in Google Play Console and RevenueCat)
+  - **Base Plan ID:** `premium-monthly`
+  - **Price:** PHP 60.00/mo
+  - **RevenueCat Entitlement:** `Premium`
+  - **Service Account Email:** `revenuecat@gen-lang-client-0689315991.iam.gserviceaccount.com`
 - **Premium Features:** 
   - Premium unlocks advanced **AI features** (like the Schedule Scanner).
 - **Early Adopter Perk (First 80 Users):** 

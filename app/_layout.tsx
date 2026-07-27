@@ -71,7 +71,7 @@ export default function RootLayout() {
     // Initialize RevenueCat for In-App Purchases
     Purchases.setLogLevel(LOG_LEVEL.DEBUG);
     if (Platform.OS === 'android') {
-      Purchases.configure({ apiKey: "REPLACE_WITH_YOUR_REVENUECAT_GOOGLE_API_KEY" });
+      Purchases.configure({ apiKey: "goog_luYileuwzYYGXaCLgqyUUIXigxp" });
     }
   }, []);
 
