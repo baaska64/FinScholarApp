@@ -11,6 +11,7 @@ import { NotificationService } from '../services/NotificationService';
 import { widgetTaskHandler } from '../widget/WidgetTaskHandler';
 import { LogBox, View, ActivityIndicator, Text, Appearance, Image, Platform } from 'react-native';
 import Purchases, { LOG_LEVEL } from 'react-native-purchases';
+import Constants from 'expo-constants';
 
 LogBox.ignoreLogs(['Unable to activate keep awake']);
 
@@ -68,10 +69,12 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    // Initialize RevenueCat for In-App Purchases
-    Purchases.setLogLevel(LOG_LEVEL.DEBUG);
-    if (Platform.OS === 'android') {
-      Purchases.configure({ apiKey: "goog_luYileuwzYYGXaCLgqyUUIXigxp" });
+    // Initialize RevenueCat for In-App Purchases (Skip if in Expo Go)
+    if (Constants.appOwnership !== 'expo') {
+      Purchases.setLogLevel(LOG_LEVEL.DEBUG);
+      if (Platform.OS === 'android') {
+        Purchases.configure({ apiKey: "goog_luYileuwzYYGXaCLgqyUUIXigxp" });
+      }
     }
   }, []);
 
@@ -98,6 +101,7 @@ export default function RootLayout() {
 import { CustomAlertProvider } from '@/components/CustomAlert';
 import { SemesterProvider } from '@/components/SemesterContext';
 import { SyncProvider } from '@/components/SyncProvider';
+import UpdateWarningModal from '@/components/UpdateWarningModal';
 
 function RootLayoutNav() {
   const { colorScheme } = useColorScheme();
@@ -117,6 +121,7 @@ function RootLayoutNav() {
             <Stack.Screen name="modal" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           </Stack>
           <CustomAlertProvider />
+          <UpdateWarningModal />
         </SemesterProvider>
       </SyncProvider>
     </ThemeProvider>

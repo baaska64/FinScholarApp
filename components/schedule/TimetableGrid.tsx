@@ -55,15 +55,36 @@ const EXPORT_DARK_COLORS = [
 const EXPORT_LIGHT_COLORS = [
   { bg: 'rgba(41, 151, 255, 0.1)', border: '#2997ff', text: '#1a7fd4' },
   { bg: 'rgba(48, 209, 88, 0.1)', border: '#30d158', text: '#1da34a' },
-  { bg: 'rgba(191, 90, 242, 0.1)', border: '#bf5af2', text: '#a03cd1' },
-  { bg: 'rgba(255, 159, 10, 0.1)', border: '#ff9f0a', text: '#d4830a' },
-  { bg: 'rgba(255, 69, 58, 0.1)', border: '#ff453a', text: '#d43a30' },
+  { bg: 'rgba(191, 90, 242, 0.1)', border: '#bf5af2', text: '#a63bd9' },
+  { bg: 'rgba(255, 159, 10, 0.1)', border: '#ff9f0a', text: '#d98404' },
+  { bg: 'rgba(255, 69, 58, 0.1)', border: '#ff453a', text: '#d92c23' },
   { bg: 'rgba(100, 210, 255, 0.1)', border: '#64d2ff', text: '#3ba8d9' },
 ];
 
+const getRoomForClass = (cls: any, allClasses: any[]) => {
+  if (!cls.room) return null;
+  const rooms = cls.room.split(',').map((r: string) => r.trim()).filter(Boolean);
+  if (rooms.length <= 1) return cls.room;
+  
+  if (!allClasses) return rooms[0];
+
+  const siblings = allClasses
+    .filter((c: any) => c.name === cls.name)
+    .sort((a: any, b: any) => {
+      const wa = a.day === 6 ? -1 : a.day;
+      const wb = b.day === 6 ? -1 : b.day;
+      if (wa !== wb) return wa - wb;
+      return a.startHour - b.startHour;
+    });
+    
+  const idx = siblings.findIndex((c: any) => c.id === cls.id);
+  if (idx === -1) return rooms[0];
+  return rooms[idx % rooms.length];
+};
+
 const ClassBlock = memo(({ 
   cls, isDark, isQuickEditMode, isSelected, onToggleSelect,
-  onPressClass, START_HOUR, END_HOUR, displayDayIndices, dayWidth, isExportMode = false
+  onPressClass, START_HOUR, END_HOUR, displayDayIndices, dayWidth, isExportMode = false, allClasses = []
 }: any) => {
   const exportColors = isDark ? EXPORT_DARK_COLORS : EXPORT_LIGHT_COLORS;
   const color = isExportMode ? exportColors[cls.colorIdx % exportColors.length] : COLORS[cls.colorIdx % COLORS.length];
@@ -76,83 +97,103 @@ const ClassBlock = memo(({
   const blockWidth = (dayWidth - 4) / (cls.maxCol || 1);
   const left = displayDayIndices.indexOf(cls.day) * dayWidth + ((cls.col || 0) * blockWidth);
 
-  return (
-    <View
-      style={{
-        position: 'absolute',
-        top: top,
-        left: left,
-        width: blockWidth,
-        height: height,
-        zIndex: isSelected ? 100 : 10,
-      }}
-    >
-      <TouchableOpacity
-        activeOpacity={0.8}
-        onPress={() => {
-          if (isQuickEditMode) {
-            onToggleSelect();
-          } else {
-            onPressClass(cls);
-          }
-        }}
+    const formatH = (h: number) => {
+      const totalMins = Math.round(h * 60);
+      const hrs = Math.floor(totalMins / 60);
+      const mins = totalMins % 60;
+      const ampm = hrs >= 12 && hrs < 24 ? 'PM' : 'AM';
+      const displayH = hrs > 12 ? hrs - 12 : (hrs === 0 ? 12 : hrs);
+      return `${displayH}:${mins.toString().padStart(2, '0')} ${ampm}`;
+    };
+    
+    const formatDuration = (dur: number) => {
+      const totalMins = Math.round(dur * 60);
+      const hrs = Math.floor(totalMins / 60);
+      const mins = totalMins % 60;
+      let str = '';
+      if (hrs > 0) str += `${hrs}h`;
+      if (mins > 0) str += `${hrs > 0 ? ' ' : ''}${mins}m`;
+      return str || '0m';
+    };
+
+    const showTime = cls.duration >= 0.5;
+    const showRoom = cls.duration >= 0.75;
+    const showTeacher = cls.duration >= 1.0 && !!cls.instructor;
+    const showDuration = cls.duration >= 1.25;
+
+    return (
+      <View
         style={{
-          flex: 1,
-          backgroundColor: isDark ? `${color.border}60` : `${color.border}15`,
-          borderLeftColor: isSelected ? (isDark ? 'white' : 'black') : color.border,
-          borderBottomColor: isSelected ? (isDark ? 'white' : 'black') : color.border,
-          borderTopColor: isSelected ? (isDark ? 'white' : 'black') : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
-          borderRightColor: isSelected ? (isDark ? 'white' : 'black') : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
-          borderLeftWidth: isSelected ? 2 : (isExportMode ? 3 : 4),
-          borderBottomWidth: isSelected ? 2 : (isExportMode ? 3 : 4),
-          borderTopWidth: isSelected ? 2 : (isExportMode ? 1 : 1),
-          borderRightWidth: isSelected ? 2 : (isExportMode ? 1 : 1),
-          borderRadius: isExportMode ? 14 : 10,
-          marginLeft: 2,
-          marginRight: isExportMode ? 2 : 0,
-          padding: isExportMode ? 12 : 8,
-          overflow: 'hidden',
+          position: 'absolute',
+          top: top,
+          left: left,
+          width: blockWidth,
+          height: height,
+          zIndex: isSelected ? 100 : 10,
         }}
       >
-          {isSelected && (
-              <View style={{ position: 'absolute', right: 4, top: 4, width: 16, height: 16, borderRadius: 8, backgroundColor: isDark ? 'white' : 'black', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
-                  <Ionicons name="checkmark" size={12} color={isDark ? 'black' : 'white'} />
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={() => {
+            if (isQuickEditMode) {
+              onToggleSelect();
+            } else {
+              onPressClass(cls);
+            }
+          }}
+          style={{
+            flex: 1,
+            backgroundColor: isDark ? `${color.border}60` : `${color.border}15`,
+            borderLeftColor: isSelected ? (isDark ? 'white' : 'black') : color.border,
+            borderBottomColor: isSelected ? (isDark ? 'white' : 'black') : color.border,
+            borderTopColor: isSelected ? (isDark ? 'white' : 'black') : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
+            borderRightColor: isSelected ? (isDark ? 'white' : 'black') : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
+            borderLeftWidth: isSelected ? 2 : (isExportMode ? 3 : 4),
+            borderBottomWidth: isSelected ? 2 : (isExportMode ? 3 : 4),
+            borderTopWidth: isSelected ? 2 : (isExportMode ? 1 : 1),
+            borderRightWidth: isSelected ? 2 : (isExportMode ? 1 : 1),
+            borderRadius: isExportMode ? 14 : 10,
+            marginLeft: 2,
+            marginRight: isExportMode ? 2 : 0,
+            padding: isExportMode ? 12 : 8,
+            overflow: 'hidden',
+          }}
+        >
+            {isSelected && (
+                <View style={{ position: 'absolute', right: 4, top: 4, width: 16, height: 16, borderRadius: 8, backgroundColor: isDark ? 'white' : 'black', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
+                    <Ionicons name="checkmark" size={12} color={isDark ? 'black' : 'white'} />
+                </View>
+            )}
+            
+            <Text style={{ color: isDark ? '#ffffff' : color.text, fontSize: isExportMode ? 18 : 13, fontWeight: '800', lineHeight: isExportMode ? 22 : 16, marginBottom: isExportMode ? 4 : 2 }} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
+              {cls.name}
+            </Text>
+            
+            {showTime && (
+              <Text style={{ color: isDark ? 'rgba(255,255,255,0.85)' : color.text, opacity: isDark ? 1 : 0.85, fontSize: isExportMode ? 13 : 9, fontWeight: '700', marginBottom: isExportMode ? 4 : 2 }} numberOfLines={1}>
+                 {formatH(cls.startHour)} - {formatH(cls.startHour + cls.duration)}
+              </Text>
+            )}
+
+            {showRoom && cls.room ? (
+              <Text style={{ color: isDark ? 'rgba(255,255,255,0.9)' : color.text, opacity: isDark ? 1 : 0.9, fontSize: isExportMode ? 14 : 10, fontWeight: '700', marginBottom: isExportMode ? 4 : 2 }} numberOfLines={1}>
+                <Ionicons name="location" size={isExportMode ? 14 : 10} /> {getRoomForClass(cls, allClasses)}
+              </Text>
+            ) : null}
+
+            {showTeacher && (
+               <Text style={{ color: isDark ? 'rgba(255,255,255,0.8)' : color.text, opacity: isDark ? 1 : 0.8, fontSize: isExportMode ? 13 : 9, fontWeight: '600', marginBottom: isExportMode ? 4 : 2 }} numberOfLines={1}>
+                  <Ionicons name="person" size={isExportMode ? 12 : 9} /> {cls.instructor}
+               </Text>
+            )}
+            
+            {showDuration && (
+              <View style={{ marginTop: 'auto' }}>
+                <Text style={{ color: isDark ? 'rgba(255,255,255,0.7)' : color.text, opacity: isDark ? 1 : 0.7, fontSize: isExportMode ? 12 : 9, fontWeight: '600' }} numberOfLines={1}>
+                  {formatDuration(cls.duration)}
+                </Text>
               </View>
-          )}
-          <Text style={{ color: isDark ? '#ffffff' : color.text, fontSize: isExportMode ? 18 : 13, fontWeight: '800', lineHeight: isExportMode ? 22 : 16, marginBottom: isExportMode ? 6 : 3 }} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
-            {cls.name}
-          </Text>
-          {cls.room ? (
-            <Text style={{ color: isDark ? 'rgba(255,255,255,0.9)' : color.text, opacity: isDark ? 1 : 0.9, fontSize: isExportMode ? 14 : 10, fontWeight: '700', marginBottom: isExportMode ? 4 : 2 }} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
-              <Ionicons name="location" size={isExportMode ? 14 : 10} /> {cls.room}
-            </Text>
-          ) : null}
-          {cls.duration >= 0.75 && (
-            <View style={{ marginTop: 'auto' }}>
-              <Text style={{ color: isDark ? 'rgba(255,255,255,0.9)' : color.text, opacity: isDark ? 1 : 0.85, fontSize: isExportMode ? 13 : 10, fontWeight: '600' }} numberOfLines={2}>
-              {(() => {
-                const formatH = (h: number) => {
-                  const totalMins = Math.round(h * 60);
-                  const hrs = Math.floor(totalMins / 60);
-                  const mins = totalMins % 60;
-                  const ampm = hrs >= 12 && hrs < 24 ? 'PM' : 'AM';
-                  const displayH = hrs > 12 ? hrs - 12 : (hrs === 0 ? 12 : hrs);
-                  return `${displayH}:${mins.toString().padStart(2, '0')} ${ampm}`;
-                };
-                const formatDuration = (dur: number) => {
-                  const totalMins = Math.round(dur * 60);
-                  const hrs = Math.floor(totalMins / 60);
-                  const mins = totalMins % 60;
-                  let str = '';
-                  if (hrs > 0) str += `${hrs}h`;
-                  if (mins > 0) str += `${hrs > 0 ? ' ' : ''}${mins}m`;
-                  return str || '0m';
-                };
-                return `${formatH(cls.startHour)} - ${formatH(cls.startHour + cls.duration)}\n${formatDuration(cls.duration)}`;
-              })()}
-            </Text>
-            </View>
-          )}
+            )}
       </TouchableOpacity>
     </View>
   );
@@ -371,6 +412,7 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
                     displayDayIndices={displayDayIndices}
                     dayWidth={DAY_WIDTH}
                     isExportMode={true}
+                    allClasses={classes}
                   />
                 ))}
               </View>
@@ -427,6 +469,7 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
                     END_HOUR={END_HOUR}
                     displayDayIndices={displayDayIndices}
                     dayWidth={DAY_WIDTH}
+                    allClasses={classes}
                   />
                 ))}
               </View>

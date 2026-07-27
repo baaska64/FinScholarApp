@@ -4,6 +4,9 @@ import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
 import Purchases, { PurchasesPackage } from 'react-native-purchases';
+import Constants from 'expo-constants';
+import { supabase } from '../services/supabaseClient';
+import { SyncService } from '../services/SyncService';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
@@ -12,10 +15,31 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
     const isDark = colorScheme === 'dark';
     const [loading, setLoading] = useState(false);
     const [currentPackage, setCurrentPackage] = useState<PurchasesPackage | null>(null);
+    const [isEarlyBird, setIsEarlyBird] = useState(false);
+    const [checkingStatus, setCheckingStatus] = useState(true);
 
     useEffect(() => {
         if (visible) {
+            setCheckingStatus(true);
+            const checkEarlyBird = async () => {
+                try {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    if (!user) return;
+                    
+                    // Get the 50 oldest profiles
+                    const { data } = await supabase.from('profiles').select('id').order('created_at', { ascending: true }).limit(50);
+                    if (data && data.some(p => p.id === user.id)) {
+                        setIsEarlyBird(true);
+                    }
+                } catch (e) {
+                    console.error("Early bird check failed", e);
+                } finally {
+                    setCheckingStatus(false);
+                }
+            };
+
             const fetchOfferings = async () => {
+                if (Constants.appOwnership === 'expo') return;
                 try {
                     const offerings = await Purchases.getOfferings();
                     if (offerings.current !== null && offerings.current.availablePackages.length !== 0) {
@@ -25,11 +49,42 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
                     console.error("Error fetching offerings", e);
                 }
             };
+            
+            checkEarlyBird();
             fetchOfferings();
         }
     }, [visible]);
 
+    const handleClaimEarlyBird = async () => {
+        setLoading(true);
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                await supabase.from('profiles').update({ is_premium: true }).eq('id', user.id);
+                (SyncService as any).isPremiumUser = true; // Update local state immediately
+                alert('Congratulations! You claimed your Early Bird Lifetime Premium!');
+                onClose();
+            }
+        } catch (e) {
+            alert('Failed to claim offer. Try again later.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const handlePurchase = async () => {
+        if (Constants.appOwnership === 'expo') {
+            alert('Running in Expo Go! Simulating a successful purchase so you can test features.');
+            // Test flow for Expo Go
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                await supabase.from('profiles').update({ is_premium: true }).eq('id', user.id);
+                (SyncService as any).isPremiumUser = true;
+            }
+            onClose();
+            return;
+        }
+        
         if (!currentPackage) {
             alert('Error: Purchases are not configured yet. Add your API key and setup RevenueCat offerings.');
             return;
@@ -38,6 +93,11 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
         try {
             const { customerInfo } = await Purchases.purchasePackage(currentPackage);
             if (typeof customerInfo.entitlements.active['Premium'] !== "undefined") {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (user) {
+                    await supabase.from('profiles').update({ is_premium: true }).eq('id', user.id);
+                    (SyncService as any).isPremiumUser = true;
+                }
                 alert('Welcome to Fin Premium!');
                 onClose();
             }
@@ -90,34 +150,64 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
                                     Get exclusive access to the AI Schedule Scanner and let Fin build your timetable for you in seconds.
                                 </Text>
 
-                                <View className="w-full bg-black/40 rounded-3xl p-6 mb-8 border border-white/10">
-                                    <View className="flex-row items-center mb-5">
-                                        <Ionicons name="checkmark-circle" size={24} color="#4ade80" />
-                                        <Text className="text-white font-bold ml-3 text-base">Unlimited AI Image Scanning</Text>
-                                    </View>
-                                    <View className="flex-row items-center mb-5">
-                                        <Ionicons name="checkmark-circle" size={24} color="#4ade80" />
-                                        <Text className="text-white font-bold ml-3 text-base">Auto-Populate Timetables</Text>
-                                    </View>
-                                    <View className="flex-row items-center">
-                                        <Ionicons name="checkmark-circle" size={24} color="#4ade80" />
-                                        <Text className="text-white font-bold ml-3 text-base">Ad-Free Experience</Text>
-                                    </View>
-                                </View>
+                                {checkingStatus ? (
+                                    <ActivityIndicator color="white" style={{ marginTop: 40 }} />
+                                ) : isEarlyBird ? (
+                                    <>
+                                        <View className="w-full bg-emerald-500/20 rounded-3xl p-6 mb-8 border border-emerald-400/50">
+                                            <View className="flex-row items-center justify-center mb-2">
+                                                <Ionicons name="gift" size={32} color="#34d399" />
+                                            </View>
+                                            <Text className="text-emerald-300 font-extrabold text-center text-lg mb-2">EARLY BIRD OFFER</Text>
+                                            <Text className="text-white text-center font-medium">
+                                                You are one of our first 50 users! You have been granted a FREE lifetime Fin Premium upgrade.
+                                            </Text>
+                                        </View>
+                                        
+                                        <TouchableOpacity 
+                                            className={`w-full py-4 rounded-full items-center justify-center shadow-lg ${loading ? 'bg-emerald-400' : 'bg-emerald-500 shadow-emerald-500/50'}`}
+                                            onPress={handleClaimEarlyBird}
+                                            disabled={loading}
+                                        >
+                                            {loading ? <ActivityIndicator color="white" /> : (
+                                                <Text className="text-white font-extrabold text-lg tracking-wider">
+                                                    CLAIM FREE UPGRADE
+                                                </Text>
+                                            )}
+                                        </TouchableOpacity>
+                                    </>
+                                ) : (
+                                    <>
+                                        <View className="w-full bg-black/40 rounded-3xl p-6 mb-8 border border-white/10">
+                                            <View className="flex-row items-center mb-5">
+                                                <Ionicons name="checkmark-circle" size={24} color="#4ade80" />
+                                                <Text className="text-white font-bold ml-3 text-base">Unlimited AI Image Scanning</Text>
+                                            </View>
+                                            <View className="flex-row items-center mb-5">
+                                                <Ionicons name="checkmark-circle" size={24} color="#4ade80" />
+                                                <Text className="text-white font-bold ml-3 text-base">Auto-Populate Timetables</Text>
+                                            </View>
+                                            <View className="flex-row items-center">
+                                                <Ionicons name="checkmark-circle" size={24} color="#4ade80" />
+                                                <Text className="text-white font-bold ml-3 text-base">Ad-Free Experience</Text>
+                                            </View>
+                                        </View>
 
-                                <TouchableOpacity 
-                                    className={`w-full py-4 rounded-full items-center justify-center shadow-lg ${loading ? 'bg-indigo-400' : 'bg-indigo-500 shadow-indigo-500/50'}`}
-                                    onPress={handlePurchase}
-                                    disabled={loading}
-                                >
-                                    {loading ? (
-                                        <ActivityIndicator color="white" />
-                                    ) : (
-                                        <Text className="text-white font-extrabold text-lg tracking-wider">
-                                            {currentPackage ? `UPGRADE FOR ${currentPackage.product.priceString}` : 'UPGRADE TO PREMIUM'}
-                                        </Text>
-                                    )}
-                                </TouchableOpacity>
+                                        <TouchableOpacity 
+                                            className={`w-full py-4 rounded-full items-center justify-center shadow-lg ${loading ? 'bg-indigo-400' : 'bg-indigo-500 shadow-indigo-500/50'}`}
+                                            onPress={handlePurchase}
+                                            disabled={loading}
+                                        >
+                                            {loading ? (
+                                                <ActivityIndicator color="white" />
+                                            ) : (
+                                                <Text className="text-white font-extrabold text-lg tracking-wider">
+                                                    {currentPackage ? `UPGRADE FOR ${currentPackage.product.priceString}` : 'UPGRADE TO PREMIUM'}
+                                                </Text>
+                                            )}
+                                        </TouchableOpacity>
+                                    </>
+                                )}
                             </View>
                         </BlurView>
                     </ImageBackground>

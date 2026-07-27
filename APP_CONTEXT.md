@@ -25,7 +25,7 @@ This document serves as the single source of truth for the app's current state, 
   - **Service Account Email:** `revenuecat@gen-lang-client-0689315991.iam.gserviceaccount.com`
 - **Premium Features:** 
   - Premium unlocks advanced **AI features** (like the Schedule Scanner).
-- **Early Adopter Perk (First 80 Users):** 
-  - A Supabase PostgreSQL trigger automatically grants `is_premium = true` to the first 80 users who sign up in the `profiles` table.
+- **Early Adopter Perk (First 50 Users):** 
+  - A Supabase PostgreSQL trigger automatically grants `is_premium = true` to the first 50 users who sign up in the `profiles` table.
   - The frontend `SyncService` fetches this flag. If the user is premium, they bypass the RevenueCat paywall entirely.
   - *Note: Privacy policies and Google Play declarations must reflect that you process payments and offer digital goods.*

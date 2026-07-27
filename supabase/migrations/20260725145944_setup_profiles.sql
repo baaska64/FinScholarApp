@@ -22,9 +22,9 @@ BEGIN
   -- Check how many profiles currently exist
   SELECT count(*) INTO profile_count FROM public.profiles;
   
-  -- Insert the new profile, granting premium if we are under 80 users
+  -- Insert the new profile, granting premium if we are under 50 users
   INSERT INTO public.profiles (id, is_premium)
-  VALUES (new.id, profile_count < 80);
+  VALUES (new.id, profile_count < 50);
   
   RETURN new;
 END;
@@ -39,13 +39,13 @@ CREATE TRIGGER on_auth_user_created
 -- Backfill existing users (if any)
 DO $$
 BEGIN
-  -- Insert up to the first 80 existing users as premium
+  -- Insert up to the first 50 existing users as premium
   INSERT INTO public.profiles (id, is_premium)
   SELECT id, true 
   FROM auth.users
   WHERE id NOT IN (SELECT id FROM public.profiles)
   ORDER BY created_at ASC
-  LIMIT 80;
+  LIMIT 50;
 
   -- Insert any remaining existing users as non-premium
   INSERT INTO public.profiles (id, is_premium)

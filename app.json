@@ -2,7 +2,7 @@
   "expo": {
     "name": "FinScholarApp",
     "slug": "FinScholarApp",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/FinScholarAppLogo.png",
     "scheme": "finscholarapp",

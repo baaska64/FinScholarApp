@@ -14,6 +14,9 @@ import { DashboardSkeleton } from '@/components/ui/LoadingSkeleton';
 import SectionHeader from '@/components/ui/SectionHeader';
 import AnimatedPressable from '@/components/ui/AnimatedPressable';
 import Badge from '@/components/ui/Badge';
+import { SyncService } from '@/services/SyncService';
+import PremiumPaywallModal from '@/components/PremiumPaywallModal';
+import DevMenuModal from '@/components/DevMenuModal';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -82,6 +85,9 @@ export default function DashboardScreen() {
     const [user, setUser] = useState<any>(null);
     const [data, setData] = useState<any>(null);
     const [refreshing, setRefreshing] = useState(false);
+    const [showPaywall, setShowPaywall] = useState(false);
+    const [showDevMenu, setShowDevMenu] = useState(false);
+    const [isPremium, setIsPremium] = useState(false);
     
     const { selectedYear, selectedSemester, setYearAndSemester, isLoaded } = useSemesterContext();
     const [activeYearId, setLocalYearId] = useState<string | null>(null);
@@ -131,16 +137,18 @@ export default function DashboardScreen() {
         return () => subscription.unsubscribe();
     }, []);
 
-    const loadData = async (forceSync = false) => {
+    const fetchData = useCallback(async (forcedUser?: any) => {
+        setIsPremium(SyncService.getIsPremium());
+        const currentUser = forcedUser || user || (await supabase.auth.getUser()).data.user;
         let loaded = null;
         try {
             const str = await AsyncStorage.getItem('grade_ledger_v2_data');
             if (str) loaded = JSON.parse(str);
         } catch(e) {}
 
-        if (user && (!loaded || forceSync)) {
+        if (currentUser && (!loaded)) {
             try {
-                const { data: dbData } = await supabase.from('user_ledgers').select('ledger_data').eq('id', user.id).single();
+                const { data: dbData } = await supabase.from('user_ledgers').select('ledger_data').eq('id', currentUser.id).single();
                 if (dbData?.ledger_data) {
                     loaded = dbData.ledger_data;
                     await AsyncStorage.setItem('grade_ledger_v2_data', JSON.stringify(loaded));
@@ -152,10 +160,14 @@ export default function DashboardScreen() {
 
         if (!loaded) loaded = { settings: {}, years: [] };
 
-        if (user) setSyncStatus('saved');
+        if (currentUser) setSyncStatus('saved');
         else setSyncStatus('offline');
 
         setData(loaded);
+    }, [user]);
+
+    const loadData = async (forceSync = false) => {
+        await fetchData();
     };
 
     useFocusEffect(
@@ -198,7 +210,22 @@ export default function DashboardScreen() {
                     ...(!isDark ? { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 4 } : {}),
                 }}
             >
-                <Text style={{ ...Typography.title, color: theme.text }}>FinScholar</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={{ ...Typography.title, color: theme.text }}>FinScholar</Text>
+                    {isPremium ? (
+                        <View style={{ backgroundColor: '#10b981', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                            <Text style={{ fontSize: 10, fontWeight: '900', color: '#fff' }}>PRO</Text>
+                        </View>
+                    ) : (
+                        <TouchableOpacity 
+                            onPress={() => setShowPaywall(true)}
+                            style={{ backgroundColor: '#6366f1', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                        >
+                            <Ionicons name="diamond" size={10} color="#fff" />
+                            <Text style={{ fontSize: 10, fontWeight: '800', color: '#fff' }}>GET PRO</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
                 
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                     {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={22} color={theme.textTertiary} />}
@@ -207,12 +234,14 @@ export default function DashboardScreen() {
                     
                     <TouchableOpacity 
                         onPress={() => router.push('/(tabs)/profile')} 
+                        onLongPress={() => setShowDevMenu(true)}
+                        delayLongPress={500}
                         style={{
                             width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
+                            backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9'
                         }}
                     >
-                        <Ionicons name="settings-outline" size={22} color={isDark ? '#cbd5e1' : '#475569'} />
+                        <Ionicons name="settings-outline" size={22} color={theme.textSecondary} />
                     </TouchableOpacity>
                 </View>
             </View>
@@ -756,6 +785,18 @@ export default function DashboardScreen() {
                 
                 <View style={{ height: insets.bottom + 80 }} />
             </ScrollView>
+
+            <PremiumPaywallModal 
+                visible={showPaywall} 
+                onClose={() => setShowPaywall(false)} 
+            />
+
+            <DevMenuModal 
+                visible={showDevMenu}
+                onClose={() => setShowDevMenu(false)}
+                isDark={isDark}
+                onShowPaywall={() => setShowPaywall(true)}
+            />
         </SafeAreaView>
     );
 }

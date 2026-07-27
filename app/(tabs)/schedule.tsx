@@ -11,6 +11,7 @@ import ScheduleListView from '@/components/schedule/ScheduleListView';
 import AttendanceTracker from '@/components/schedule/AttendanceTracker';
 import ScheduleScannerModal from '@/components/schedule/ScheduleScannerModal';
 import PremiumPaywallModal from '@/components/PremiumPaywallModal';
+import DevMenuModal from '@/components/DevMenuModal';
 import { ClassDetailsModal, ClassEditModal } from '@/components/schedule/ClassModals';
 import { useColorScheme } from 'nativewind';
 import { useFocusEffect, router, useLocalSearchParams } from 'expo-router';
@@ -68,6 +69,7 @@ export default function ScheduleScreen() {
     const [isQuickEditMode, setIsQuickEditMode] = useState(false);
     const [showScanner, setShowScanner] = useState(false);
     const [showPaywall, setShowPaywall] = useState(false);
+    const [showDevMenu, setShowDevMenu] = useState(false);
     const [syncStatus, setSyncStatus] = useState<'offline' | 'syncing' | 'saved'>('offline');
     const [showAiWarning, setShowAiWarning] = useState(false);
     const [upcomingMilestones, setUpcomingMilestones] = useState<any[]>([]);
@@ -597,6 +599,8 @@ export default function ScheduleScreen() {
                         
                         <TouchableOpacity 
                             onPress={() => router.push('/(tabs)/profile')} 
+                            onLongPress={() => setShowDevMenu(true)}
+                            delayLongPress={500}
                             style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9' }}
                         >
                             <Ionicons name="settings-outline" size={22} color={isDark ? '#cbd5e1' : '#475569'} />
@@ -924,7 +928,7 @@ export default function ScheduleScreen() {
                                 </View>
                             </View>
                         ) : viewMode === 'list' ? (
-                            <View className="mb-8" style={{ minHeight: 650 }}>
+                            <View className="mb-8">
                                 <TouchableOpacity 
                                     onPress={handleExportSchedule}
                                     className={`mb-4 flex-row items-center justify-center py-4 rounded-3xl border-2 ${isDark ? 'bg-indigo-600 border-indigo-500' : 'bg-indigo-50 border-indigo-200'}`}
@@ -973,6 +977,13 @@ export default function ScheduleScreen() {
             <PremiumPaywallModal 
                 visible={showPaywall} 
                 onClose={() => setShowPaywall(false)} 
+            />
+
+            <DevMenuModal 
+                visible={showDevMenu}
+                onClose={() => setShowDevMenu(false)}
+                isDark={isDark}
+                onShowPaywall={() => setShowPaywall(true)}
             />
 
             <ClassDetailsModal 

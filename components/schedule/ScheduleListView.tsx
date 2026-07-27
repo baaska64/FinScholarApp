@@ -1,29 +1,68 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, Dimensions, ImageBackground } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { View, Text, StyleSheet, Dimensions, Image } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useColorScheme } from 'nativewind';
 
-const DAY_LABELS: Record<number, string> = {
-  0: 'M',
-  1: 'T',
-  2: 'W',
-  3: 'TH',
-  4: 'F',
-  5: 'S',
-  6: 'SU'
+const SCREEN_W = Dimensions.get('window').width;
+const PREVIEW_W = SCREEN_W - 48; // Margin
+const PREVIEW_H = PREVIEW_W * (1920 / 1080);
+const scale = PREVIEW_W / 1080;
+
+const BASE_W = 1080;
+const BASE_H = 1920;
+
+const DAY_LABELS = ['SU', 'M', 'T', 'W', 'TH', 'F', 'S'];
+
+const DAY_THEMES: Record<number, { lightBg: string, lightText: string, darkBg: string, darkText: string }> = {
+  0: { lightBg: '#FFE4E6', lightText: '#E11D48', darkBg: '#4C0519', darkText: '#FDA4AF' }, // Rose
+  1: { lightBg: '#FEF3C7', lightText: '#D97706', darkBg: '#451A03', darkText: '#FDE047' }, // Amber
+  2: { lightBg: '#D1FAE5', lightText: '#059669', darkBg: '#022C22', darkText: '#6EE7B7' }, // Emerald
+  3: { lightBg: '#E0E7FF', lightText: '#4F46E5', darkBg: '#1E1B4B', darkText: '#A5B4FC' }, // Indigo
+  4: { lightBg: '#FCE7F3', lightText: '#DB2777', darkBg: '#500724', darkText: '#F9A8D4' }, // Pink
+  5: { lightBg: '#E0F2FE', lightText: '#0284C7', darkBg: '#082F49', darkText: '#7DD3FC' }, // Sky
+  6: { lightBg: '#F3E8FF', lightText: '#9333EA', darkBg: '#3B0764', darkText: '#D8B4FE' }, // Purple
 };
 
-const formatTime = (hour: number) => {
-  const totalMins = Math.round(hour * 60);
-  const hrs = Math.floor(totalMins / 60);
-  const mins = totalMins % 60;
-  const ampm = hrs >= 12 && hrs < 24 ? 'PM' : 'AM';
+const formatTime = (timeNum: number) => {
+  const hrs = Math.floor(timeNum);
+  const mins = Math.round((timeNum - hrs) * 60);
+  const ampm = hrs >= 12 ? 'PM' : 'AM';
   const displayH = hrs > 12 ? hrs - 12 : (hrs === 0 ? 12 : hrs);
   const minStr = mins > 0 ? `:${mins.toString().padStart(2, '0')}` : '';
   return `${displayH}${minStr}${ampm}`;
 };
 
+const getRoomForClass = (cls: any, allClasses: any[]) => {
+  if (!cls.room) return null;
+  const rooms = cls.room.split(',').map((r: string) => r.trim()).filter(Boolean);
+  if (rooms.length <= 1) return cls.room;
+  
+  if (!allClasses) return rooms[0];
+
+  const siblings = allClasses
+    .filter((c: any) => c.name === cls.name)
+    .sort((a: any, b: any) => {
+      const wa = a.day === 6 ? -1 : a.day;
+      const wb = b.day === 6 ? -1 : b.day;
+      if (wa !== wb) return wa - wb;
+      return a.startHour - b.startHour;
+    });
+    
+  const idx = siblings.findIndex((c: any) => c.id === cls.id);
+  if (idx === -1) return rooms[0];
+  return rooms[idx % rooms.length];
+};
+
 export default function ScheduleListView({ classes, currentSem, currentYear }: any) {
-  // Group classes by day and sort by start hour
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === 'dark';
+
+  const bgColor = isDark ? '#0F172A' : '#F8FAFC';
+  const textColor = isDark ? '#F8FAFC' : '#0F172A';
+  const subTextColor = isDark ? '#94A3B8' : '#64748B';
+  const cardBgColor = isDark ? '#1E293B' : '#FFFFFF';
+  const cardBorderColor = isDark ? '#334155' : '#E2E8F0';
+
   const groupedClasses = useMemo(() => {
     if (!classes) return {};
     const grouped: Record<number, any[]> = {};
@@ -31,265 +70,275 @@ export default function ScheduleListView({ classes, currentSem, currentYear }: a
       if (!grouped[cls.day]) grouped[cls.day] = [];
       grouped[cls.day].push(cls);
     });
-    
-    // Sort each day's classes
     Object.keys(grouped).forEach(day => {
       grouped[parseInt(day)].sort((a, b) => a.startHour - b.startHour);
     });
-    
     return grouped;
   }, [classes]);
 
-  // Only show days that have classes, or Mon-Fri if empty
-  // Sort so that Sunday (6) appears first, then Mon-Sat (0-5)
   const activeDays = Object.keys(groupedClasses).map(Number).sort((a, b) => {
-    const weightA = a === 6 ? -1 : a;
-    const weightB = b === 6 ? -1 : b;
-    return weightA - weightB;
+    const wa = a === 6 ? -1 : a;
+    const wb = b === 6 ? -1 : b;
+    return wa - wb;
   });
-  const daysToRender = activeDays.length > 0 ? activeDays : [6, 0, 1, 2, 3, 4, 5];
+  const daysToRender = activeDays.filter(d => (groupedClasses[d]?.length ?? 0) > 0);
+  const numDays = daysToRender.length || 1;
+
+  // 1080x1920 layout calculations
+  const HEADER_H = 200;
+  const HEADER_MB = 60;
+  const FOOTER_H = 60;
+  const OUTER_PAD_V = 80;
+  
+  const DAY_GAP = 56; // Gap between different days
+  const ROW_GAP = 20; // Gap between wrapped rows within the same day
+  const MAX_COLS = 2; // 2 classes side-by-side
+
+  // Calculate total vertical rows needed for the entire week
+  const dayRowCounts = daysToRender.map(d => Math.ceil(Math.max(1, (groupedClasses[d]?.length || 1)) / MAX_COLS));
+  const totalRows = dayRowCounts.reduce((a, b) => a + b, 0);
+
+  // Distribute height based on rows
+  const totalAvailableH = BASE_H - HEADER_H - HEADER_MB - FOOTER_H - (OUTER_PAD_V * 2);
+  const totalGaps = (numDays - 1) * DAY_GAP + (totalRows - numDays) * ROW_GAP;
+  const rowH = (totalAvailableH - totalGaps) / totalRows;
+
+  // Dynamic font sizing - reserve vertical space for padding (32px total, 16px top/bottom)
+  const availableTextH = Math.max(40, rowH - 32); 
+  const subjectFs = Math.min(32, Math.max(16, availableTextH * 0.4));
+  const timeFs = Math.min(18, Math.max(11, availableTextH * 0.22));
+  const metaFs = Math.min(18, Math.max(11, availableTextH * 0.22));
 
   return (
-    <View style={styles.container}>
-      <ImageBackground 
-        source={require('../../assets/images/GlassBg.png')} 
-        style={styles.bgImage}
-        resizeMode="cover"
-      >
-        <View style={styles.scrollContent}>
-          {/* Header */}
-          <View style={styles.header}>
+    <View style={[styles.previewContainer, { width: PREVIEW_W, height: PREVIEW_H, backgroundColor: bgColor, borderColor: cardBorderColor }]}>
+      <View style={[styles.canvas, { transform: [{ scale }], transformOrigin: 'top left' }]}>
+        
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: bgColor }]} />
+        
+        {/* Fin Mascot Watermark */}
+        <Image 
+          source={require('../../assets/images/studying.png')} 
+          style={{ 
+            position: 'absolute', 
+            bottom: 40, 
+            right: 40, 
+            width: 450, 
+            height: 450, 
+            opacity: isDark ? 0.15 : 0.4,
+            resizeMode: 'contain' 
+          }} 
+        />
+
+        <View style={styles.inner}>
+          
+          <View style={[styles.header, { height: HEADER_H, marginBottom: HEADER_MB }]}>
             <View>
-              <Text style={styles.titleLight}>Weekly</Text>
-              <Text style={styles.titleBold}>Schedule</Text>
+              <Text style={[styles.titleLight, { color: subTextColor }]}>Weekly</Text>
+              <Text style={[styles.titleBold, { color: textColor }]}>Schedule</Text>
             </View>
-            
-            <BlurView intensity={70} tint="dark" style={styles.badgeContainer}>
-              <View style={styles.badgeInner}>
-                <Text style={styles.badgeProgram} numberOfLines={1}>{currentYear?.name || 'Year'}</Text>
-                <Text style={styles.badgeSem}>{currentSem?.name || 'Semester'}</Text>
-              </View>
-            </BlurView>
+            <View style={[styles.badgeWrap, { backgroundColor: cardBgColor, borderColor: cardBorderColor }]}>
+              <Text style={[styles.badgeYear, { color: textColor }]} numberOfLines={1}>{currentYear?.name || 'Year'}</Text>
+              <Text style={[styles.badgeSem, { color: subTextColor }]}>{currentSem?.name || 'Semester'}</Text>
+            </View>
           </View>
 
-          {/* List of Days */}
-          <View style={styles.listContainer}>
-            {daysToRender.map(dayIdx => {
+          <View style={{ flex: 1, gap: DAY_GAP }}>
+            {daysToRender.map((dayIdx, index) => {
               const dayClasses = groupedClasses[dayIdx] || [];
-              if (dayClasses.length === 0) return null; // Skip empty days for a cleaner list
+              const theme = DAY_THEMES[dayIdx] || DAY_THEMES[1];
+              
+              const rowsForThisDay = Math.ceil(Math.max(1, dayClasses.length) / MAX_COLS);
+              const dayContainerHeight = (rowsForThisDay * rowH) + ((rowsForThisDay - 1) * ROW_GAP);
+
+              const pillBg = isDark ? theme.darkBg : theme.lightBg;
+              const pillText = isDark ? theme.darkText : theme.lightText;
 
               return (
-                <BlurView intensity={70} tint="dark" style={styles.dayCard} key={dayIdx}>
-                  <View style={styles.dayCardInner}>
-                    {/* Left: Day Circle */}
-                    <View style={styles.dayCircleContainer}>
-                      <View style={styles.dayCircle}>
-                        <Text style={styles.dayLetter}>{DAY_LABELS[dayIdx]}</Text>
-                      </View>
-                    </View>
-
-                    {/* Right: Classes Stack */}
-                    <View style={styles.classesStack}>
-                      {dayClasses.map((cls, idx) => (
-                        <View key={cls.id || idx} style={styles.classRow}>
-                            <View style={styles.timeCol}>
-                              <Text style={styles.timeText} numberOfLines={1} adjustsFontSizeToFit>
-                                {formatTime(cls.startHour)} – {formatTime(cls.startHour + cls.duration)}
-                              </Text>
-                            </View>
-                            <View style={styles.subjectCol}>
-                              <Text style={styles.subjectText} numberOfLines={2}>
-                                {cls.name}
-                              </Text>
-                              {(cls.room || cls.instructor) && (
-                                <View style={styles.detailsRow}>
-                                  {cls.room && (
-                                    <Text style={styles.roomText} numberOfLines={1}>
-                                      {cls.room}
-                                    </Text>
-                                  )}
-                                  {cls.room && cls.instructor && (
-                                    <Text style={styles.dotSeparator}>•</Text>
-                                  )}
-                                  {cls.instructor && (
-                                    <Text style={styles.teacherText} numberOfLines={1}>
-                                      {cls.instructor}
-                                    </Text>
-                                  )}
-                                </View>
-                              )}
-                            </View>
-                        </View>
-                      ))}
-                    </View>
+                <View style={[styles.dayRow, { height: dayContainerHeight }]} key={dayIdx}>
+                  
+                  {/* Dynamic Vertical Day Pill */}
+                  <View style={[styles.dayPill, { backgroundColor: pillBg }]}>
+                    <Text style={[styles.dayLetter, { color: pillText }]}>{DAY_LABELS[dayIdx]}</Text>
                   </View>
-                </BlurView>
+
+                  {/* Horizontal Divider Line */}
+                  {index < daysToRender.length - 1 && (
+                    <View 
+                      style={{ 
+                        position: 'absolute', 
+                        bottom: -(DAY_GAP / 2) - 1.5, 
+                        left: 0, 
+                        right: 0, 
+                        height: 3, 
+                        backgroundColor: cardBorderColor,
+                        borderRadius: 2,
+                        opacity: isDark ? 0.5 : 1
+                      }} 
+                    />
+                  )}
+
+                  {/* Classes Wrapping Grid */}
+                  <View style={[styles.classesContainer, { gap: ROW_GAP }]}>
+                    {dayClasses.map((cls: any, idx: number) => {
+                      const room = getRoomForClass(cls, classes);
+                      return (
+                        <View 
+                          key={cls.id || idx} 
+                          style={[
+                            styles.classCard, 
+                            { 
+                              height: rowH, 
+                              backgroundColor: cardBgColor, 
+                              borderColor: cardBorderColor,
+                              borderWidth: isDark ? 1 : 2,
+                              shadowOpacity: isDark ? 0 : 0.04
+                            }
+                          ]}
+                        >
+                          <Text style={[styles.timeText, { fontSize: timeFs, color: subTextColor }]} numberOfLines={1}>
+                            {formatTime(cls.startHour)} - {formatTime(cls.startHour + cls.duration)}
+                          </Text>
+                          <Text style={[styles.subjectText, { fontSize: subjectFs, color: textColor }]} numberOfLines={1}>
+                            {cls.name}
+                          </Text>
+                          {room && (
+                            <View style={styles.metaRow}>
+                              <Text style={[styles.roomText, { fontSize: metaFs, color: pillText }]} numberOfLines={1}>
+                                <Ionicons name="location" size={metaFs * 0.9} color={pillText} /> {room}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })}
+                  </View>
+
+                </View>
               );
             })}
           </View>
+
+          <View style={[styles.footer, { height: FOOTER_H }]}>
+            <Text style={[styles.footerBrand, { color: cardBorderColor }]}>FINSCHOLAR</Text>
+          </View>
+
         </View>
-      </ImageBackground>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  previewContainer: {
     borderRadius: 24,
     overflow: 'hidden',
+    alignSelf: 'center',
+    borderWidth: 1,
   },
-  bgImage: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
+  canvas: {
+    width: BASE_W,
+    height: BASE_H,
   },
-  scrollContent: {
-    padding: 24,
-    paddingTop: 40,
-    paddingBottom: 40,
+  inner: {
+    width: BASE_W,
+    height: BASE_H,
+    paddingHorizontal: 80,
+    paddingVertical: 60,
   },
+
+  /* Header */
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 40,
   },
   titleLight: {
-    fontSize: 28,
-    fontFamily: 'Nunito_400Regular',
-    color: '#ffffff',
-    letterSpacing: 1,
-    textShadowColor: 'rgba(0,0,0,0.2)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    fontSize: 72,
+    fontFamily: 'Nunito_700Bold',
   },
   titleBold: {
-    fontSize: 34,
-    fontFamily: 'Nunito_800ExtraBold',
-    color: '#ffffff',
-    marginTop: -8,
-    textShadowColor: 'rgba(0,0,0,0.2)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    fontSize: 100,
+    fontFamily: 'Nunito_900Black',
+    marginTop: -20,
   },
-  badgeContainer: {
-    borderRadius: 24,
-    overflow: 'hidden',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  badgeInner: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+  badgeWrap: {
+    paddingHorizontal: 36,
+    paddingVertical: 20,
+    borderRadius: 100,
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderWidth: 2,
   },
-  badgeProgram: {
-    fontSize: 16,
-    fontFamily: 'Nunito_700Bold',
-    color: '#ffffff',
-    maxWidth: 120,
+  badgeYear: {
+    fontSize: 36,
+    fontFamily: 'Nunito_900Black',
+    maxWidth: 250,
   },
   badgeSem: {
-    fontSize: 10,
-    fontFamily: 'Nunito_400Regular',
-    color: 'rgba(255,255,255,0.9)',
-    marginTop: 2,
+    fontSize: 22,
+    fontFamily: 'Nunito_700Bold',
+    marginTop: 4,
   },
-  listContainer: {
-    gap: 16,
-  },
-  dayCard: {
-    borderRadius: 36,
-    overflow: 'hidden',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.15)',
-  },
-  dayCardInner: {
+
+  /* Day Rows */
+  dayRow: {
     flexDirection: 'row',
-    padding: 24,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'stretch', // Stretches the dayPill to fill height
+    width: '100%',
   },
-  dayCircleContainer: {
+  dayPill: {
+    width: 120,
+    borderRadius: 36,
     justifyContent: 'center',
+    alignItems: 'center',
     marginRight: 24,
   },
-  dayCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
   dayLetter: {
-    fontSize: 26,
-    fontFamily: 'Nunito_800ExtraBold',
-    color: '#ffffff',
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
+    fontSize: 48,
+    fontFamily: 'Nunito_900Black',
   },
-  classesStack: {
+  
+  /* Classes */
+  classesContainer: {
     flex: 1,
-    justifyContent: 'center',
-    gap: 12,
-  },
-  classRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    flexWrap: 'wrap',
+    alignContent: 'flex-start', // Do not stretch vertically, respect rowH
   },
-  timeCol: {
-    width: 115,
-    marginRight: 10,
+  classCard: {
+    width: '48%', // Forces 2 columns
+    borderRadius: 28,
+    paddingHorizontal: 28,
+    paddingVertical: 16, // Explicit vertical padding guarantees space from edges!
+    justifyContent: 'center',
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 12,
+    elevation: 3,
   },
   timeText: {
-    fontSize: 12,
-    fontFamily: 'Nunito_700Bold',
-    color: '#a5b4fc', // distinct light indigo for time
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-  },
-  subjectCol: {
-    flex: 1,
+    fontFamily: 'Nunito_800ExtraBold',
+    marginBottom: 2,
   },
   subjectText: {
-    fontSize: 15,
-    fontFamily: 'Nunito_800ExtraBold',
-    color: '#ffffff',
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    fontFamily: 'Nunito_900Black',
   },
-  roomText: {
-    fontSize: 11,
-    fontFamily: 'Nunito_700Bold',
-    color: '#fde047', // distinct yellow for room
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-  },
-  teacherText: {
-    fontSize: 11,
-    fontFamily: 'Nunito_700Bold',
-    color: '#86efac', // distinct green for teacher
-    flexShrink: 1,
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
-  },
-  detailsRow: {
+  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 4,
   },
-  dotSeparator: {
-    color: 'rgba(255,255,255,0.5)',
-    marginHorizontal: 6,
-    fontSize: 10,
-  }
+  roomText: {
+    fontFamily: 'Nunito_800ExtraBold',
+  },
+
+  /* Footer */
+  footer: {
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  footerBrand: {
+    fontSize: 28,
+    fontFamily: 'Nunito_900Black',
+    letterSpacing: 12,
+  },
 });
