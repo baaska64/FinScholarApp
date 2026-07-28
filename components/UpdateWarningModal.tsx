@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, Modal, TouchableOpacity, StyleSheet, Linking } from 'react-native';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../services/supabaseClient';
 import Constants from 'expo-constants';
 import { useColorScheme } from 'nativewind';
 import { Ionicons } from '@expo/vector-icons';
