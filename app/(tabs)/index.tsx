@@ -134,7 +134,15 @@ export default function DashboardScreen() {
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             setUser(session?.user ?? null);
         });
-        return () => subscription.unsubscribe();
+        
+        const unsubscribeSync = SyncService.subscribeDataChange(() => {
+            setIsPremium(SyncService.getIsPremium());
+        });
+
+        return () => {
+            subscription.unsubscribe();
+            unsubscribeSync();
+        };
     }, []);
 
     const fetchData = useCallback(async (forcedUser?: any) => {
@@ -234,8 +242,6 @@ export default function DashboardScreen() {
                     
                     <TouchableOpacity 
                         onPress={() => router.push('/(tabs)/profile')} 
-                        onLongPress={() => setShowDevMenu(true)}
-                        delayLongPress={500}
                         style={{
                             width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
                             backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9'

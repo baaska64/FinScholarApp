@@ -13,8 +13,28 @@ class SyncServiceClass {
   private currentState: SyncState = 'offline';
   private isPremiumUser: boolean = false;
 
+  constructor() {
+    this.loadLocalPremium();
+  }
+
+  private async loadLocalPremium() {
+    try {
+      const val = await AsyncStorage.getItem('@is_premium');
+      if (val === 'true') {
+        this.isPremiumUser = true;
+        this.emitDataChange();
+      }
+    } catch(e) {}
+  }
+
   public getIsPremium() {
     return this.isPremiumUser;
+  }
+
+  public async setPremiumUser(status: boolean) {
+    this.isPremiumUser = status;
+    await AsyncStorage.setItem('@is_premium', status ? 'true' : 'false');
+    this.emitDataChange();
   }
 
   public subscribe(listener: (state: SyncState) => void) {
@@ -112,8 +132,8 @@ class SyncServiceClass {
 
     try {
       const { data: profileData } = await supabase.from('profiles').select('is_premium').eq('id', user.id).single();
-      if (profileData) {
-          this.isPremiumUser = profileData.is_premium;
+      if (profileData && profileData.is_premium !== this.isPremiumUser) {
+          await this.setPremiumUser(profileData.is_premium);
       }
 
       const { data: dbData } = await supabase.from('user_ledgers').select('ledger_data').eq('id', user.id).single();

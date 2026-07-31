@@ -1,5 +1,5 @@
 import { useFonts as useExpoFonts } from 'expo-font';
-import { useFonts, Nunito_400Regular, Nunito_700Bold, Nunito_900Black } from '@expo-google-fonts/nunito';
+import { useFonts, Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold, Nunito_800ExtraBold, Nunito_900Black } from '@expo-google-fonts/nunito';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -36,7 +36,9 @@ export default function RootLayout() {
   });
   const [loadedNunito, errorNunito] = useFonts({
     Nunito_400Regular,
+    Nunito_600SemiBold,
     Nunito_700Bold,
+    Nunito_800ExtraBold,
     Nunito_900Black,
   });
 
@@ -116,7 +118,8 @@ function RootLayoutNav() {
       <SyncProvider>
         <SemesterProvider>
           <Stack screenOptions={{ animation: 'slide_from_right' }}>
-            <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />
+            <Stack.Screen name="welcome" options={{ headerShown: false, animation: 'fade' }} />
+            <Stack.Screen name="login" options={{ headerShown: false, animation: 'slide_from_right' }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false, animation: 'fade' }} />
             <Stack.Screen name="modal" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           </Stack>

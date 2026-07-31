@@ -599,8 +599,6 @@ export default function ScheduleScreen() {
                         
                         <TouchableOpacity 
                             onPress={() => router.push('/(tabs)/profile')} 
-                            onLongPress={() => setShowDevMenu(true)}
-                            delayLongPress={500}
                             style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9' }}
                         >
                             <Ionicons name="settings-outline" size={22} color={isDark ? '#cbd5e1' : '#475569'} />

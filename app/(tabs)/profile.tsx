@@ -6,6 +6,7 @@ import { router } from 'expo-router';
 import { useColorScheme } from 'nativewind';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SyncService } from '@/services/SyncService';
 import { AlertService } from '@/components/CustomAlert';
 import { WidgetPreview } from 'react-native-android-widget';
 import { FinScholarWidget } from '../../widget/FinScholarWidget';
@@ -104,6 +105,7 @@ export default function ProfileScreen() {
     async function handleLogout() {
         await AsyncStorage.removeItem('grade_ledger_v2_data');
         await AsyncStorage.removeItem('@last_synced_timestamp');
+        await SyncService.setPremiumUser(false);
         const { error } = await supabase.auth.signOut();
         if (error) {
             AlertService.alert('Error', error.message);
@@ -302,13 +304,25 @@ export default function ProfileScreen() {
                     }}>
                         <Text style={{ ...Typography.heading, color: theme.text }}>Widget Preview</Text>
                         <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 13, color: theme.textSecondary, textAlign: 'center', marginTop: 8, marginBottom: 24 }}>
-                            This is how your next class will appear on your homescreen!
+                            This is how your upcoming classes will appear on your homescreen!
                         </Text>
 
                         <WidgetPreview
-                            renderWidget={() => <FinScholarWidget courseName="CSIT227" timeStr="7:30 AM" room="NGE108" />}
+                            renderWidget={() => <FinScholarWidget classes={[{
+                                courseName: 'CSIT227',
+                                timeStr: '7:30 AM',
+                                room: 'NGE108',
+                                timeRemainingStr: 'In progress',
+                                isOngoing: true,
+                            }, {
+                                courseName: 'CSIT228',
+                                timeStr: '10:00 AM',
+                                room: 'NGE205',
+                                timeRemainingStr: 'In 2h 30m',
+                                isOngoing: false,
+                            }]} />}
                             width={320}
-                            height={140}
+                            height={210}
                         />
 
                         <View style={{

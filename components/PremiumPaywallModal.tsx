@@ -23,11 +23,12 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
             setCheckingStatus(true);
             const checkEarlyBird = async () => {
                 try {
+
                     const { data: { user } } = await supabase.auth.getUser();
                     if (!user) return;
                     
-                    // Get the 50 oldest profiles
-                    const { data } = await supabase.from('profiles').select('id').order('created_at', { ascending: true }).limit(50);
+                    // Get the 80 oldest profiles
+                    const { data } = await supabase.from('profiles').select('id').order('created_at', { ascending: true }).limit(80);
                     if (data && data.some(p => p.id === user.id)) {
                         setIsEarlyBird(true);
                     }
@@ -60,8 +61,12 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
         try {
             const { data: { user } } = await supabase.auth.getUser();
             if (user) {
-                await supabase.from('profiles').update({ is_premium: true }).eq('id', user.id);
-                (SyncService as any).isPremiumUser = true; // Update local state immediately
+                const { data, error } = await supabase.rpc('claim_early_bird');
+                if (error || data === false) {
+                    alert('Sorry, the Early Bird offer has already reached its limit!');
+                    return;
+                }
+                await SyncService.setPremiumUser(true);
                 alert('Congratulations! You claimed your Early Bird Lifetime Premium!');
                 onClose();
             }
@@ -73,18 +78,6 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
     };
 
     const handlePurchase = async () => {
-        if (Constants.appOwnership === 'expo') {
-            alert('Running in Expo Go! Simulating a successful purchase so you can test features.');
-            // Test flow for Expo Go
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-                await supabase.from('profiles').update({ is_premium: true }).eq('id', user.id);
-                (SyncService as any).isPremiumUser = true;
-            }
-            onClose();
-            return;
-        }
-        
         if (!currentPackage) {
             alert('Error: Purchases are not configured yet. Add your API key and setup RevenueCat offerings.');
             return;
@@ -93,11 +86,9 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
         try {
             const { customerInfo } = await Purchases.purchasePackage(currentPackage);
             if (typeof customerInfo.entitlements.active['Premium'] !== "undefined") {
-                const { data: { user } } = await supabase.auth.getUser();
-                if (user) {
-                    await supabase.from('profiles').update({ is_premium: true }).eq('id', user.id);
-                    (SyncService as any).isPremiumUser = true;
-                }
+                // RevenueCat's backend will automatically update Supabase via webhook.
+                // We just update the local UI state here immediately.
+                await SyncService.setPremiumUser(true);
                 alert('Welcome to Fin Premium!');
                 onClose();
             }

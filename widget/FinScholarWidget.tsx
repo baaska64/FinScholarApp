@@ -2,73 +2,132 @@ import React from 'react';
 import { FlexWidget, TextWidget, ImageWidget } from 'react-native-android-widget';
 import { Appearance } from 'react-native';
 
-interface FinScholarWidgetProps {
-  courseName?: string;
-  room?: string;
-  timeStr?: string;
-  timeRemainingStr?: string;
-  isOngoing?: boolean;
+export interface WidgetClassData {
+  courseName: string;
+  room: string;
+  timeStr: string;
+  timeRemainingStr: string;
+  isOngoing: boolean;
 }
 
-export function FinScholarWidget({ courseName, room, timeStr, timeRemainingStr, isOngoing }: FinScholarWidgetProps) {
-  const isFallback = !courseName || (typeof courseName === 'string' ? courseName.trim() === '' : true);
+interface FinScholarWidgetProps {
+  classes?: WidgetClassData[];
+}
+
+export function FinScholarWidget({ classes = [] }: FinScholarWidgetProps) {
   const isDark = Appearance.getColorScheme() === 'dark';
 
-  const bgColor = isDark ? '#1e1e22' : '#ffffff';
-  const textColor = isDark ? '#FFFFFF' : '#111111';
-  const subTextColor = isDark ? '#A1A1AA' : '#666666';
-  const dotColor = isDark ? '#52525B' : '#cccccc';
+  // ── Colour Tokens (mirrors app Theme.ts) ────────────────────────────────────
+  const bgColor          = isDark ? '#0f172a' : '#f8fafc';
+  const cardColor        = isDark ? '#1e293b' : '#ffffff';
+  const cardBorder       = isDark ? '#334155' : '#e2e8f0';
+  const textColor        = isDark ? '#f8fafc'  : '#0f172a';
+  const textSecondary    = isDark ? '#cbd5e1'  : '#475569';
+  const textTertiary     = isDark ? '#64748b'  : '#94a3b8';
+  const primaryColor     = isDark ? '#818cf8'  : '#4f46e5';
+  const successColor     = isDark ? '#34d399'  : '#10b981';
+  const successBg        = isDark ? '#134e3a'  : '#d1fae5';
+  const upcomingBg       = isDark ? '#1e1b4b'  : '#e0e7ff';
 
-  const badgeBg = isOngoing
-    ? (isDark ? '#2622c55e' : '#3322c55e')
-    : (isDark ? '#2638bdf8' : '#3338bdf8');
-  const badgeTextColor = isOngoing ? '#22C55E' : '#38BDF8';
-  const badgeText = isOngoing ? 'ONGOING' : 'NEXT CLASS';
+  const todayStr    = new Date().toISOString().split('T')[0];
+  const deepLinkUrl = `finscholarapp://schedule?viewMode=attendance&targetDate=${todayStr}&trigger=${Date.now()}`;
 
-  if (isFallback) {
+  // ── Fallback State ───────────────────────────────────────────────────────────
+  if (!classes || classes.length === 0) {
     return (
       <FlexWidget
         style={{
           flex: 1,
           backgroundColor: bgColor,
-          borderRadius: 20,
+          borderRadius: 24,
           justifyContent: 'center',
           alignItems: 'center',
-          padding: 12,
+          padding: 20,
         }}
       >
         <ImageWidget
           image={require('../assets/images/studying_small.png')}
-          imageWidth={40}
-          imageHeight={40}
-          style={{ marginBottom: 6 }}
+          imageWidth={48}
+          imageHeight={48}
+          style={{ marginBottom: 10 }}
         />
         <TextWidget
           text="No upcoming classes!"
-          style={{ fontSize: 13, color: textColor, fontWeight: 'bold' }}
+          style={{ fontSize: 15, color: textColor, fontWeight: 'bold' }}
         />
         <TextWidget
-          text="Enjoy your free time"
-          style={{ fontSize: 11, color: subTextColor, marginTop: 2 }}
+          text="Enjoy your free time ☀️"
+          style={{ fontSize: 12, color: textSecondary, marginTop: 4 }}
         />
       </FlexWidget>
     );
   }
 
-  const safeClassName = String(courseName || 'Unnamed Class');
-  const safeTimeStr = timeStr ? String(timeStr) : '';
-  const safeRoom = room ? String(room) : 'TBA';
-  const safeTimeRemainingStr = timeRemainingStr ? String(timeRemainingStr) : '';
+  // ── Class Card Renderer ──────────────────────────────────────────────────────
+  const renderClassCard = (cls: WidgetClassData, index: number) => {
+    const badgeBg        = cls.isOngoing ? successBg   : upcomingBg;
+    const badgeTextColor = cls.isOngoing ? successColor : primaryColor;
+    const badgeText      = cls.isOngoing ? '● ONGOING' : '◎ NEXT';
+    const safeName       = String(cls.courseName || 'Unnamed Class');
+    const safeTime       = String(cls.timeStr || '');
+    const safeRoom       = String(cls.room || 'TBA');
+    const safeCountdown  = String(cls.timeRemainingStr || '');
+    const subtitleText   = [safeTime, safeRoom].filter(Boolean).join('  •  ');
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  const deepLinkUrl = `finscholarapp://schedule?viewMode=attendance&targetDate=${todayStr}&trigger=${Date.now()}`;
+    return (
+      <FlexWidget
+        key={index}
+        style={{
+          backgroundColor: cardColor,
+          borderRadius: 16,
+          paddingHorizontal: 14,
+          paddingVertical: 12,
+          marginBottom: index < classes.length - 1 ? 8 : 0,
+          borderWidth: 1,
+          borderColor: cardBorder,
+        }}
+      >
+        {/* Row 1: Badge + Countdown */}
+        <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <FlexWidget
+            style={{
+              backgroundColor: badgeBg,
+              borderRadius: 8,
+              paddingHorizontal: 8,
+              paddingVertical: 4,
+            }}
+          >
+            <TextWidget
+              text={badgeText}
+              style={{ fontSize: 10, color: badgeTextColor, fontWeight: 'bold' }}
+            />
+          </FlexWidget>
+          {!!safeCountdown && (
+            <TextWidget
+              text={safeCountdown}
+              style={{ fontSize: 11, color: textTertiary, fontWeight: 'bold' }}
+            />
+          )}
+        </FlexWidget>
 
-  // Build the subtitle line: "10:30 AM • TBA"
-  const subtitleParts: string[] = [];
-  if (safeTimeStr) subtitleParts.push(safeTimeStr);
-  if (safeRoom) subtitleParts.push(safeRoom);
-  const subtitleText = subtitleParts.join('  •  ');
+        {/* Row 2: Course Name */}
+        <TextWidget
+          text={safeName}
+          style={{ fontSize: 17, color: textColor, fontWeight: 'bold', marginBottom: 4 }}
+          maxLines={1}
+        />
 
+        {/* Row 3: Time • Room */}
+        <TextWidget
+          text={subtitleText}
+          style={{ fontSize: 12, color: textSecondary }}
+          maxLines={1}
+        />
+      </FlexWidget>
+    );
+  };
+
+  // ── Main Widget Shell ────────────────────────────────────────────────────────
   return (
     <FlexWidget
       clickAction="OPEN_APP"
@@ -76,56 +135,27 @@ export function FinScholarWidget({ courseName, room, timeStr, timeRemainingStr, 
       style={{
         flex: 1,
         backgroundColor: bgColor,
-        borderRadius: 20,
+        borderRadius: 24,
         paddingHorizontal: 14,
-        paddingVertical: 10,
-        justifyContent: 'center',
+        paddingTop: 14,
+        paddingBottom: 14,
       }}
     >
-      {/* Row 1: badge + countdown + mascot */}
-      <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <FlexWidget style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <FlexWidget
-            style={{
-              backgroundColor: badgeBg,
-              borderRadius: 6,
-              paddingHorizontal: 6,
-              paddingVertical: 3,
-              marginRight: 6,
-            }}
-          >
-            <TextWidget
-              text={badgeText}
-              style={{ fontSize: 9, color: badgeTextColor, fontWeight: 'bold' }}
-            />
-          </FlexWidget>
-          {!!safeTimeRemainingStr && (
-            <TextWidget
-              text={safeTimeRemainingStr}
-              style={{ fontSize: 10, color: subTextColor, fontWeight: 'bold' }}
-            />
-          )}
-        </FlexWidget>
+      {/* Header */}
+      <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <TextWidget
+          text="My Schedule"
+          style={{ fontSize: 13, color: textTertiary, fontWeight: 'bold' }}
+        />
         <ImageWidget
           image={require('../assets/images/studying_small.png')}
-          imageWidth={20}
-          imageHeight={20}
+          imageWidth={22}
+          imageHeight={22}
         />
       </FlexWidget>
 
-      {/* Row 2: Class name */}
-      <TextWidget
-        text={safeClassName}
-        style={{ fontSize: 16, color: textColor, fontWeight: 'bold', marginTop: 6 }}
-        maxLines={1}
-      />
-
-      {/* Row 3: Time • Room */}
-      <TextWidget
-        text={subtitleText}
-        style={{ fontSize: 11, color: subTextColor, marginTop: 2 }}
-        maxLines={1}
-      />
+      {/* Class Cards */}
+      {classes.map((cls, index) => renderClassCard(cls, index))}
     </FlexWidget>
   );
 }

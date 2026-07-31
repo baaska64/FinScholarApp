@@ -2,7 +2,7 @@
   "expo": {
     "name": "FinScholarApp",
     "slug": "FinScholarApp",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/FinScholarAppLogo.png",
     "scheme": "finscholarapp",
@@ -26,7 +26,7 @@
         "com.android.vending.BILLING"
       ],
       "package": "com.lalex.finscholar",
-      "versionCode": 1
+      "versionCode": 2
     },
     "web": {
       "bundler": "metro",
@@ -65,11 +65,11 @@
           "widgets": [
             {
               "name": "FinScholarWidget",
-              "label": "FinScholar Next Class",
+              "label": "FinScholar Schedule",
               "minWidth": "180dp",
-              "minHeight": "80dp",
+              "minHeight": "170dp",
               "targetCellWidth": 3,
-              "targetCellHeight": 2,
+              "targetCellHeight": 3,
               "resizeMode": "horizontal|vertical",
               "updatePeriodMillis": 1800000
             }
