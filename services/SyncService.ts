@@ -12,9 +12,18 @@ class SyncServiceClass {
   private dataChangeListeners: (() => void)[] = [];
   private currentState: SyncState = 'offline';
   private isPremiumUser: boolean = false;
+  private premiumLoaded: boolean = false;
+  
+  /**
+   * Guards remote pushes until the first sync() after login completes.
+   * This prevents guest data from silently overwriting cloud data.
+   */
+  private initialSyncComplete: boolean = false;
+  private syncInProgress: boolean = false;
 
   constructor() {
     this.loadLocalPremium();
+    this.listenForAuthChanges();
   }
 
   private async loadLocalPremium() {
@@ -22,9 +31,28 @@ class SyncServiceClass {
       const val = await AsyncStorage.getItem('@is_premium');
       if (val === 'true') {
         this.isPremiumUser = true;
-        this.emitDataChange();
       }
     } catch(e) {}
+    this.premiumLoaded = true;
+    this.emitDataChange();
+  }
+
+  /**
+   * Listen for auth state changes. When user signs in, reset the
+   * sync guard and immediately run sync() to detect conflicts
+   * BEFORE any pushLocalChanges can overwrite cloud data.
+   */
+  private listenForAuthChanges() {
+    supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        // Reset guard — block all remote pushes until sync() finishes
+        this.initialSyncComplete = false;
+        // Run sync to compare local vs cloud and detect conflicts
+        this.sync();
+      } else if (event === 'SIGNED_OUT') {
+        this.initialSyncComplete = false;
+      }
+    });
   }
 
   public getIsPremium() {
@@ -35,6 +63,32 @@ class SyncServiceClass {
     this.isPremiumUser = status;
     await AsyncStorage.setItem('@is_premium', status ? 'true' : 'false');
     this.emitDataChange();
+  }
+
+  /**
+   * Check Supabase for premium status and restore it locally.
+   * Call this on app launch and after login to ensure premium persists.
+   */
+  public async checkAndRestorePremium() {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
+      if (!user) return;
+
+      const { data: profileData } = await supabase.from('profiles')
+        .select('is_premium')
+        .eq('id', user.id)
+        .single();
+
+      if (profileData) {
+        const remotePremium = !!profileData.is_premium;
+        if (remotePremium !== this.isPremiumUser) {
+          await this.setPremiumUser(remotePremium);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to check premium status from Supabase', e);
+    }
   }
 
   public subscribe(listener: (state: SyncState) => void) {
@@ -64,6 +118,7 @@ class SyncServiceClass {
 
   private emitConflict(localData: any, remoteData: any) {
     this.setState('conflict');
+    // Notify listeners (SyncProvider will show the conflict modal)
     this.conflictListeners.forEach(l => l(localData, remoteData));
   }
 
@@ -103,8 +158,12 @@ class SyncServiceClass {
     // We still await this so if the OS suspends the app, it waits for the widget.
     await this.triggerSideEffects();
     
-    // Fire and forget remote sync so UI doesn't block
-    this._syncRemote(newData).catch(console.error);
+    // Only push to remote if initial sync has completed.
+    // This prevents guest data from silently overwriting the user's cloud data
+    // before the conflict check has run.
+    if (this.initialSyncComplete) {
+      this._syncRemote(newData).catch(console.error);
+    }
   }
 
   private async _syncRemote(newData: any) {
@@ -124,17 +183,24 @@ class SyncServiceClass {
   }
 
   async sync() {
+    // Prevent concurrent syncs
+    if (this.syncInProgress) return;
+    this.syncInProgress = true;
+
     const { data: { session } } = await supabase.auth.getSession();
     const user = session?.user;
-    if (!user) return;
+    if (!user) {
+      this.syncInProgress = false;
+      // If no user (guest mode), mark sync complete so local saves work normally
+      this.initialSyncComplete = true;
+      return;
+    }
 
     this.setState('syncing');
 
     try {
-      const { data: profileData } = await supabase.from('profiles').select('is_premium').eq('id', user.id).single();
-      if (profileData && profileData.is_premium !== this.isPremiumUser) {
-          await this.setPremiumUser(profileData.is_premium);
-      }
+      // Always restore premium from Supabase on sync
+      await this.checkAndRestorePremium();
 
       const { data: dbData } = await supabase.from('user_ledgers').select('ledger_data').eq('id', user.id).single();
       const remoteData = dbData?.ledger_data;
@@ -146,37 +212,54 @@ class SyncServiceClass {
       const lastSynced = lastSyncedStr ? parseInt(lastSyncedStr, 10) : 0;
 
       if (!remoteData) {
+        // No cloud data — safe to push local (even guest data) to the new account
+        this.initialSyncComplete = true;
         if (localData) {
           await this.pushLocalChanges(localData);
         } else {
           this.setState('saved');
         }
+        this.syncInProgress = false;
         return;
       }
 
       const remoteUpdated = remoteData.last_updated || 0;
       const localUpdated = localData?.last_updated || 0;
 
-      if (remoteUpdated > lastSynced && localUpdated > lastSynced && remoteUpdated !== localUpdated) {
+      // Both local and remote have unseen changes → CONFLICT
+      if (localData && remoteData && localUpdated > lastSynced && remoteUpdated > lastSynced && remoteUpdated !== localUpdated) {
+        // Do NOT set initialSyncComplete — block pushes until user resolves
         this.emitConflict(localData, remoteData);
+        this.syncInProgress = false;
         return;
       } else if (remoteUpdated > lastSynced && remoteUpdated > localUpdated) {
+        // Remote is newer — download cloud data
         await AsyncStorage.setItem('grade_ledger_v2_data', JSON.stringify(remoteData));
         await AsyncStorage.setItem('@last_synced_timestamp', remoteUpdated.toString());
         await this.emitDataChange();
+        this.initialSyncComplete = true;
         this.setState('saved');
       } else if (localUpdated > lastSynced) {
+        // Local is newer — push to cloud
+        this.initialSyncComplete = true;
         await this.pushLocalChanges(localData);
       } else {
+        this.initialSyncComplete = true;
         this.setState('saved');
       }
     } catch (e) {
       console.error('Sync failed', e);
+      // On error, allow pushes to prevent the app from being stuck
+      this.initialSyncComplete = true;
       this.setState('offline');
     }
+    this.syncInProgress = false;
   }
 
   async resolveConflict(resolution: ConflictResolution, localData: any, remoteData: any) {
+    // Unlock remote pushes now that the user has made their choice
+    this.initialSyncComplete = true;
+    
     if (resolution === 'keep_local') {
         localData.last_updated = Date.now();
         await this.pushLocalChanges(localData);
@@ -190,3 +273,4 @@ class SyncServiceClass {
 }
 
 export const SyncService = new SyncServiceClass();
+

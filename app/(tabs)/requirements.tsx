@@ -326,7 +326,10 @@ export default function RequirementsScreen() {
         const sem = yr?.semesters.find((s: any) => s.id === activeSemId);
         const subject = sem?.subjects.find((s: any) => s.id === form.subjectId);
 
-        if (!subject) return;
+        if (!subject) {
+            AlertService.alert("Subject Missing", "Please select a valid subject to save this task.");
+            return;
+        }
 
         const dateStr = form.dueDate.toISOString();
 
@@ -405,6 +408,15 @@ export default function RequirementsScreen() {
     };
 
     const openAddModal = () => {
+        if (!activeYearId || !activeSemId) {
+            AlertService.alert("No Term Selected", "Please select or create an academic term (Year & Semester) before adding a task.");
+            return;
+        }
+        if (!subjects || subjects.length === 0) {
+            AlertService.alert("No Subjects Found", "Please add at least one subject to this semester before creating a task.");
+            return;
+        }
+
         const defaultDate = new Date();
         defaultDate.setHours(23, 59, 59, 0);
         setForm({

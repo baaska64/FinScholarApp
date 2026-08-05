@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, StyleSheet, ImageBackground, Dimensions, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, StyleSheet, ImageBackground, Dimensions, ActivityIndicator, ScrollView } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
@@ -27,8 +27,8 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
                     const { data: { user } } = await supabase.auth.getUser();
                     if (!user) return;
                     
-                    // Get the 80 oldest profiles
-                    const { data } = await supabase.from('profiles').select('id').order('created_at', { ascending: true }).limit(80);
+                    // Get the 50 oldest profiles
+                    const { data } = await supabase.from('profiles').select('id').order('created_at', { ascending: true }).limit(50);
                     if (data && data.some(p => p.id === user.id)) {
                         setIsEarlyBird(true);
                     }
@@ -101,6 +101,24 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
         }
     };
 
+    const handleRestore = async () => {
+        setLoading(true);
+        try {
+            const customerInfo = await Purchases.restorePurchases();
+            if (typeof customerInfo.entitlements.active['Premium'] !== "undefined") {
+                await SyncService.setPremiumUser(true);
+                alert('Your purchase has been restored successfully!');
+                onClose();
+            } else {
+                alert('No active premium subscription found to restore.');
+            }
+        } catch (e: any) {
+            alert(`Restore failed: ${e.message}`);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
         <Modal
             visible={visible}
@@ -111,14 +129,14 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
             <View className="flex-1 justify-end bg-black/60">
                 <TouchableOpacity className="absolute inset-0" onPress={onClose} activeOpacity={1} />
                 
-                <View className="w-full rounded-t-3xl overflow-hidden border-t border-white/20" style={{ height: SCREEN_HEIGHT * 0.75 }}>
+                <View className="w-full rounded-t-3xl overflow-hidden border-t border-white/20" style={{ height: SCREEN_HEIGHT * 0.85 }}>
                     <ImageBackground 
                         source={require('../assets/images/GlassBg.png')} 
                         style={{ flex: 1 }}
                         resizeMode="cover"
                     >
                         <BlurView intensity={90} tint="dark" style={{ flex: 1 }}>
-                            <View className="flex-1 p-6 items-center pt-10">
+                            <ScrollView contentContainerStyle={{ flexGrow: 1, alignItems: 'center', padding: 24, paddingTop: 40, paddingBottom: 40 }}>
                                 {/* Close Button */}
                                 <TouchableOpacity 
                                     className="absolute top-4 right-4 w-10 h-10 rounded-full items-center justify-center bg-white/10 border border-white/20"
@@ -185,7 +203,7 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
                                         </View>
 
                                         <TouchableOpacity 
-                                            className={`w-full py-4 rounded-full items-center justify-center shadow-lg ${loading ? 'bg-indigo-400' : 'bg-indigo-500 shadow-indigo-500/50'}`}
+                                            className={`w-full py-4 rounded-full items-center justify-center shadow-lg mb-4 ${loading ? 'bg-indigo-400' : 'bg-indigo-500 shadow-indigo-500/50'}`}
                                             onPress={handlePurchase}
                                             disabled={loading}
                                         >
@@ -197,9 +215,23 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
                                                 </Text>
                                             )}
                                         </TouchableOpacity>
+
+                                        <TouchableOpacity 
+                                            className="w-full py-2 items-center justify-center"
+                                            onPress={handleRestore}
+                                            disabled={loading}
+                                        >
+                                            <Text className="text-indigo-300 font-bold text-sm">
+                                                Restore Purchases
+                                            </Text>
+                                        </TouchableOpacity>
+
+                                        <Text className="text-[10px] text-slate-400 text-center mt-4 px-4">
+                                            By upgrading, you agree to our Terms of Service and Privacy Policy. Subscriptions automatically renew unless canceled.
+                                        </Text>
                                     </>
                                 )}
-                            </View>
+                            </ScrollView>
                         </BlurView>
                     </ImageBackground>
                 </View>

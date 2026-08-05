@@ -1,5 +1,8 @@
 import { Tabs } from 'expo-router';
 import CustomTabBar from '@/components/CustomTabBar';
+import { useEffect } from 'react';
+import { SyncService } from '@/services/SyncService';
+import { AlertService } from '@/components/CustomAlert';
 
 export default function TabLayout() {
   return (

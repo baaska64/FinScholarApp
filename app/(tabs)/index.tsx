@@ -130,13 +130,34 @@ export default function DashboardScreen() {
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
             setUser(session?.user ?? null);
+            // Restore premium status from Supabase on app launch
+            if (session?.user) {
+                SyncService.checkAndRestorePremium().then(() => {
+                    setIsPremium(SyncService.getIsPremium());
+                });
+            }
         });
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             setUser(session?.user ?? null);
+            // Restore premium status from Supabase after login
+            if (session?.user) {
+                SyncService.checkAndRestorePremium().then(() => {
+                    setIsPremium(SyncService.getIsPremium());
+                });
+            }
         });
         
-        const unsubscribeSync = SyncService.subscribeDataChange(() => {
+        // Also read initial value synchronously
+        setIsPremium(SyncService.getIsPremium());
+
+        const unsubscribeSync = SyncService.subscribeDataChange(async () => {
             setIsPremium(SyncService.getIsPremium());
+            try {
+                const str = await AsyncStorage.getItem('grade_ledger_v2_data');
+                if (str) {
+                    setData(JSON.parse(str));
+                }
+            } catch (e) {}
         });
 
         return () => {

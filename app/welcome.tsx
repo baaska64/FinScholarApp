@@ -23,7 +23,7 @@ export default function WelcomeScreen() {
 
   // ─── Colors ────────────────────────────────────────────────────────────
   const heroBg = isDark ? '#12103d' : '#4f46e5';
-  const pageBg = isDark ? '#0c0b2b' : '#f0f0ff';
+  const pageBg = isDark ? '#1a1f3d' : '#ffffff'; // Match cardBg to prevent ugly gaps at the bottom
   const cardBg = isDark ? '#1a1f3d' : '#ffffff';
   const cardBorder = isDark ? '#2d2f54' : '#e8e8f4';
   const textPrimary = isDark ? '#f1f5f9' : '#1e293b';
@@ -195,7 +195,6 @@ export default function WelcomeScreen() {
         style={{
           flex: 1,
           marginTop: -36,
-          paddingHorizontal: 24,
           opacity: cardSlide,
           transform: [{ translateY: cardSlide.interpolate({ inputRange: [0, 1], outputRange: [60, 0] }) }],
         }}
@@ -204,12 +203,15 @@ export default function WelcomeScreen() {
           style={{
             flex: 1,
             padding: 28,
+            paddingHorizontal: 32,
             borderTopLeftRadius: 32,
             borderTopRightRadius: 32,
             borderBottomLeftRadius: 0,
             borderBottomRightRadius: 0,
             backgroundColor: cardBg,
-            borderWidth: 1,
+            borderTopWidth: 1,
+            borderLeftWidth: 0,
+            borderRightWidth: 0,
             borderBottomWidth: 0,
             borderColor: cardBorder,
             ...Platform.select({

@@ -3,7 +3,7 @@ import { useFonts, Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold, Nunito
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import 'react-native-reanimated';
 import './global.css';
 
@@ -27,6 +27,8 @@ export const unstable_settings = {
   initialRouteName: '(tabs)',
 };
 
+import AnimatedSplash from '../components/AnimatedSplash';
+
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
 
@@ -44,6 +46,8 @@ export default function RootLayout() {
 
   const loaded = loadedNative && loadedNunito;
   const error = errorNative || errorNunito;
+
+  const [showSplash, setShowSplash] = useState(true);
 
   // Expo Router uses Error Boundaries to catch errors in the navigation tree.
   useEffect(() => {
@@ -66,7 +70,7 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    // Hide native splash screen immediately to show our beautiful custom React Native loading screen
+    // Hide native splash screen immediately to show our animated React Native splash
     SplashScreen.hideAsync();
   }, []);
 
@@ -80,21 +84,13 @@ export default function RootLayout() {
     }
   }, []);
 
-  if (!loaded) {
-    const isDark = Appearance.getColorScheme() === 'dark';
-    return (
-      <View style={{ flex: 1, backgroundColor: isDark ? '#0f172a' : '#f8fafc', justifyContent: 'center', alignItems: 'center' }}>
-        <Image
-          source={require('../assets/images/icon.png')}
-          style={{ width: 120, height: 120 }}
-          resizeMode="contain"
-        />
-        <Text style={{ marginTop: 20, color: isDark ? '#f1f5f9' : '#1e293b', fontSize: 24, fontFamily: 'Nunito_900Black', letterSpacing: 0.5 }}>
-          FinScholar
-        </Text>
-        <ActivityIndicator size="small" color={isDark ? '#818cf8' : '#6366f1'} style={{ marginTop: 28 }} />
-      </View>
-    );
+  const handleSplashFinish = () => {
+    setShowSplash(false);
+  };
+
+  // Show animated splash while fonts load or splash animation is still playing
+  if (!loaded || showSplash) {
+    return <AnimatedSplash onFinish={handleSplashFinish} />;
   }
 
   return <RootLayoutNav />;
