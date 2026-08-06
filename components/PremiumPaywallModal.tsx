@@ -7,6 +7,7 @@ import Purchases, { PurchasesPackage } from 'react-native-purchases';
 import Constants from 'expo-constants';
 import { supabase } from '../services/supabaseClient';
 import { SyncService } from '../services/SyncService';
+import * as WebBrowser from 'expo-web-browser';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
@@ -226,8 +227,21 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
                                             </Text>
                                         </TouchableOpacity>
 
-                                        <Text className="text-[10px] text-slate-400 text-center mt-4 px-4">
-                                            By upgrading, you agree to our Terms of Service and Privacy Policy. Subscriptions automatically renew unless canceled.
+                                        <Text className="text-[10px] text-slate-400 text-center mt-4 px-4 leading-4">
+                                            By upgrading, you agree to our{' '}
+                                            <Text 
+                                                className="text-indigo-400 underline" 
+                                                onPress={() => WebBrowser.openBrowserAsync('https://finscholar.app/terms')}
+                                            >
+                                                Terms of Service
+                                            </Text>{' '}
+                                            and{' '}
+                                            <Text 
+                                                className="text-indigo-400 underline" 
+                                                onPress={() => WebBrowser.openBrowserAsync('https://finscholar.app/privacy')}
+                                            >
+                                                Privacy Policy
+                                            </Text>. Subscriptions automatically renew unless canceled.
                                         </Text>
                                     </>
                                 )}
