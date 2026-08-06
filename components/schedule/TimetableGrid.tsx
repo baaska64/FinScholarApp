@@ -480,7 +480,7 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
 
       {/* Editing Controls */}
       {isQuickEditMode && (
-        <View style={{ position: 'absolute', bottom: 10, left: TIME_COL_WIDTH + 10, right: 10, padding: 12, backgroundColor: isDark ? 'rgba(30,41,59,0.95)' : 'rgba(255,255,255,0.95)', borderRadius: 16, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10, elevation: 5 }}>
+        <View style={{ position: 'absolute', bottom: 10, left: getTimeColWidth(isExportMode) + 10, right: 10, padding: 12, backgroundColor: isDark ? 'rgba(30,41,59,0.95)' : 'rgba(255,255,255,0.95)', borderRadius: 16, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10, elevation: 5 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: selectedClassIds.size > 0 ? 12 : 0 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
               <Ionicons name="information-circle" size={24} color="#6366f1" />
