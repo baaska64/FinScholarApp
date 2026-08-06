@@ -169,7 +169,10 @@ class SyncServiceClass {
   private async _syncRemote(newData: any) {
     const { data: { session } } = await supabase.auth.getSession();
     const user = session?.user;
-    if (!user) return;
+    if (!user) {
+      this.setState('offline');
+      return;
+    }
 
     this.setState('syncing');
     try {
@@ -193,6 +196,7 @@ class SyncServiceClass {
       this.syncInProgress = false;
       // If no user (guest mode), mark sync complete so local saves work normally
       this.initialSyncComplete = true;
+      this.setState('offline');
       return;
     }
 
