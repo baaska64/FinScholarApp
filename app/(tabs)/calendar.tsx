@@ -534,7 +534,7 @@ export default function CalendarScreen() {
                         <Ionicons name="school-outline" size={64} color={isDark ? '#334155' : '#cbd5e1'} />
                         <Text className={`font-nunito-bold text-xl mt-4 mb-2 text-center ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>No Academic Years</Text>
                         <Text className={`font-nunito text-center ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>Go to the Manager tab to setup your curriculum before adding calendar events.</Text>
-                        <TouchableOpacity onPress={() => router.push('/(tabs)/academic-manager')} className="mt-6 bg-indigo-500 px-6 py-3 rounded-full">
+                        <TouchableOpacity onPress={() => router.push('/academic-manager')} className="mt-6 bg-indigo-500 px-6 py-3 rounded-full">
                             <Text className="font-nunito-bold text-white">Go to Manager</Text>
                         </TouchableOpacity>
                     </View>

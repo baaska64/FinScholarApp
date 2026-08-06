@@ -663,8 +663,21 @@ export default function ScheduleScreen() {
 
                 {!currentSem ? (
                     <View className={`mt-10 items-center justify-center p-8 rounded-[32px] ${isDark ? 'bg-slate-800' : 'bg-white shadow-sm'}`}>
-                        <Ionicons name="folder-open" size={48} color={isDark ? "#475569" : "#94a3b8"} style={{marginBottom: 16}} />
-                        <Text className={`text-center font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>No semester selected. {'\n'}Add a semester above to view your schedule!</Text>
+                        <Ionicons name="calendar-outline" size={48} color={isDark ? "#475569" : "#94a3b8"} style={{marginBottom: 16}} />
+                        {data?.years?.length === 0 ? (
+                            <>
+                                <Text className={`text-center font-medium mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>No years added yet. {'\n'}Setup your academic terms to get started!</Text>
+                                <TouchableOpacity 
+                                    onPress={() => router.push('/academic-manager')}
+                                    className={`px-6 py-3 rounded-full flex-row items-center ${isDark ? 'bg-indigo-500' : 'bg-indigo-600'}`}
+                                >
+                                    <Ionicons name="add" size={20} color="white" />
+                                    <Text className="font-nunito-bold text-white ml-2">Setup Academic Term</Text>
+                                </TouchableOpacity>
+                            </>
+                        ) : (
+                            <Text className={`text-center font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>No semester selected. {'\n'}Select a semester above to view your schedule!</Text>
+                        )}
                     </View>
                 ) : (
                     <View className="mt-4">

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
+import { useRouter } from 'expo-router';
 import { useSemesterContext } from '@/components/SemesterContext';
 
 interface TabsProps {
@@ -20,6 +21,7 @@ export default function Tabs({
     const isDark = colorScheme === 'dark';
     const [modalVisible, setModalVisible] = useState(false);
     const { setYearAndSemester } = useSemesterContext();
+    const router = useRouter();
 
     const currentYear = years.find(y => y.id === activeYearId);
     const currentSem = currentYear?.semesters.find((s: any) => s.id === activeSemId);
@@ -71,7 +73,25 @@ export default function Tabs({
 
                         <ScrollView showsVerticalScrollIndicator={false}>
                             {years.length === 0 && (
-                                <Text className={`font-nunito text-center mt-4 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>No years added yet.</Text>
+                                <View className="items-center py-8">
+                                    <View className={`w-16 h-16 rounded-full items-center justify-center mb-4 ${isDark ? 'bg-indigo-900/30' : 'bg-indigo-100'}`}>
+                                        <Ionicons name="school-outline" size={32} color={isDark ? '#818cf8' : '#6366f1'} />
+                                    </View>
+                                    <Text className={`font-nunito-bold text-lg mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>No Terms Found</Text>
+                                    <Text className={`font-nunito text-center px-4 mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                                        You need to set up your academic years and semesters before you can manage your classes and grades.
+                                    </Text>
+                                    <TouchableOpacity
+                                        onPress={() => {
+                                            setModalVisible(false);
+                                            router.push('/academic-manager');
+                                        }}
+                                        className={`px-6 py-3 rounded-xl flex-row items-center ${isDark ? 'bg-indigo-500' : 'bg-indigo-600'}`}
+                                    >
+                                        <Ionicons name="add" size={20} color="white" />
+                                        <Text className="font-nunito-bold text-white ml-2">Setup Academic Term</Text>
+                                    </TouchableOpacity>
+                                </View>
                             )}
                             
                             {years.map(year => (
