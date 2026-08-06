@@ -9,6 +9,8 @@ import { supabase } from '../services/supabaseClient';
 import { SyncService } from '../services/SyncService';
 import * as WebBrowser from 'expo-web-browser';
 
+import { useRouter } from 'expo-router';
+
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
 export default function PremiumPaywallModal({ visible, onClose }: { visible: boolean, onClose: () => void }) {
@@ -18,6 +20,7 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
     const [currentPackage, setCurrentPackage] = useState<PurchasesPackage | null>(null);
     const [isEarlyBird, setIsEarlyBird] = useState(false);
     const [checkingStatus, setCheckingStatus] = useState(true);
+    const router = useRouter();
 
     useEffect(() => {
         if (visible) {
@@ -231,14 +234,17 @@ export default function PremiumPaywallModal({ visible, onClose }: { visible: boo
                                             By upgrading, you agree to our{' '}
                                             <Text 
                                                 className="text-indigo-400 underline" 
-                                                onPress={() => WebBrowser.openBrowserAsync('https://finscholar.app/terms')}
+                                                onPress={() => {
+                                                    onClose();
+                                                    router.push('/terms');
+                                                }}
                                             >
                                                 Terms of Service
                                             </Text>{' '}
                                             and{' '}
                                             <Text 
                                                 className="text-indigo-400 underline" 
-                                                onPress={() => WebBrowser.openBrowserAsync('https://finscholar.app/privacy')}
+                                                onPress={() => WebBrowser.openBrowserAsync('https://www.freeprivacypolicy.com/live/19538461-5bec-44dd-b1fc-a7eda546e0fd')}
                                             >
                                                 Privacy Policy
                                             </Text>. Subscriptions automatically renew unless canceled.
