@@ -3,7 +3,7 @@
     "name": "FinScholarApp",
     "slug": "FinScholarApp",
     "version": "1.0.2",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/FinScholarAppLogo.png",
     "scheme": "finscholarapp",
     "userInterfaceStyle": "automatic",
@@ -11,6 +11,7 @@
       "supportsTablet": true
     },
     "android": {
+      "edgeToEdgeEnabled": true,
       "adaptiveIcon": {
         "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/images/FinScholarAppLogo.png"
@@ -26,7 +27,7 @@
         "com.android.vending.BILLING"
       ],
       "package": "com.lalex.finscholar",
-      "versionCode": 2
+      "versionCode": 3
     },
     "web": {
       "bundler": "metro",
