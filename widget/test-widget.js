@@ -21,6 +21,9 @@ const reactNativeAndroidWidget = {
   },
   ImageWidget: (props) => {
     return { type: 'ImageWidget', props };
+  },
+  SvgWidget: (props) => {
+    return { type: 'SvgWidget', props };
   }
 };
 
@@ -33,21 +36,28 @@ mockModule.prototype.require = function(request) {
   if (request === 'react-native') {
     return mockReactNative;
   }
+  if (request === 'react') {
+    return React;
+  }
   return originalRequire.apply(this, arguments);
 };
 
 // Now import the widget
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
-const babel = require('@babel/core');
+const ts = require('typescript');
 
 const widgetCode = fs.readFileSync(path.join(__dirname, 'FinScholarWidget.tsx'), 'utf8');
-const transformed = babel.transformSync(widgetCode, {
-  filename: 'FinScholarWidget.tsx',
-  presets: ['@babel/preset-env', '@babel/preset-react', '@babel/preset-typescript']
+const output = ts.transpileModule(widgetCode, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+    jsx: ts.JsxEmit.React,
+    esModuleInterop: true,
+  },
 });
 
-eval(transformed.code);
+eval(output.outputText);
 
 const widgetFunc = exports.FinScholarWidget;
 
@@ -114,7 +124,63 @@ try {
       isOngoing: false,
     }]
   });
-  console.log('Test 7 Passed: Null/empty fields handled safely.\n');
+  console.log('Running Test 8: Sparse array with null items');
+  result = widgetFunc({ classes: [ongoingClass, null, upcomingClass] });
+  console.log('Test 8 Passed: Sparse array with null items handled safely.\n');
+
+  console.log('Running Test 9: Null and non-array classes prop');
+  result = widgetFunc({ classes: null });
+  result = widgetFunc({ classes: {} });
+  console.log('Test 9 Passed: Non-array / null classes handled safely.\n');
+
+  console.log('Running Test 10: Whitespace-only fields');
+  result = widgetFunc({
+    classes: [{
+      courseName: '   ',
+      room: '   ',
+      timeStr: '   ',
+      timeRemainingStr: '   ',
+      isOngoing: false,
+    }, {
+      courseName: '   ',
+      room: '   ',
+      timeStr: '   ',
+      timeRemainingStr: '   ',
+      isOngoing: false,
+    }]
+  });
+  console.log('Test 10 Passed: Whitespace-only fields handled safely.\n');
+
+  console.log('Running Test 11: Mixed primitive items in classes array');
+  result = widgetFunc({ classes: [123, true, 'corrupted_string', ongoingClass] });
+  console.log('Test 11 Passed: Primitive items in array filtered safely.\n');
+
+  console.log('Running Test 12: Numeric and boolean values in class object fields');
+  result = widgetFunc({
+    classes: [{
+      courseName: 101,
+      room: 202,
+      timeStr: 303,
+      timeRemainingStr: 404,
+      isOngoing: false,
+    }, {
+      courseName: 505,
+      room: 606,
+      timeStr: 707,
+      timeRemainingStr: 808,
+      isOngoing: false,
+    }]
+  });
+  console.log('Test 12 Passed: Non-string primitive fields coerced safely.\n');
+
+  console.log('Running Test 13: Nested arrays inside classes prop');
+  result = widgetFunc({ classes: [['nested', 'array'], ongoingClass] });
+  console.log('Test 13 Passed: Nested array entries filtered safely.\n');
+
+  console.log('Running Test 14: Boundary widgetInfo height (0 and NaN)');
+  result = widgetFunc({ classes: [ongoingClass, upcomingClass], widgetInfo: { width: 300, height: 0 } });
+  result = widgetFunc({ classes: [ongoingClass, upcomingClass], widgetInfo: { width: 300, height: NaN } });
+  console.log('Test 14 Passed: Boundary widgetInfo heights handled safely.\n');
 
   console.log('ALL TESTS PASSED ✅  Widget reliability confirmed!');
 } catch (e) {

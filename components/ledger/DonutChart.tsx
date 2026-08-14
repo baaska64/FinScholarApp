@@ -3,13 +3,24 @@ import { View, Text } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 import Animated, { useSharedValue, useAnimatedProps, withTiming, Easing } from 'react-native-reanimated';
 import { useColorScheme } from 'nativewind';
+import { getTheme, Radius, Shadows } from '../../constants/Theme';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
-export default function DonutChart({ label, value, percent, system, indicatorText }: any) {
+interface DonutChartProps {
+    label: string;
+    value: number;
+    percent: number;
+    system: string;
+    indicatorText?: string;
+}
+
+export default function DonutChart({ label, value, percent, system, indicatorText }: DonutChartProps) {
     const { colorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
-    const R = 38;
+    const theme = getTheme(isDark);
+
+    const R = 28;
     const C = 2 * Math.PI * R;
     
     let p = percent ?? 0;
@@ -24,7 +35,7 @@ export default function DonutChart({ label, value, percent, system, indicatorTex
     else if (p >= 60) { color = '#eab308'; } 
     else if (p > 0) { color = '#ef4444'; } 
 
-    const displayVal = (system === 'PERCENT') ? p.toFixed(1) + '%' : Number(value || 0).toFixed(3);
+    const displayVal = (system === 'PERCENT') ? `${p.toFixed(1)}%` : Number(value || 0).toFixed(3);
     const targetOffset = C - (p / 100) * C;
 
     const animatedOffset = useSharedValue(C);
@@ -45,44 +56,96 @@ export default function DonutChart({ label, value, percent, system, indicatorTex
     const trackColor = isDark ? "#334155" : "#e2e8f0";
 
     return (
-        <View className={`p-4 rounded-[28px] flex-1 mx-1.5 items-center border shadow-sm ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-blue-50 shadow-slate-200'}`}>
-            <Text className={`text-[10px] font-extrabold uppercase tracking-widest mb-3 ${isDark ? 'text-slate-400' : 'text-blue-500'}`}>
+        <View 
+            style={{
+                flex: 1,
+                padding: 16,
+                borderRadius: Radius['3xl'],
+                backgroundColor: theme.card,
+                borderWidth: 1,
+                borderColor: theme.cardBorder,
+                alignItems: 'center',
+                ...(!isDark ? Shadows.md : {}),
+            }}
+        >
+            <Text 
+                style={{
+                    fontSize: 11,
+                    fontFamily: 'Nunito_800Bold',
+                    textTransform: 'uppercase',
+                    letterSpacing: 1.2,
+                    marginBottom: 12,
+                    color: isDark ? '#94a3b8' : theme.primary,
+                }}
+            >
                 {label}
             </Text>
-            <View className="items-center justify-center relative w-[80px] h-[80px] mb-4">
-                <Svg width="80" height="80" viewBox="0 0 100 100" className="absolute">
+            
+            <View style={{ width: 72, height: 72, alignItems: 'center', justifyContent: 'center', position: 'relative', marginBottom: 12 }}>
+                <Svg width="72" height="72" viewBox="0 0 72 72" style={{ position: 'absolute' }}>
                     <Circle 
-                        cx="50" cy="50" r={R} 
+                        cx="36" cy="36" r={R} 
                         stroke={trackColor}
-                        strokeWidth="8" 
+                        strokeWidth="6" 
                         fill="transparent" 
                     />
                     <AnimatedCircle 
-                        cx="50" cy="50" r={R} 
+                        cx="36" cy="36" r={R} 
                         stroke={color} 
-                        strokeWidth="8" 
+                        strokeWidth="6" 
                         fill="transparent"
                         strokeDasharray={C}
                         animatedProps={animatedProps}
                         strokeLinecap="round"
-                        transform="rotate(-90 50 50)"
+                        transform="rotate(-90 36 36)"
                     />
                 </Svg>
-                <View className="absolute items-center justify-center">
-                    <Text className={`text-base font-extrabold ${isDark ? 'text-white' : 'text-slate-800'}`}>
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                    <Text 
+                        adjustsFontSizeToFit
+                        numberOfLines={1}
+                        style={{
+                            fontSize: 14,
+                            fontFamily: 'Nunito_900Black',
+                            color: theme.text,
+                        }}
+                    >
                         {displayVal}
                     </Text>
-                    <Text className={`text-[9px] font-extrabold tracking-widest ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                    <Text 
+                        style={{
+                            fontSize: 8,
+                            fontFamily: 'Nunito_800Bold',
+                            letterSpacing: 0.8,
+                            color: theme.textTertiary,
+                            textTransform: 'uppercase',
+                        }}
+                    >
                         GWA
                     </Text>
                 </View>
             </View>
+
             {indicatorText && (
-                <View className={`flex-row items-center px-3 py-1.5 rounded-full ${isDark ? 'bg-slate-900' : 'bg-slate-50'}`}>
-                    <View className="w-1.5 h-1.5 rounded-full mr-2 shadow-sm" style={{ backgroundColor: color, shadowColor: color }} />
-                    <Text className={`text-[11px] font-bold ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>{indicatorText}</Text>
+                <View 
+                    style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingHorizontal: 10,
+                        paddingVertical: 4,
+                        borderRadius: Radius.full,
+                        backgroundColor: isDark ? 'rgba(15, 23, 42, 0.6)' : '#f8fafc',
+                        borderWidth: 1,
+                        borderColor: isDark ? '#334155' : '#f1f5f9',
+                    }}
+                >
+                    <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color, marginRight: 6 }} />
+                    <Text style={{ fontSize: 11, fontFamily: 'Nunito_700Bold', color: theme.textSecondary }}>
+                        {indicatorText}
+                    </Text>
                 </View>
             )}
         </View>
     );
 }
+

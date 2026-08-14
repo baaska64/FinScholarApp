@@ -254,7 +254,7 @@ export default function AttendanceTracker({ data, activeYearId, activeSemId, sav
 
   useEffect(() => {
     if (targetDate && trigger && trigger !== processedTrigger && Object.keys(groupedWeeks).length > 0) {
-      let foundWeekNum = null;
+      let foundWeekNum: any = null;
       Object.values(groupedWeeks).forEach((w: any) => {
         if (w.sessions.some((s: any) => s.dateStr === targetDate)) {
           foundWeekNum = w.weekNum;

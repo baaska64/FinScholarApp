@@ -1,62 +1,52 @@
-# BRIEFING — 2026-07-17T21:18:13+08:00
+# BRIEFING — 2026-08-08T10:41:30Z
 
 ## Mission
-Implement Calendar & Timezone fixes, port Tasks/Requirements feature, implement Autonomous Companion features (Fin quotes & Pomodoro timer), and verify builds for Milestone 3.
+Execute Milestone 3 Worker task: Refactor `app/(tabs)/grades.tsx` to integrate redesigned `GwaSummary`, `Tabs`, `SubjectCard`, Edit mode selection toolbar, header actions bar, and empty states using theme tokens, pill buttons, soft shadows, and clean typography while preserving 100% feature parity.
 
 ## 🔒 My Identity
 - Archetype: teamwork_preview_worker
 - Roles: implementer, qa, specialist
 - Working directory: c:\Projects\FinScholarApp\.agents\worker_m3
-- Original parent: 47b29704-55dd-45d1-9aef-0bde8b6a5344
-- Milestone: Milestone 3
+- Original parent: 8a1d9e0a-3021-445f-97c3-252a42511e25
+- Milestone: M3 (Main Screen Integration & Feature Parity for Grade Ledger)
 
 ## 🔒 Key Constraints
-- CODE_ONLY network mode: No external internet access.
-- Minimal change principle: Only modify what is necessary, no unrelated refactoring.
-- DO NOT CHEAT: Genuine implementations only, no hardcoded results.
+- DO NOT CHEAT. All implementations must be genuine.
+- Exclusive write ownership: `app/(tabs)/grades.tsx`.
+- Integrate redesigned `GwaSummary`, `Tabs`, `SubjectCard`, and empty states.
+- Refactor screen background, scroll view padding, header actions bar (Pro badge, Settings icon, Edit Mode toggle, Add Subject pill button).
+- Refactor Edit Mode selection bar (Select All, Delete Selected count badge, Cancel button) with pill buttons and soft drop shadows (`Shadows.md`).
+- Refactor empty state cards (No terms found, No semester selected, No subjects added, No tracked subjects) with rounded surfaces (`Radius['2xl']`), soft drop shadows, and pill CTA buttons.
+- Preserve ALL existing feature parity: Add subject modal, toggle grade tracking, selection mode batch delete, single subject delete, duplicate subject, ActiveSubjectView tree editor detail modal, system settings grading system switcher, and cloud sync/AsyncStorage persistence.
+- Zero TypeScript compilation errors in `grades.tsx` (`npx tsc --noEmit`) and all tests pass (`npm test`).
 
 ## Current Parent
-- Conversation ID: 47b29704-55dd-45d1-9aef-0bde8b6a5344
-- Updated: not yet
+- Conversation ID: 8a1d9e0a-3021-445f-97c3-252a42511e25
+- Updated: 2026-08-08T10:41:30Z
 
 ## Task Summary
-- **What to build**:
-  1. Fix VisualCalendar cellWidth padding math and timezone bugs.
-  2. Implement functional Tasks tracker in app/(tabs)/requirements.tsx, with Year/Semester and Subject filtering, status-based columns (pending, submitted, graded), task CRUD, Grade Ledger integration with components, auto-grading integration, and save/sync.
-  3. Daily encouragement quote from Fin on Dashboard, and Fin focus Pomodoro timer widget in Tasks.
-  4. Build & type check verification.
-- **Success criteria**:
-  - Calendar Saturday column does not wrap. Timezone shift issues fixed.
-  - Full Task CRUD with Status columns and auto-grading integration.
-  - Interactive quotes bubble and Pomodoro widget showing Fin's studying/sleeping/happy states.
-  - Build/Type check passes with zero errors.
-- **Interface contracts**: c:\Projects\FinScholarApp\PROJECT.md
-- **Code layout**: c:\Projects\FinScholarApp\PROJECT.md
+- **What to build**: Refactor `app/(tabs)/grades.tsx` with redesigned `GwaSummary`, `Tabs`, `SubjectCard`, selection toolbar, empty state cards, and header actions bar.
+- **Success criteria**: 0 TS errors in `grades.tsx`, 42/42 tests passing across 10 test suites, full feature parity preserved.
+- **Interface contracts**: `PROJECT.md` & `Theme.ts`.
+- **Code layout**: `app/(tabs)/grades.tsx`.
 
 ## Key Decisions Made
-- Used native components and NativeWind classes to match the existing application style.
-- Re-used `Tabs` component for Year and Semester selectors to guarantee consistent UX.
-- Synced task grade items bi-directionally (updating/adding grade items inside subject periods/components when graded, and removing them if no longer graded).
-
-## Artifact Index
-- c:\Projects\FinScholarApp\components\calendar\VisualCalendar.tsx - Visual Calendar padding math and timezone fix.
-- c:\Projects\FinScholarApp\app\(tabs)\calendar.tsx - Timezone normalization on page side.
-- c:\Projects\FinScholarApp\app\(tabs)\index.tsx - Daily quotes speech bubble from Fin.
-- c:\Projects\FinScholarApp\app\(tabs)\requirements.tsx - Tasks tracker screen with subject filtering, status sections, add/edit/delete CRUD, grade component integration, and Pomodoro Focus widget.
+- Integrated top `GwaSummary` banner showing Overall GWA with Fin mascot, cheer message, and side-by-side Semester and Year Donut cards.
+- Integrated term switcher and view filter tabs (`Tabs`) supporting All vs Tracked subjects.
+- Added top Header Actions bar with Pro status badge / Get Pro paywall trigger (`PremiumPaywallModal`), Cloud sync status icon, Settings button, and Profile navigation.
+- Built Edit mode selection toolbar with Select All / Deselect All, Delete Selected count badge, and Done / Cancel pill buttons.
+- Created rounded surface Empty State cards (`Radius['2xl']`, `Shadows.md`, `theme.surface`) for all edge cases (No terms, No semester selected, No subjects added, No tracked subjects).
+- Maintained complete feature parity: subject registry creation, tracking toggles, single/batch delete, deep clone duplication, ActiveSubjectView detail editor, system settings grading scale switcher, and sync/AsyncStorage persistence.
 
 ## Change Tracker
-- **Files modified**:
-  - `components/calendar/VisualCalendar.tsx`: Saturday wrapping fixed, manual ISO dateStr, timezone-agnostic comparisons.
-  - `app/(tabs)/calendar.tsx`: Date header midnight parsing, timezone-agnostic comparisons.
-  - `app/(tabs)/index.tsx`: Daily quotes speech bubble mascot integration.
-  - `app/(tabs)/requirements.tsx`: Implemented complete Tasks screen + Pomodoro widget.
-- **Build status**: Type-check (`tsc --noEmit`) passes. Bundling check (`npx expo export --platform web`) passes.
+- **Files modified**: `app/(tabs)/grades.tsx`
+- **Build status**: PASS (42/42 tests passing, 0 TS errors in `grades.tsx`)
 - **Pending issues**: None
 
 ## Quality Status
-- **Build/test result**: Type check passes (0 errors). Expo bundle export passes.
-- **Lint status**: 0 warnings.
-- **Tests added/modified**: Covered by manual/visual testing and build/bundle verification commands.
+- **Build/test result**: PASS
+- **Lint status**: CLEAN
+- **Tests added/modified**: Verified against full 10-suite test runner (`npm test`)
 
 ## Loaded Skills
 - None

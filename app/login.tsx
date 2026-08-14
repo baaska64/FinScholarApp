@@ -236,6 +236,7 @@ export default function LoginScreen() {
                   color: BRAND.textHeroTitle,
                   letterSpacing: -0.5,
                   textAlign: 'center',
+                  width: '100%',
                 }}
               >
                 FinScholar
@@ -304,6 +305,8 @@ export default function LoginScreen() {
                       fontFamily: 'Nunito_800ExtraBold',
                       fontSize: 14,
                       color: isLogin ? '#ffffff' : textSecondary,
+                      textAlign: 'center',
+                      width: '100%',
                     }}
                   >
                     Sign In
@@ -321,6 +324,8 @@ export default function LoginScreen() {
                       fontFamily: 'Nunito_800ExtraBold',
                       fontSize: 14,
                       color: !isLogin ? '#ffffff' : textSecondary,
+                      textAlign: 'center',
+                      width: '100%',
                     }}
                   >
                     Sign Up
@@ -424,8 +429,17 @@ export default function LoginScreen() {
 
                 {/* Forgot Password (Sign In mode only) */}
                 {isLogin && (
-                  <TouchableOpacity onPress={handleResetPassword} disabled={loading} style={{ alignSelf: 'flex-end', marginTop: 10 }}>
-                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: '#6366f1' }}>
+                  <TouchableOpacity 
+                    onPress={handleResetPassword} 
+                    disabled={loading} 
+                    style={{ 
+                      marginTop: 8,
+                      width: '100%',
+                      alignItems: 'flex-end',
+                      paddingVertical: 8,
+                    }}
+                  >
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, color: '#6366f1' }}>
                       Forgot password?
                     </Text>
                   </TouchableOpacity>
@@ -452,7 +466,7 @@ export default function LoginScreen() {
                   <ActivityIndicator color="#ffffff" size="small" />
                 ) : (
                   <>
-                    <Text style={{ color: '#ffffff', fontFamily: 'Nunito_900Black', fontSize: 16, marginRight: 8 }}>
+                    <Text style={{ color: '#ffffff', fontFamily: 'Nunito_900Black', fontSize: 16, marginRight: 8, paddingHorizontal: 6 }}>
                       {isLogin ? 'Sign In' : 'Create Account'}
                     </Text>
                     <Ionicons name="arrow-forward" size={18} color="#ffffff" />
@@ -471,6 +485,8 @@ export default function LoginScreen() {
                     color: textSecondary,
                     textTransform: 'uppercase',
                     letterSpacing: 1,
+                    width: 30,
+                    textAlign: 'center',
                   }}
                 >
                   or
@@ -501,6 +517,7 @@ export default function LoginScreen() {
                     fontFamily: 'Nunito_700Bold',
                     fontSize: 15,
                     color: textPrimary,
+                    paddingHorizontal: 4,
                   }}
                 >
                   Continue with Google

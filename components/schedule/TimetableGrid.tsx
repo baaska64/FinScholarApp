@@ -1,17 +1,15 @@
 import React, { useState, useRef, useEffect, memo } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Dimensions } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const FULL_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const getHourHeight = (isExport: boolean) => isExport ? 160 : 90;
 const getTimeColWidth = (isExport: boolean) => isExport ? 70 : 44;
-const SCREEN_WIDTH = Dimensions.get('window').width;
-
 // Responsive day column width: fit all visible days within screen
-const getDayWidth = (numDays: number, isExport: boolean) => {
+const getDayWidth = (numDays: number, isExport: boolean, screenWidth: number) => {
     if (isExport) return 420;
-    const available = SCREEN_WIDTH - getTimeColWidth(false) - 32;
+    const available = screenWidth - getTimeColWidth(false) - 32;
     const fitWidth = Math.floor(available / numDays);
     return Math.max(200, Math.min(fitWidth, 260)); // Extra wide cells for landscape feel
 };
@@ -84,17 +82,18 @@ const getRoomForClass = (cls: any, allClasses: any[]) => {
 
 const ClassBlock = memo(({ 
   cls, isDark, isQuickEditMode, isSelected, onToggleSelect,
-  onPressClass, START_HOUR, END_HOUR, displayDayIndices, dayWidth, isExportMode = false, allClasses = []
+  onPressClass, START_HOUR, END_HOUR, displayDayIndices, dayWidth, isExportMode = false, allClasses = [], zoomScale = 1
 }: any) => {
   const exportColors = isDark ? EXPORT_DARK_COLORS : EXPORT_LIGHT_COLORS;
   const color = isExportMode ? exportColors[cls.colorIdx % exportColors.length] : COLORS[cls.colorIdx % COLORS.length];
+  const z = isExportMode ? 1 : zoomScale;
   
-  const hourHeight = getHourHeight(isExportMode);
-  const timeColWidth = getTimeColWidth(isExportMode);
+  const hourHeight = getHourHeight(isExportMode) * z;
+  const timeColWidth = getTimeColWidth(isExportMode) * z;
   
-  const top = (cls.startHour - START_HOUR) * hourHeight + 10;
+  const top = (cls.startHour - START_HOUR) * hourHeight + (10 * z);
   const height = cls.duration * hourHeight;
-  const blockWidth = (dayWidth - 4) / (cls.maxCol || 1);
+  const blockWidth = (dayWidth - (4 * z)) / (cls.maxCol || 1);
   const left = displayDayIndices.indexOf(cls.day) * dayWidth + ((cls.col || 0) * blockWidth);
 
     const formatH = (h: number) => {
@@ -148,58 +147,62 @@ const ClassBlock = memo(({
             borderBottomColor: isSelected ? (isDark ? 'white' : 'black') : color.border,
             borderTopColor: isSelected ? (isDark ? 'white' : 'black') : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
             borderRightColor: isSelected ? (isDark ? 'white' : 'black') : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
-            borderLeftWidth: isSelected ? 2 : (isExportMode ? 3 : 4),
-            borderBottomWidth: isSelected ? 2 : (isExportMode ? 3 : 4),
-            borderTopWidth: isSelected ? 2 : (isExportMode ? 1 : 1),
-            borderRightWidth: isSelected ? 2 : (isExportMode ? 1 : 1),
-            borderRadius: isExportMode ? 14 : 10,
-            marginLeft: 2,
+            borderLeftWidth: isSelected ? 2 : (isExportMode ? 3 : 4 * z),
+            borderBottomWidth: isSelected ? 2 : (isExportMode ? 3 : 4 * z),
+            borderTopWidth: isSelected ? 2 : (isExportMode ? 1 : 1 * z),
+            borderRightWidth: isSelected ? 2 : (isExportMode ? 1 : 1 * z),
+            borderRadius: isExportMode ? 14 : 10 * z,
+            marginLeft: 2 * z,
             marginRight: isExportMode ? 2 : 0,
-            padding: isExportMode ? 12 : 8,
+            padding: isExportMode ? 12 : 8 * z,
             overflow: 'hidden',
           }}
         >
             {isSelected && (
-                <View style={{ position: 'absolute', right: 4, top: 4, width: 16, height: 16, borderRadius: 8, backgroundColor: isDark ? 'white' : 'black', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
-                    <Ionicons name="checkmark" size={12} color={isDark ? 'black' : 'white'} />
+                <View style={{ position: 'absolute', right: 4 * z, top: 4 * z, width: 16 * z, height: 16 * z, borderRadius: 8 * z, backgroundColor: isDark ? 'white' : 'black', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
+                    <Ionicons name="checkmark" size={12 * z} color={isDark ? 'black' : 'white'} />
                 </View>
             )}
             
-            <Text style={{ color: isDark ? '#ffffff' : color.text, fontSize: isExportMode ? 18 : 13, fontWeight: '800', lineHeight: isExportMode ? 22 : 16, marginBottom: isExportMode ? 4 : 2 }} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
+            <Text style={{ color: isDark ? '#ffffff' : color.text, fontSize: isExportMode ? 18 : Math.max(8, 13 * z), fontWeight: '800', lineHeight: isExportMode ? 22 : Math.max(10, 16 * z), marginBottom: isExportMode ? 4 : 2 * z }} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
               {cls.name}
             </Text>
             
             {showTime && (
-              <Text style={{ color: isDark ? 'rgba(255,255,255,0.85)' : color.text, opacity: isDark ? 1 : 0.85, fontSize: isExportMode ? 13 : 9, fontWeight: '700', marginBottom: isExportMode ? 4 : 2 }} numberOfLines={1}>
+              <Text style={{ color: isDark ? 'rgba(255,255,255,0.85)' : color.text, opacity: isDark ? 1 : 0.85, fontSize: isExportMode ? 13 : Math.max(7, 9 * z), fontWeight: '700', marginBottom: isExportMode ? 4 : 2 * z }} numberOfLines={1}>
                  {formatH(cls.startHour)} - {formatH(cls.startHour + cls.duration)}
               </Text>
             )}
 
-            {showRoom && cls.room ? (
-              <Text style={{ color: isDark ? 'rgba(255,255,255,0.9)' : color.text, opacity: isDark ? 1 : 0.9, fontSize: isExportMode ? 14 : 10, fontWeight: '700', marginBottom: isExportMode ? 4 : 2 }} numberOfLines={1}>
-                <Ionicons name="location" size={isExportMode ? 14 : 10} /> {getRoomForClass(cls, allClasses)}
-              </Text>
-            ) : null}
-
-            {showTeacher && (
-               <Text style={{ color: isDark ? 'rgba(255,255,255,0.8)' : color.text, opacity: isDark ? 1 : 0.8, fontSize: isExportMode ? 13 : 9, fontWeight: '600', marginBottom: isExportMode ? 4 : 2 }} numberOfLines={1}>
-                  <Ionicons name="person" size={isExportMode ? 12 : 9} /> {cls.instructor}
-               </Text>
-            )}
-            
-            {showDuration && (
-              <View style={{ marginTop: 'auto' }}>
-                <Text style={{ color: isDark ? 'rgba(255,255,255,0.7)' : color.text, opacity: isDark ? 1 : 0.7, fontSize: isExportMode ? 12 : 9, fontWeight: '600' }} numberOfLines={1}>
-                  {formatDuration(cls.duration)}
+            {showRoom && getRoomForClass(cls, allClasses) && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: isExportMode ? 2 : 1 * z, marginBottom: isExportMode ? 4 : 2 * z }}>
+                <Ionicons name="location" size={isExportMode ? 12 : 9 * z} color={isDark ? 'rgba(255,255,255,0.7)' : color.text} />
+                <Text style={{ color: isDark ? 'rgba(255,255,255,0.7)' : color.text, fontSize: isExportMode ? 12 : Math.max(7, 9 * z), fontWeight: '600', marginLeft: 2 * z }} numberOfLines={1}>
+                  {getRoomForClass(cls, allClasses)}
                 </Text>
               </View>
+            )}
+
+            {showTeacher && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: isExportMode ? 2 : 1 * z, marginBottom: isExportMode ? 4 : 2 * z }}>
+                <Ionicons name="person" size={isExportMode ? 12 : 9 * z} color={isDark ? 'rgba(255,255,255,0.7)' : color.text} />
+                <Text style={{ color: isDark ? 'rgba(255,255,255,0.7)' : color.text, fontSize: isExportMode ? 12 : Math.max(7, 9 * z), fontWeight: '500', marginLeft: 2 * z }} numberOfLines={1}>
+                  {cls.instructor}
+                </Text>
+              </View>
+            )}
+
+            {showDuration && (
+              <Text style={{ color: isDark ? 'rgba(255,255,255,0.5)' : color.text, opacity: isDark ? 1 : 0.6, fontSize: isExportMode ? 11 : Math.max(6, 8 * z), fontWeight: '600', position: 'absolute', bottom: isExportMode ? 8 : 4 * z, left: isExportMode ? 12 : 8 * z }}>
+                {formatDuration(cls.duration)}
+              </Text>
             )}
       </TouchableOpacity>
     </View>
   );
 });
 
-export default function TimetableGrid({ classes, isDark, isQuickEditMode = false, isExportMode = false, onUpdateClass, onUpdateClasses, onDeleteClasses, onPressClass }: any) {
+export default function TimetableGrid({ classes, isDark, isQuickEditMode = false, isExportMode = false, zoomScale = 1, onUpdateClass, onUpdateClasses, onDeleteClasses, onPressClass }: any) {
   const minClassHour = classes?.length > 0 ? Math.min(...classes.map((c:any) => c.startHour)) : 7;
   const maxClassHour = classes?.length > 0 ? Math.max(...classes.map((c:any) => c.startHour + c.duration)) : 20;
   
@@ -212,13 +215,14 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
   const HOURS_COUNT = END_HOUR - START_HOUR;
   const HOURS = Array.from({ length: HOURS_COUNT }, (_, i) => START_HOUR + i);
 
+  const { width: SCREEN_WIDTH } = useWindowDimensions();
   const styles = getThemeStyles(isDark, isExportMode);
   const headerScrollRef = useRef<ScrollView>(null);
   const hasSundayClass = classes?.some((c: any) => c.day === 6);
   const displayDayIndices = isExportMode ? [6, 0, 1, 2, 3, 4, 5] : (hasSundayClass ? [6, 0, 1, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5]);
-  const DAY_WIDTH = getDayWidth(displayDayIndices.length, isExportMode);
-  const hourHeight = getHourHeight(isExportMode);
-  const timeColWidth = getTimeColWidth(isExportMode);
+  const DAY_WIDTH = getDayWidth(displayDayIndices.length, isExportMode, SCREEN_WIDTH) * (isExportMode ? 1 : zoomScale);
+  const hourHeight = getHourHeight(isExportMode) * (isExportMode ? 1 : zoomScale);
+  const timeColWidth = getTimeColWidth(isExportMode) * (isExportMode ? 1 : zoomScale);
 
   const [selectedClassIds, setSelectedClassIds] = useState<Set<string>>(new Set());
 
@@ -356,11 +360,13 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
           </View>
         ) : (
           <ScrollView ref={headerScrollRef} horizontal showsHorizontalScrollIndicator={false} bounces={false} scrollEnabled={false}>
-            {displayDayIndices.map((dayIdx, idx) => (
-              <View key={idx} style={{ width: DAY_WIDTH, alignItems: 'center', borderRightWidth: 1, borderColor: isDark ? '#1e293b' : '#e2e8f0' }}>
-                <Text style={{ fontSize: 12, fontWeight: 'bold', color: isDark ? '#94a3b8' : '#64748b', paddingVertical: 8 }}>{DAYS[dayIdx]}</Text>
-              </View>
-            ))}
+            <View style={{ flexDirection: 'row', width: displayDayIndices.length * DAY_WIDTH }}>
+              {displayDayIndices.map((dayIdx, idx) => (
+                <View key={idx} style={{ width: DAY_WIDTH, alignItems: 'center', borderRightWidth: 1, borderColor: isDark ? '#1e293b' : '#e2e8f0' }}>
+                  <Text style={{ fontSize: Math.max(9, 12 * zoomScale), fontWeight: 'bold', color: isDark ? '#94a3b8' : '#64748b', paddingVertical: 8 * zoomScale }}>{DAYS[dayIdx]}</Text>
+                </View>
+              ))}
+            </View>
           </ScrollView>
         )}
       </View>
@@ -393,9 +399,11 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
                 {HOURS.map((_, i) => (
                   <View key={i} style={{ position: 'absolute', top: i * hourHeight + 10, width: '100%', height: 2, backgroundColor: isDark ? '#1e293b' : '#f1f5f9' }} />
                 ))}
-                {displayDayIndices.map((_, i) => (
-                  <View key={i} style={{ position: 'absolute', left: i * DAY_WIDTH, width: 2, height: '100%', backgroundColor: isDark ? '#1e293b' : '#f1f5f9' }} />
-                ))}
+                <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', flexDirection: 'row', pointerEvents: 'none' }}>
+                  {displayDayIndices.map((_, i) => (
+                    <View key={i} style={{ width: DAY_WIDTH, borderRightWidth: 2, borderColor: isDark ? '#1e293b' : '#f1f5f9' }} />
+                  ))}
+                </View>
 
                 {/* Classes */}
                 {processedClasses.map((cls: any) => (
@@ -420,20 +428,19 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
           </View>
         </View>
       ) : (
-        <ScrollView style={{ flex: 1 }} nestedScrollEnabled={true}>
+    <ScrollView style={{ flex: 1 }} nestedScrollEnabled={true}>
           <View style={{ flexDirection: 'row' }}>
             {/* Time Column */}
-            <View style={{ width: timeColWidth, borderRightWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0', paddingTop: 10 }}>
+            <View style={{ width: timeColWidth, borderRightWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0', paddingTop: 10 * zoomScale }}>
               {HOURS.map((h, i) => (
                 <View key={i} style={{ height: hourHeight, justifyContent: 'flex-start', alignItems: 'center' }}>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: isDark ? '#64748b' : '#94a3b8', marginTop: i === 0 ? 0 : -6, backgroundColor: styles.gridBg, paddingHorizontal: 3 }}>
+                  <Text style={{ fontSize: Math.max(7, 10 * zoomScale), fontWeight: '700', color: isDark ? '#64748b' : '#94a3b8', marginTop: i === 0 ? 0 : -6 * zoomScale, backgroundColor: styles.gridBg, paddingHorizontal: 3 * zoomScale }}>
                     {formatTime(h)}
                   </Text>
                 </View>
               ))}
             </View>
 
-            {/* Grid Area */}
             <ScrollView 
               horizontal 
               showsHorizontalScrollIndicator={false} 
@@ -446,19 +453,21 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
               }}
               scrollEventThrottle={16}
             >
-              <View style={{ width: displayDayIndices.length * DAY_WIDTH, height: HOURS_COUNT * hourHeight, paddingTop: 10 }}>
+              <View style={{ width: displayDayIndices.length * DAY_WIDTH, height: HOURS_COUNT * hourHeight, paddingTop: 10 * zoomScale }}>
                 {/* Grid Lines */}
                 {HOURS.map((_, i) => (
-                  <View key={i} style={{ position: 'absolute', top: i * hourHeight + 10, width: '100%', height: 1, backgroundColor: styles.gridLine }} />
+                  <View key={i} style={{ position: 'absolute', top: i * hourHeight + (10 * zoomScale), width: '100%', height: 1, backgroundColor: styles.gridLine }} />
                 ))}
-                {displayDayIndices.map((_, i) => (
-                  <View key={i} style={{ position: 'absolute', left: i * DAY_WIDTH, width: 1, height: '100%', backgroundColor: isDark ? '#1e293b' : '#e2e8f0' }} />
-                ))}
+                <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', flexDirection: 'row', pointerEvents: 'none' }}>
+                  {displayDayIndices.map((_, i) => (
+                    <View key={i} style={{ width: DAY_WIDTH, borderRightWidth: 1, borderColor: isDark ? '#1e293b' : '#e2e8f0' }} />
+                  ))}
+                </View>
 
                 {/* Classes */}
                 {processedClasses.map((cls: any) => (
                   <ClassBlock 
-                    key={cls.id} 
+                    key={cls.id}
                     cls={cls} 
                     isDark={isDark}
                     isQuickEditMode={isQuickEditMode}
@@ -470,6 +479,7 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
                     displayDayIndices={displayDayIndices}
                     dayWidth={DAY_WIDTH}
                     allClasses={classes}
+                    zoomScale={zoomScale}
                   />
                 ))}
               </View>

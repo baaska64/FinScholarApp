@@ -45,26 +45,8 @@ export default function CalendarScreen() {
 
     const [data, setData] = useState<any>(null);
     const [user, setUser] = useState<any>(null);
-  const { selectedYear, selectedSemester, setYearAndSemester, isLoaded } = useSemesterContext();
-  const [activeYearId, setLocalYearId] = useState<string | null>(null);
-  const [activeSemId, setLocalSemId] = useState<string | null>(null);
+  const { selectedYear: activeYearId, selectedSemester: activeSemId, setYearAndSemester } = useSemesterContext();
 
-  useEffect(() => {
-    if (isLoaded) {
-      if (selectedYear) setLocalYearId(selectedYear);
-      if (selectedSemester) setLocalSemId(selectedSemester);
-    }
-  }, [isLoaded, selectedYear, selectedSemester]);
-
-  const setActiveYearId = (id: string | null) => {
-    setLocalYearId(id);
-    if (id && activeSemId) setYearAndSemester(id, activeSemId);
-  };
-
-  const setActiveSemId = (id: string | null) => {
-    setLocalSemId(id);
-    if (activeYearId && id) setYearAndSemester(activeYearId, id);
-  };
     const [syncStatus, setSyncStatus] = useState<'syncing' | 'saved' | 'error' | 'offline'>('offline');
 
     const [showImportModal, setShowImportModal] = useState(false);
@@ -193,10 +175,9 @@ export default function CalendarScreen() {
                 const yId = generateId();
                 yr = { id: yId, name: 'Year 1', semesters: [] };
                 nd.years.push(yr);
-                setActiveYearId(yId);
+                // Will update context after import completes via saveAndSync
             } else {
                 yr = nd.years[0];
-                setActiveYearId(yr.id);
             }
         }
 
@@ -216,6 +197,10 @@ export default function CalendarScreen() {
         });
 
         saveAndSync(nd);
+        // Navigate context to the year/semester where milestones were imported
+        if (yr && yr.semesters.length > 0) {
+            setYearAndSemester(yr.id, yr.semesters[0].id);
+        }
         AlertService.alert("Success", "Imported events to your calendar.");
     };
 
@@ -258,13 +243,20 @@ export default function CalendarScreen() {
         <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
             <View style={{
                 flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-                paddingHorizontal: 24, paddingVertical: 16, zIndex: 10,
+                paddingHorizontal: 16, paddingVertical: 16, zIndex: 10,
                 borderBottomWidth: 1, borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
                 backgroundColor: theme.surface,
                 ...(!isDark ? { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 4 } : {}),
             }}>
-                <Text style={{ ...Typography.title, color: theme.text }}>Calendar</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, paddingRight: 12 }}>
+                    <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginRight: 12, backgroundColor: isDark ? 'rgba(37,99,235,0.2)' : '#dbeafe' }}>
+                        <Ionicons name="calendar" size={20} color={isDark ? '#60a5fa' : '#3b82f6'} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ ...Typography.title, color: theme.text }}>Calendar</Text>
+                    </View>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={22} color={theme.textTertiary} />}
                     {syncStatus === 'saved' && <Ionicons name="cloud-done" size={22} color={theme.success} />}
                     {syncStatus === 'error' && <Ionicons name="cloud-offline" size={22} color={theme.error} />}
@@ -284,6 +276,7 @@ export default function CalendarScreen() {
             </View>
 
             <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 100 }}>
+              <View style={{ width: '100%', maxWidth: 800, alignSelf: 'center' }}>
                 {data.years.length > 0 ? (
                     <View>
                         <View className="px-6">
@@ -291,13 +284,6 @@ export default function CalendarScreen() {
                                 years={data.years} 
                                 activeYearId={activeYearId} 
                                 activeSemId={activeSemId} 
-                                onSelectYear={id => {
-                                    setActiveYearId(id);
-                                    const yr = data.years.find((y: any) => y.id === id);
-                                    if (yr && yr.semesters.length > 0) setActiveSemId(yr.semesters[0].id);
-                                    else setActiveSemId(null);
-                                }}
-                                onSelectSem={id => setActiveSemId(id)}
                             />
                         </View>
 
@@ -539,6 +525,7 @@ export default function CalendarScreen() {
                         </TouchableOpacity>
                     </View>
                 )}
+              </View>
             </ScrollView>
 
             {/* Add/Edit Modal */}
@@ -690,8 +677,7 @@ export default function CalendarScreen() {
                                                     <View className="flex-row space-x-3">
                                                         <TouchableOpacity onPress={() => {
                                                             setShowDetailsModal(false);
-                                                            setActiveYearId(m.yearId);
-                                                            setActiveSemId(m.semId);
+                                                            if (m.yearId && m.semId) setYearAndSemester(m.yearId, m.semId);
                                                             const parts = m.date.split('-');
                                                             const d = parts.length === 3 
                                                                 ? new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10))

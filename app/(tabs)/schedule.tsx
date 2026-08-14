@@ -2,11 +2,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Alert, Modal, TextInput, Image, ImageBackground } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Defs, LinearGradient, Stop, Rect, Circle, Path } from 'react-native-svg';
 import { supabase } from '../../services/supabaseClient';
 import { SyncService } from '../../services/SyncService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Tabs from '@/components/ledger/Tabs';
-import TimetableGrid, { LIGHT_COLORS, DARK_COLORS } from '@/components/schedule/TimetableGrid';
+import TimetableGrid from '@/components/schedule/TimetableGrid';
 import ScheduleListView from '@/components/schedule/ScheduleListView';
 import AttendanceTracker from '@/components/schedule/AttendanceTracker';
 import ScheduleScannerModal from '@/components/schedule/ScheduleScannerModal';
@@ -43,35 +44,34 @@ export default function ScheduleScreen() {
 
     const [data, setData] = useState<any>(null);
     const [user, setUser] = useState<any>(null);
-  const { selectedYear, selectedSemester, setYearAndSemester, isLoaded } = useSemesterContext();
-  const [activeYearId, setLocalYearId] = useState<string | null>(null);
-  const [activeSemId, setLocalSemId] = useState<string | null>(null);
+  const { selectedYear: activeYearId, selectedSemester: activeSemId } = useSemesterContext();
 
-  useEffect(() => {
-    if (isLoaded) {
-      if (selectedYear) setLocalYearId(selectedYear);
-      if (selectedSemester) setLocalSemId(selectedSemester);
-    }
-  }, [isLoaded, selectedYear, selectedSemester]);
-
-  const setActiveYearId = (id: string | null) => {
-    setLocalYearId(id);
-    if (id && activeSemId) setYearAndSemester(id, activeSemId);
-  };
-
-  const setActiveSemId = (id: string | null) => {
-    setLocalSemId(id);
-    if (activeYearId && id) setYearAndSemester(activeYearId, id);
-  };
     
     const params = useLocalSearchParams();
-    const [viewMode, setViewMode] = useState<'grid' | 'attendance' | 'list'>(params.viewMode === 'attendance' ? 'attendance' : 'grid');
+    const [viewMode, setViewMode] = useState<'grid' | 'glass' | 'list' | 'attendance'>('grid');
+    const [zoomScale, setZoomScale] = useState(0.5);
+    
+    // Quick Edit Mode state
     const [isQuickEditMode, setIsQuickEditMode] = useState(false);
     const [showScanner, setShowScanner] = useState(false);
     const [showPaywall, setShowPaywall] = useState(false);
     const [showDevMenu, setShowDevMenu] = useState(false);
     const [syncStatus, setSyncStatus] = useState<'offline' | 'syncing' | 'saved'>('offline');
+    const [isPremium, setIsPremium] = useState(false);
+    const [quote, setQuote] = useState('');
     const [showAiWarning, setShowAiWarning] = useState(false);
+
+    useEffect(() => {
+        setIsPremium(SyncService.getIsPremium());
+        const quotes = [
+            "Stay organized and conquer your classes today!",
+            "Every class brings you closer to your graduation goals!",
+            "Consistency is key! Don't miss your lectures today.",
+            "Check your schedule early and stay one step ahead!",
+            "Learning is a superpower — make today count!"
+        ];
+        setQuote(quotes[Math.floor(Math.random() * quotes.length)]);
+    }, []);
     const [upcomingMilestones, setUpcomingMilestones] = useState<any[]>([]);
     const [selectedClass, setSelectedClass] = useState<any>(null);
     const [editingClass, setEditingClass] = useState<any>(null);
@@ -79,7 +79,7 @@ export default function ScheduleScreen() {
     const viewShotRef = React.useRef<any>(null);
     const viewShotDarkRef = React.useRef<any>(null);
     const viewShotListRef = React.useRef<any>(null);
-    const quickEditSaveTimeout = React.useRef<NodeJS.Timeout | null>(null);
+    const quickEditSaveTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const [previewUri, setPreviewUri] = useState<string | null>(null);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -470,7 +470,7 @@ export default function ScheduleScreen() {
                             text: 'Yes, Track Grades',
                             onPress: async () => {
                                 const latest = await (async () => {
-                                    const raw = await (await import('@react-native-async-storage/async-storage')).default.getItem('grade_ledger_v2_data');
+                                    const raw = await AsyncStorage.getItem('grade_ledger_v2_data');
                                     return raw ? JSON.parse(raw) : nd;
                                 })();
                                 const latestSem = latest.years?.find((y: any) => y.id === activeYearId)?.semesters?.find((s: any) => s.id === activeSemId);
@@ -524,20 +524,36 @@ export default function ScheduleScreen() {
         const currentDayIdx = now.getDay() === 0 ? 6 : now.getDay() - 1; // 0=Mon
         const currentHourFloat = now.getHours() + (now.getMinutes() / 60);
 
+        const semStartDate = currentSem.startDate ? new Date(currentSem.startDate) : null;
+        if (semStartDate) semStartDate.setHours(0, 0, 0, 0);
+        const isFutureSemester = !!(semStartDate && now < semStartDate);
+
         let minWaitHours = Infinity;
         
-        currentSemClasses.forEach((cls: any) => {
-            if (cls.day === currentDayIdx && currentHourFloat >= cls.startHour && currentHourFloat < cls.startHour + (cls.duration || 1)) {
-                nextClassInfo = cls;
-                isOngoing = true;
-            }
-        });
+        if (!isFutureSemester) {
+            currentSemClasses.forEach((cls: any) => {
+                if (cls.day === currentDayIdx && currentHourFloat >= cls.startHour && currentHourFloat < cls.startHour + (cls.duration || 1)) {
+                    nextClassInfo = cls;
+                    isOngoing = true;
+                }
+            });
+        }
 
         if (!isOngoing) {
+            const baseDate = isFutureSemester && semStartDate ? semStartDate : now;
+            const baseDayIdx = baseDate.getDay() === 0 ? 6 : baseDate.getDay() - 1;
+            const baseHourFloat = isFutureSemester ? 0 : currentHourFloat;
+
             currentSemClasses.forEach((cls: any) => {
-                let daysUntil = cls.day - currentDayIdx;
-                if (daysUntil < 0 || (daysUntil === 0 && cls.startHour <= currentHourFloat)) daysUntil += 7;
-                const waitHours = (daysUntil * 24) + (cls.startHour - currentHourFloat);
+                let daysUntil = cls.day - baseDayIdx;
+                if (daysUntil < 0 || (daysUntil === 0 && cls.startHour <= baseHourFloat)) daysUntil += 7;
+                
+                let waitHours = (daysUntil * 24) + (cls.startHour - baseHourFloat);
+                
+                if (isFutureSemester && semStartDate) {
+                    waitHours += (semStartDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+                }
+                
                 if (waitHours < minWaitHours) {
                     minWaitHours = waitHours;
                     nextClassInfo = cls;
@@ -560,6 +576,63 @@ export default function ScheduleScreen() {
         }
     }
     
+    const overallAttendance = currentSem ? (() => {
+        if (!currentSem.classes || currentSem.classes.length === 0) return null;
+        const startDateStr = currentSem.startDate || new Date().toISOString().split('T')[0];
+        const endDateStr = currentSem.endDate || new Date(Date.now() + 1000 * 60 * 60 * 24 * 120).toISOString().split('T')[0];
+        const attendanceLog = currentSem.attendanceLog || {};
+        
+        const start = new Date(startDateStr);
+        const end = new Date(endDateStr + 'T23:59:59');
+        const now = new Date();
+        
+        const limitDate = now < end ? now : end;
+        
+        let totalConductedHours = 0;
+        let attendedHours = 0;
+        const oneWeekAgo = new Date(now);
+        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+        
+        for (let d = new Date(start); d <= limitDate; d.setDate(d.getDate() + 1)) {
+            const dayIdx = d.getDay() === 0 ? 6 : d.getDay() - 1;
+            const dateStr = d.toISOString().split('T')[0];
+            
+            const dayClasses = currentSem.classes.filter((c: any) => c.day === dayIdx);
+            dayClasses.forEach((cls: any) => {
+                const key = `${dateStr}_${cls.id}`;
+                const logEntry = attendanceLog[key];
+                let status = 'pending';
+                let isManual = false;
+                if (typeof logEntry === 'boolean') {
+                    status = logEntry ? 'present' : 'pending';
+                } else if (logEntry) {
+                    status = logEntry.status || 'pending';
+                    isManual = !!logEntry.isManual;
+                }
+                
+                const sessionDate = new Date(d);
+                const startHour = cls.startHour || 0;
+                sessionDate.setHours(Math.floor(startHour), (startHour % 1) * 60);
+                
+                const isPast = sessionDate < now;
+                if (!isManual && status === 'pending' && sessionDate < oneWeekAgo) {
+                    status = 'absent';
+                }
+                
+                if (isPast && status !== 'cancelled') {
+                    const duration = cls.duration || 1;
+                    totalConductedHours += duration;
+                    if (status === 'present') {
+                        attendedHours += duration;
+                    }
+                }
+            });
+        }
+        
+        if (totalConductedHours === 0) return null;
+        return Math.min(100, Math.max(0, Math.round((attendedHours / totalConductedHours) * 100)));
+    })() : null;
+
     const palette = [
         { bg: isDark ? 'rgba(56, 162, 255, 0.22)' : 'rgba(41, 151, 255, 0.1)', border: isDark ? '#56aaff' : '#2997ff', text: isDark ? '#8ec5ff' : '#1a7fd4' },
         { bg: isDark ? 'rgba(60, 220, 100, 0.2)' : 'rgba(48, 209, 88, 0.1)', border: isDark ? '#4ade80' : '#30d158', text: isDark ? '#7defa0' : '#1da34a' },
@@ -569,96 +642,317 @@ export default function ScheduleScreen() {
     
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
-            {/* Header */}
+            {/* Top App Bar */}
             <View style={{
-                paddingHorizontal: 24, paddingTop: 16, paddingBottom: 16, zIndex: 10,
+                flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+                paddingHorizontal: 20, paddingVertical: 14, zIndex: 10,
                 borderBottomWidth: 1, borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
                 backgroundColor: theme.surface,
                 ...(!isDark ? { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 4 } : {}),
             }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <View style={{
-                            width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginRight: 12,
-                            backgroundColor: isDark ? 'rgba(99,102,241,0.2)' : '#e0e7ff',
-                        }}>
-                            <Ionicons name="calendar" size={20} color={isDark ? '#818cf8' : '#6366f1'} />
-                        </View>
-                        <View>
-                            <Text style={{ ...Typography.title, color: theme.text }}>My Schedule</Text>
-                            <Text style={{ ...Typography.caption, color: theme.textTertiary }}>
-                                {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
-                            </Text>
-                        </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View style={{
+                        width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
+                        backgroundColor: isDark ? 'rgba(99,102,241,0.2)' : '#e0e7ff',
+                    }}>
+                        <Ionicons name="calendar" size={18} color={isDark ? '#818cf8' : '#4f46e5'} />
                     </View>
-                    
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                        {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={22} color={theme.textTertiary} />}
-                        {syncStatus === 'saved' && <Ionicons name="cloud-done" size={22} color={theme.success} />}
-                        {syncStatus === 'offline' && <Ionicons name="cloud-offline" size={22} color={theme.textTertiary} />}
-                        
+                    <View>
+                        <Text style={{ ...Typography.title, color: theme.text }}>My Schedule</Text>
+                    </View>
+                    {isPremium ? (
+                        <View style={{ backgroundColor: theme.success, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 4 }}>
+                            <Text style={{ fontSize: 10, fontWeight: '900', color: '#fff' }}>PRO</Text>
+                        </View>
+                    ) : (
                         <TouchableOpacity 
-                            onPress={() => router.push('/(tabs)/profile')} 
-                            style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9' }}
+                            onPress={() => setShowPaywall(true)}
+                            style={{ backgroundColor: theme.primary, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 4 }}
                         >
-                            <Ionicons name="settings-outline" size={22} color={isDark ? '#cbd5e1' : '#475569'} />
+                            <Ionicons name="diamond" size={10} color="#fff" />
+                            <Text style={{ fontSize: 10, fontWeight: '800', color: '#fff' }}>GET PRO</Text>
                         </TouchableOpacity>
-                    </View>
+                    )}
                 </View>
+                
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={20} color={theme.textTertiary} />}
+                    {syncStatus === 'saved' && <Ionicons name="cloud-done" size={20} color={theme.success} />}
+                    {syncStatus === 'offline' && <Ionicons name="cloud-offline" size={20} color={theme.textTertiary} />}
+                    
+                    <TouchableOpacity 
+                        onPress={() => router.push('/(tabs)/profile')} 
+                        style={{
+                            width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9'
+                        }}
+                    >
+                        <Ionicons name="settings-outline" size={20} color={isDark ? '#cbd5e1' : '#475569'} />
+                    </TouchableOpacity>
+                </View>
+            </View>
 
-                {/* View Toggles */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <View style={{ flexDirection: 'row', borderRadius: 12, padding: 4, backgroundColor: isDark ? theme.surfaceSecondary : '#e2e8f0' }}>
-                        <TouchableOpacity 
-                            onPress={() => setViewMode('grid')}
-                            style={{
-                                paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, flexDirection: 'row', alignItems: 'center',
-                                backgroundColor: viewMode === 'grid' ? (isDark ? '#475569' : '#ffffff') : 'transparent',
-                                ...(!isDark && viewMode === 'grid' ? { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 3, elevation: 2 } : {}),
-                            }}
-                        >
-                            <Ionicons name="grid" size={14} color={viewMode === 'grid' ? (isDark ? '#e2e8f0' : '#0f172a') : (isDark ? '#64748b' : '#64748b')} />
-                            <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'grid' ? (isDark ? '#e2e8f0' : '#1e293b') : (isDark ? '#64748b' : '#64748b') }}>Grid</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity 
-                            onPress={() => setViewMode('list')}
-                            style={{
-                                paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, flexDirection: 'row', alignItems: 'center',
-                                backgroundColor: viewMode === 'list' ? (isDark ? '#475569' : '#ffffff') : 'transparent',
-                                ...(!isDark && viewMode === 'list' ? { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 3, elevation: 2 } : {}),
-                            }}
-                        >
-                            <Ionicons name="albums" size={14} color={viewMode === 'list' ? (isDark ? '#e2e8f0' : '#0f172a') : (isDark ? '#64748b' : '#64748b')} />
-                            <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'list' ? (isDark ? '#e2e8f0' : '#1e293b') : (isDark ? '#64748b' : '#64748b') }}>Glass</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity 
-                            onPress={() => setViewMode('attendance')}
-                            style={{
-                                paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, flexDirection: 'row', alignItems: 'center',
-                                backgroundColor: viewMode === 'attendance' ? (isDark ? '#475569' : '#ffffff') : 'transparent',
-                                ...(!isDark && viewMode === 'attendance' ? { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 3, elevation: 2 } : {}),
-                            }}
-                        >
-                            <Ionicons name="list" size={14} color={viewMode === 'attendance' ? (isDark ? '#e2e8f0' : '#0f172a') : (isDark ? '#64748b' : '#64748b')} />
-                            <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'attendance' ? (isDark ? '#e2e8f0' : '#1e293b') : (isDark ? '#64748b' : '#64748b') }}>Attendance</Text>
-                        </TouchableOpacity>
-                    </View>
+            {/* View Mode Segmented Control Pills */}
+            <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+                backgroundColor: theme.surface,
+                borderBottomWidth: 1,
+                borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
+            }}>
+                <View style={{
+                    flexDirection: 'row',
+                    flex: 1,
+                    borderRadius: Radius.full,
+                    padding: 4,
+                    backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
+                    borderWidth: 1,
+                    borderColor: theme.cardBorder,
+                }}>
+                    <TouchableOpacity 
+                        onPress={() => setViewMode('grid')}
+                        style={{
+                            flex: 1, paddingVertical: 8, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: viewMode === 'grid' ? (isDark ? '#4f46e5' : '#4f46e5') : 'transparent',
+                            ...(viewMode === 'grid' ? Shadows.sm : {}),
+                        }}
+                    >
+                        <Ionicons name="grid" size={14} color={viewMode === 'grid' ? '#ffffff' : theme.textSecondary} />
+                        <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'grid' ? '#ffffff' : theme.textSecondary }}>Grid</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity 
+                        onPress={() => setViewMode('list')}
+                        style={{
+                            flex: 1, paddingVertical: 8, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: viewMode === 'list' ? (isDark ? '#4f46e5' : '#4f46e5') : 'transparent',
+                            ...(viewMode === 'list' ? Shadows.sm : {}),
+                        }}
+                    >
+                        <Ionicons name="albums" size={14} color={viewMode === 'list' ? '#ffffff' : theme.textSecondary} />
+                        <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'list' ? '#ffffff' : theme.textSecondary }}>Glass</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity 
+                        onPress={() => setViewMode('attendance')}
+                        style={{
+                            flex: 1, paddingVertical: 8, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: viewMode === 'attendance' ? (isDark ? '#4f46e5' : '#4f46e5') : 'transparent',
+                            ...(viewMode === 'attendance' ? Shadows.sm : {}),
+                        }}
+                    >
+                        <Ionicons name="checkbox-outline" size={14} color={viewMode === 'attendance' ? '#ffffff' : theme.textSecondary} />
+                        <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'attendance' ? '#ffffff' : theme.textSecondary }}>Attendance</Text>
+                    </TouchableOpacity>
                 </View>
             </View>
             
-            <ScrollView className="flex-1 px-4 py-4" contentContainerClassName="pb-[100px]" removeClippedSubviews={true}>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 120, paddingTop: 16, paddingHorizontal: 16 }} removeClippedSubviews={true}>
+              <View style={{ width: '100%', maxWidth: 800, alignSelf: 'center' }}>
+                {/* Hero Banner with Overlapping Stats Card */}
+                <View style={{ marginBottom: 20 }}>
+                    <View style={{
+                        borderRadius: Radius['4xl'],
+                        overflow: 'hidden',
+                        borderWidth: isDark ? 1 : 0,
+                        borderColor: isDark ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
+                        backgroundColor: theme.surface,
+                        ...(!isDark ? Shadows.lg : {}),
+                    }}>
+                        {/* Layer 1: Top Banner */}
+                        <View style={{ 
+                            paddingLeft: 20, 
+                            paddingRight: 20,
+                            paddingTop: 24, 
+                            paddingBottom: 50,
+                            backgroundColor: isDark ? '#312e81' : '#6b63ff',
+                            overflow: 'hidden',
+                        }}>
+                            {/* Background Svg Gradient & Waves */}
+                            <Svg style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+                                <Defs>
+                                    <LinearGradient id="schedHeroGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                        <Stop offset="0%" stopColor={isDark ? '#312e81' : '#7b6eff'} />
+                                        <Stop offset="100%" stopColor={isDark ? '#1e1b4b' : '#5b54fa'} />
+                                    </LinearGradient>
+                                </Defs>
+                                <Rect width="100%" height="100%" fill="url(#schedHeroGrad)" />
+                                <Circle cx="0%" cy="0%" r="150" fill="rgba(255, 255, 255, 0.04)" />
+                                <Circle cx="100%" cy="100%" r="200" fill="rgba(255, 255, 255, 0.08)" />
+                            </Svg>
+
+                            {/* Dark bottom wave band */}
+                            <View style={{
+                                position: 'absolute', left: 0, right: 0, bottom: 0, height: '40%',
+                                backgroundColor: isDark ? 'rgba(15, 10, 40, 0.45)' : 'rgba(30, 20, 80, 0.25)',
+                                borderTopLeftRadius: 80,
+                                borderTopRightRadius: 40,
+                            }} />
+
+                            {/* Sparkle decorations */}
+                            <Text style={{ position: 'absolute', right: 120, top: 22, color: 'rgba(255,255,255,0.7)', fontSize: 18 }}>✦</Text>
+                            <Text style={{ position: 'absolute', right: 15, top: 55, color: 'rgba(255,255,255,0.5)', fontSize: 14 }}>✦</Text>
+                            <Text style={{ position: 'absolute', right: 165, top: 80, color: 'rgba(255,255,255,0.35)', fontSize: 11 }}>✦</Text>
+
+                            {/* Mascot with Shadow */}
+                            <View style={{ 
+                                position: 'absolute', 
+                                right: 5, 
+                                top: 30, 
+                                width: 155, 
+                                height: 170, 
+                            }}>
+                                {/* Large Display Stand Shadow centered under the entire tail */}
+                                <View style={{
+                                    position: 'absolute',
+                                    bottom: -27,
+                                    left: 50,
+                                    width: 80,
+                                    height: 80,
+                                    backgroundColor: 'rgba(30, 20, 80, 0.4)',
+                                    borderRadius: 40,
+                                    transform: [{ scaleY: 0.25 }]
+                                }} />
+                                <Image 
+                                    source={require('../../assets/images/finscheduleherocard.png')} 
+                                    style={{ width: 155, height: 170 }} 
+                                    resizeMode="contain" 
+                                />
+                            </View>
+
+                            {/* Text content - stays on the left side, never overlaps Fin */}
+                            <View style={{ maxWidth: '55%', zIndex: 10 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                    <Ionicons name="sparkles" size={14} color="#e0e7ff" />
+                                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: 'rgba(255, 255, 255, 0.9)', textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                                        Schedule Hub
+                                    </Text>
+                                </View>
+                                
+                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: '#ffffff', marginBottom: 10, letterSpacing: -0.3 }}>
+                                    {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                                </Text>
+
+                                {/* Speech Bubble Quote */}
+                                <View style={{
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    backgroundColor: isDark ? 'rgba(15, 23, 42, 0.6)' : 'rgba(255, 255, 255, 0.15)',
+                                    borderWidth: 1,
+                                    borderColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.25)',
+                                    paddingHorizontal: 12,
+                                    paddingVertical: 10,
+                                    borderRadius: 16,
+                                }}>
+                                    <Ionicons name="chatbubble-ellipses" size={14} color="#e0e7ff" style={{ marginRight: 8, alignSelf: 'flex-start', marginTop: 2 }} />
+                                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: '#ffffff', flexShrink: 1, lineHeight: 16 }}>
+                                        {quote || "Every class brings you closer to your graduation goals!"}
+                                    </Text>
+                                </View>
+                            </View>
+                        </View>
+
+                        {/* Layer 2: Overlapping Stats Card */}
+                        <View style={{
+                            marginTop: -28,
+                            marginHorizontal: 12,
+                            marginBottom: 12,
+                            borderRadius: Radius['3xl'],
+                            backgroundColor: theme.surface,
+                            borderWidth: 1,
+                            borderColor: theme.cardBorder,
+                            padding: 14,
+                            ...(!isDark ? Shadows.md : {}),
+                        }}>
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                                {/* Metric 1: Today's Classes */}
+                                <View style={{
+                                    flex: 1, minWidth: '45%',
+                                    backgroundColor: theme.surfaceSecondary,
+                                    paddingHorizontal: 10, paddingVertical: 8,
+                                    borderRadius: Radius['2xl'],
+                                    borderWidth: 1, borderColor: theme.cardBorder,
+                                }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#e0e7ff', alignItems: 'center', justifyContent: 'center' }}>
+                                            <Ionicons name="time" size={11} color={isDark ? '#818cf8' : '#4f46e5'} />
+                                        </View>
+                                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>Today's Classes</Text>
+                                    </View>
+                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text }}>
+                                        {currentSemClasses.filter((c: any) => c.day === (new Date().getDay() === 0 ? 6 : new Date().getDay() - 1)).length} Classes
+                                    </Text>
+                                </View>
+
+                                {/* Metric 2: Weekly Total */}
+                                <View style={{
+                                    flex: 1, minWidth: '45%',
+                                    backgroundColor: theme.surfaceSecondary,
+                                    paddingHorizontal: 10, paddingVertical: 8,
+                                    borderRadius: Radius['2xl'],
+                                    borderWidth: 1, borderColor: theme.cardBorder,
+                                }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: isDark ? 'rgba(14, 165, 233, 0.2)' : '#e0f2fe', alignItems: 'center', justifyContent: 'center' }}>
+                                            <Ionicons name="calendar" size={11} color={isDark ? '#38bdf8' : '#0ea5e9'} />
+                                        </View>
+                                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>Weekly Total</Text>
+                                    </View>
+                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text }}>
+                                        {currentSemClasses.length} Blocks
+                                    </Text>
+                                </View>
+
+                                {/* Metric 3: Attendance Rate */}
+                                <View style={{
+                                    flex: 1, minWidth: '45%',
+                                    backgroundColor: theme.surfaceSecondary,
+                                    paddingHorizontal: 10, paddingVertical: 8,
+                                    borderRadius: Radius['2xl'],
+                                    borderWidth: 1, borderColor: theme.cardBorder,
+                                }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: isDark ? 'rgba(16, 185, 129, 0.2)' : '#d1fae5', alignItems: 'center', justifyContent: 'center' }}>
+                                            <Ionicons name="checkmark-circle" size={11} color={isDark ? '#34d399' : '#10b981'} />
+                                        </View>
+                                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>Attendance</Text>
+                                    </View>
+                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text }}>
+                                        {overallAttendance === null ? 'N/A' : `${overallAttendance}%`}
+                                    </Text>
+                                </View>
+
+                                {/* Metric 4: Active Term */}
+                                <View style={{
+                                    flex: 1, minWidth: '45%',
+                                    backgroundColor: theme.surfaceSecondary,
+                                    paddingHorizontal: 10, paddingVertical: 8,
+                                    borderRadius: Radius['2xl'],
+                                    borderWidth: 1, borderColor: theme.cardBorder,
+                                }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: isDark ? 'rgba(245, 158, 11, 0.2)' : '#fef3c7', alignItems: 'center', justifyContent: 'center' }}>
+                                            <Ionicons name="school" size={11} color={isDark ? '#fbbf24' : '#f59e0b'} />
+                                        </View>
+                                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>Active Term</Text>
+                                    </View>
+                                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: theme.text }} numberOfLines={1}>
+                                        {currentSem ? `${currentYear?.name || ''} • ${currentSem.name}` : 'No Term'}
+                                    </Text>
+                                </View>
+                            </View>
+                        </View>
+
+                    </View>
+                </View>
                 {/* Year / Semester Navigation */}
                 <Tabs 
                     years={data.years} 
                     activeYearId={activeYearId} 
                     activeSemId={activeSemId}
-                    onSelectYear={id => {
-                        setActiveYearId(id);
-                        const yr = data.years.find((y: any) => y.id === id);
-                        if (yr && yr.semesters.length > 0) setActiveSemId(yr.semesters[0].id);
-                        else setActiveSemId(null);
-                    }}
-                    onSelectSem={id => setActiveSemId(id)}
                 />
 
                 {!currentSem ? (
@@ -682,7 +976,7 @@ export default function ScheduleScreen() {
                 ) : (
                     <View className="mt-4">
                         {/* Scan + Add Actions (prominent, at top) */}
-                        <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+                        <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
                             <TouchableOpacity 
                                 onPress={() => {
                                     if (SyncService.getIsPremium()) {
@@ -692,24 +986,25 @@ export default function ScheduleScreen() {
                                     }
                                 }} 
                                 style={{
-                                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 16,
-                                    backgroundColor: isDark ? '#4f46e5' : '#6366f1',
-                                    ...(!isDark ? { shadowColor: '#6366f1', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 } : {}),
+                                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: Radius['2xl'],
+                                    backgroundColor: isDark ? '#4f46e5' : '#4f46e5',
+                                    ...(!isDark ? Shadows.md : {}),
                                 }}
                             >
                                 <Ionicons name="sparkles" size={18} color="#fff" />
-                                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, color: '#fff', marginLeft: 8 }}>Scan Image</Text>
+                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: '#fff', marginLeft: 8 }}>Scan Image</Text>
                             </TouchableOpacity>
                             <TouchableOpacity 
                                 onPress={() => { setEditingClass(null); setShowEditModal(true); }} 
                                 style={{
-                                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 16,
-                                    borderWidth: 1.5, borderColor: isDark ? '#334155' : '#e2e8f0',
-                                    backgroundColor: isDark ? '#1e293b' : '#ffffff',
+                                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: Radius['2xl'],
+                                    borderWidth: 1.5, borderColor: theme.cardBorder,
+                                    backgroundColor: theme.surface,
+                                    ...(!isDark ? Shadows.sm : {}),
                                 }}
                             >
-                                <Ionicons name="add-circle-outline" size={18} color={isDark ? '#e2e8f0' : '#334155'} />
-                                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, color: isDark ? '#e2e8f0' : '#334155', marginLeft: 8 }}>Add Class</Text>
+                                <Ionicons name="add-circle-outline" size={18} color={theme.text} />
+                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: theme.text, marginLeft: 8 }}>Add Class</Text>
                             </TouchableOpacity>
                         </View>
                         {currentSem.classes.length === 0 ? (
@@ -830,20 +1125,43 @@ export default function ScheduleScreen() {
 
                         {viewMode === 'grid' ? (
                             <View className="mb-8">
-                                <TouchableOpacity 
-                                    onPress={handleExportSchedule}
-                                    className={`mb-4 flex-row items-center justify-center py-4 rounded-3xl border-2 ${isDark ? 'bg-indigo-600 border-indigo-500' : 'bg-indigo-50 border-indigo-200'}`}
-                                >
-                                    <Ionicons name="download" size={20} color={isDark ? "#ffffff" : "#4f46e5"} />
-                                    <Text className={`ml-2 text-base font-extrabold ${isDark ? 'text-white' : 'text-indigo-700'}`}>
-                                        Export as Image
-                                    </Text>
-                                </TouchableOpacity>
+                                <View className="flex-row items-center justify-between mb-4">
+                                    <TouchableOpacity 
+                                        onPress={handleExportSchedule}
+                                        className={`flex-1 mr-2 flex-row items-center justify-center py-4 rounded-3xl border-2 ${isDark ? 'bg-indigo-600 border-indigo-500' : 'bg-indigo-50 border-indigo-200'}`}
+                                    >
+                                        <Ionicons name="download" size={20} color={isDark ? "#ffffff" : "#4f46e5"} />
+                                        <Text className={`ml-2 text-base font-extrabold ${isDark ? 'text-white' : 'text-indigo-700'}`}>
+                                            Export
+                                        </Text>
+                                    </TouchableOpacity>
+
+                                    <View className={`flex-row items-center rounded-3xl border-2 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200 shadow-sm'} px-2 py-2`}>
+                                        <TouchableOpacity 
+                                            onPress={() => setZoomScale(s => Math.max(0.25, s - 0.25))}
+                                            className={`w-10 h-10 items-center justify-center rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-100'}`}
+                                        >
+                                            <Ionicons name="remove" size={22} color={isDark ? "#e2e8f0" : "#475569"} />
+                                        </TouchableOpacity>
+                                        
+                                        <View className="w-12 items-center justify-center">
+                                            <Text className={`font-bold text-xs ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{Math.round(zoomScale * 100)}%</Text>
+                                        </View>
+
+                                        <TouchableOpacity 
+                                            onPress={() => setZoomScale(s => Math.min(1.0, s + 0.25))}
+                                            className={`w-10 h-10 items-center justify-center rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-100'}`}
+                                        >
+                                            <Ionicons name="add" size={22} color={isDark ? "#e2e8f0" : "#475569"} />
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
 
                                 <TimetableGrid 
                                     classes={currentSem.classes} 
                                     isDark={isDark} 
                                     isQuickEditMode={isQuickEditMode} 
+                                    zoomScale={zoomScale} 
                                     onUpdateClass={onUpdateClass} 
                                     onUpdateClasses={onUpdateClasses}
                                     onDeleteClasses={handleDeleteClasses}
@@ -977,6 +1295,7 @@ export default function ScheduleScreen() {
                         </View>
                     </View>
                 )}
+              </View>
             </ScrollView>
             
             <ScheduleScannerModal 

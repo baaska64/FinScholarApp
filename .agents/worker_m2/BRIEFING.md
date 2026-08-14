@@ -1,64 +1,67 @@
-# BRIEFING — 2026-07-17T21:13:00+08:00
+# BRIEFING — 2026-08-08T10:39:05+08:00
 
 ## Mission
-Implement Milestone 2: Clean up, TypeScript Type Fixes, Cute UI/UX Overhaul, Fin Mascot Integration, and Build/Type Verification.
+Redesign term selector tabs (`Tabs.tsx`) and subject cards (`SubjectCard.tsx`) for Grade Ledger R3 (Pill-shaped buttons, soft drop shadows, clean typography, well-padded cards, score progress bars, rounded action buttons), preserving all existing props and callbacks.
 
 ## 🔒 My Identity
 - Archetype: teamwork_preview_worker
 - Roles: implementer, qa, specialist
 - Working directory: c:\Projects\FinScholarApp\.agents\worker_m2
-- Original parent: 47b29704-55dd-45d1-9aef-0bde8b6a5344
-- Milestone: Milestone 2
+- Original parent: c44b68e1-47a4-4770-acc2-bd40b32c67a0
+- Milestone: Milestone 2 (Horizontal Subject Carousel Section - R2)
+- Reassigned Parent: 8a1d9e0a-3021-445f-97c3-252a42511e25
+- Reassigned Milestone: M2 (Term Selector & Subject Cards Redesign - R3)
 
 ## 🔒 Key Constraints
-- CODE_ONLY network mode: No external internet access, no curl/wget to external URLs.
-- Integrity Mandate: Do not cheat, no dummy implementations or hardcoded outputs.
-- Write only to own folder (c:\Projects\FinScholarApp\.agents\worker_m2).
-- Handoff report required.
+- DO NOT CHEAT. Genuine implementations only. No hardcoded test values or facade implementations.
+- Use `constants/Theme.ts` tokens (`theme.surface`, `theme.cardBorder`, `Radius.xl` or `Radius['2xl']`).
+- Horizontal `ScrollView` (`horizontal={true}`, `showsHorizontalScrollIndicator={false}`).
+- Header title: "My Subjects" with subject count.
+- Progress formula: `(Completed Tasks / Total Tasks) * 100` where completed tasks are requirements with `status === 'submitted' || status === 'graded'`.
+- Gracefully handle 0 total tasks (`0/0 tasks (0%)`).
+- Exclusive write ownership: `components/ledger/Tabs.tsx` and `components/ledger/SubjectCard.tsx`.
+- Redesign view filter tabs (All / Tracked) using pill-shaped buttons (`Radius.full`), soft drop shadows (`Shadows.sm`), and dynamic active state styling.
+- Redesign academic term selector button and modal switcher with pill styling, soft shadows, clear typography, and smooth touch response.
+- Overhaul subject cards with soft drop shadows (`Shadows.sm`/`Shadows.md`), rounded card surfaces (`Radius['2xl']`), clean padding, pill status badges, score progress bar, and polished rounded action buttons.
+- Support dark/light mode tokens (`constants/Theme.ts`).
+- Preserve ALL existing props and callbacks on `SubjectCardProps` (`subject`, `system`, `onSelect`, `isEditMode`, `isSelected`, `onToggleSelect`, `onToggleTracking`, `onDelete`, `onDuplicate`).
+- Preserve ALL existing props on `TabsProps` (`activeTab`, `setActiveTab`).
+- Run `npx tsc --noEmit` and `npm test` to verify zero errors in target files and tests pass.
 
 ## Current Parent
-- Conversation ID: 47b29704-55dd-45d1-9aef-0bde8b6a5344
-- Updated: 2026-07-17T21:13:00+08:00
+- Conversation ID: 8a1d9e0a-3021-445f-97c3-252a42511e25
+- Updated: 2026-08-08T10:39:05+08:00
 
 ## Task Summary
-- **What to build**: Clean up code and resolve TS types. Complete playful, cute UI/UX overhaul of index, calendar, schedule, grades, and profile screens. Deeply integrate Fin mascot in 4 specific states.
-- **Success criteria**: TypeScript checks pass cleanly (`npx tsc --noEmit`); Expo bundles successfully for web (`npx expo export --platform web`).
-- **Interface contracts**: c:\Projects\FinScholarApp\PROJECT.md
-- **Code layout**: c:\Projects\FinScholarApp\PROJECT.md
+- **What to build**: Redesign `components/ledger/Tabs.tsx` and `components/ledger/SubjectCard.tsx`.
+- **Success criteria**: Pill-shaped buttons, soft drop shadows, clean typography, score progress bars, rounded action buttons, 100% prop and callback parity, dark/light mode compatibility, 0 TypeScript errors in target files, 100% test pass.
+- **Interface contracts**: PROJECT.md / DISPATCH.md
+- **Code layout**: `components/ledger/Tabs.tsx`, `components/ledger/SubjectCard.tsx`.
 
 ## Key Decisions Made
-- Moved `temp_active.tsx` to `worker_m2` as backup.
-- Resolved all TypeScript errors in `app/index.tsx`, `components/Themed.tsx`, `components/useColorScheme.ts`, `app/(tabs)/index.tsx`, `components/ExternalLink.tsx`, `components/ledger/ActiveSubjectView.tsx`, `components/schedule/AttendanceTracker.tsx`, `components/schedule/ClassModals.tsx`, `components/schedule/ScheduleScannerModal.tsx`.
-- Redesigned Dashboard cards (Recharging Station & Clear Skies), VisualCalendar (cards & cell shapes), TimetableGrid (borderRadius), and Profile (cards & menu list items) to use bubbly elements (`rounded-[24px]`, `rounded-[28px]`, `rounded-[32px]`) and soft pastel styles.
-- Integrated Fin Mascot images (`sleeping.png`, `studying.png`, `happy.png`, `confused.png`) in 4 distinct contextual states (empty term manager, clear skies, high grade summary, empty timetable).
-
-## Artifact Index
-- c:\Projects\FinScholarApp\.agents\worker_m2\ORIGINAL_REQUEST.md — Original request details
-- c:\Projects\FinScholarApp\.agents\worker_m2\temp_active.tsx.bak — Backup of temp_active.tsx
+- Redesigned `Tabs.tsx` with pill-shaped selector button (`Radius.full`), soft drop shadows (`Shadows.sm`), clear typography (`font-nunito-bold`), and optional `activeTab`/`setActiveTab` support for "All" and "Tracked" view filter tabs with dynamic active highlights.
+- Overhauled `SubjectCard.tsx` with rounded card surfaces (`Radius['2xl']`), soft drop shadows (`Shadows.md`), pill status badges for Units/Periods, Schedule status, Grade Equivalent chip, Not-tracked banner, rounded stats containers for SCORE and GWA, score progress bar with smooth rounded fills, and rounded action buttons (`eye`/`eye-off`, `copy-outline`, `trash-outline`, circle checkbox).
+- Preserved 100% prop and callback parity on `SubjectCardProps` (`subject`, `system`, `onClick`, `onSelect`, `isEditMode`, `isSelectionMode`, `isSelected`, `onToggleSelect`, `onToggleTracking`, `onDelete`, `onDuplicate`) and `TabsProps`.
+- Added test suite `Grade Ledger Suite 5` to `__tests__/ledger.test.js` validating component contracts and prop aliases.
 
 ## Change Tracker
 - **Files modified**:
-  - `app/index.tsx`: Fix state session type casting.
-  - `components/useColorScheme.ts`: Force returning strictly `'light' | 'dark'`.
-  - `app/(tabs)/index.tsx`: Include `'error'` state type inside syncStatus. Redesign Recharging Station & Clear Skies cards to use bubbly rounded corners (`rounded-[28px]`) and custom pastel borders/backgrounds. Add `studying.png` to Clear Skies section.
-  - `components/ExternalLink.tsx`: Cast href as `any` in Link.
-  - `components/ledger/ActiveSubjectView.tsx`: Explicitly type parameter and return type of `addIds` function.
-  - `components/schedule/AttendanceTracker.tsx`: Annotate generic parameters on `useMemo` for groupedWeeks.
-  - `components/schedule/ClassModals.tsx`: Annotate parameters `s` and `sched` as `any`.
-  - `components/schedule/ScheduleScannerModal.tsx`: Fix destructuring of `useColorScheme` and provide null fallback for `base64`.
-  - `app/(tabs)/academic-manager.tsx`: Show `sleeping.png` with a funny sleep message when there are no academic years.
-  - `components/ledger/GwaSummary.tsx`: Display a high GWA congrats card featuring `happy.png` when the user has excellent GWA.
-  - `app/(tabs)/schedule.tsx`: Redesign strips and buttons to use `rounded-[24px]` / `rounded-[28px]` and soft borders. Replace `FinSights.png` with `confused.png` and funny caption when timetable is empty.
-  - `components/calendar/VisualCalendar.tsx`: Redesign calendar container to use `rounded-[32px]` with a thin border-2. Redesign day cell containers to use `rounded-[16px]`.
-  - `components/schedule/TimetableGrid.tsx`: Redesign timetable container to use `rounded-28`. Redesign day block cells to use `rounded-14`.
-  - `app/(tabs)/profile.tsx`: Overhaul profile card (`rounded-[32px]`), buttons (`rounded-[24px]`, border-2), and colors to be playful and bubbly.
-- **Build status**: Pass (npx tsc --noEmit: 0 errors; npx expo export --platform web: Bundled successfully)
-- **Pending issues**: None
+  - `components/ledger/Tabs.tsx`: Redesigned Term Selector button & modal + view filter tabs.
+  - `components/ledger/SubjectCard.tsx`: Redesigned subject card layout, status badges, progress bar, action toolbar.
+  - `__tests__/ledger.test.js`: Added Suite 5 contract tests.
+- **Build status**: PASS (10/10 test suites passed, 42/42 tests passed, 0 TypeScript errors in target files).
+- **Pending issues**: None.
 
 ## Quality Status
-- **Build/test result**: Pass
-- **Lint status**: 0 violations (TS check compiles clean)
-- **Tests added/modified**: Covered by existing test suite.
+- **Build/test result**: PASS (10/10 test suites passed, 42/42 tests passed).
+- **Lint status**: PASS.
+- **Tests added/modified**: `__tests__/ledger.test.js` (Added Suite 5 with 3 test cases).
 
 ## Loaded Skills
 - None loaded.
+
+## Artifact Index
+- c:\Projects\FinScholarApp\.agents\worker_m2\DISPATCH.md — Dispatch log
+- c:\Projects\FinScholarApp\.agents\worker_m2\BRIEFING.md — Worker state & briefing
+- c:\Projects\FinScholarApp\.agents\worker_m2\progress.md — Progress log
+- c:\Projects\FinScholarApp\.agents\worker_m2\handoff.md — Handoff report

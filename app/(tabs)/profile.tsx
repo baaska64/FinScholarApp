@@ -58,6 +58,14 @@ export default function ProfileScreen() {
     const [thresholds, setThresholds] = useState({ high: 21, medium: 10, low: 5 });
     const [data, setData] = useState<any>(null);
 
+    const handleToggleTheme = () => {
+        // Wrap in setTimeout to avoid 'React state update on unmounted component' warnings 
+        // that NativeWind v2 sometimes throws when toggling global theme
+        setTimeout(() => {
+            toggleColorScheme();
+        }, 0);
+    };
+
     // Entrance animation
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const slideAnim = useRef(new Animated.Value(20)).current;
@@ -87,7 +95,7 @@ export default function ProfileScreen() {
             nd.settings.taskThresholds = thresholds;
             AsyncStorage.setItem('grade_ledger_v2_data', JSON.stringify(nd));
             setData(nd);
-            import('../../services/SyncService').then(({ SyncService }) => SyncService.pushLocalChanges(nd));
+            SyncService.pushLocalChanges(nd);
         }
         setShowThresholdSettings(false);
     };
@@ -120,6 +128,7 @@ export default function ProfileScreen() {
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
             <ScrollView contentContainerStyle={{ paddingBottom: 60 }} showsVerticalScrollIndicator={false}>
+              <View style={{ width: '100%', maxWidth: 800, alignSelf: 'center' }}>
                 <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
                     {/* Profile Header */}
                     <View style={{ alignItems: 'center', paddingTop: 32, paddingBottom: 24 }}>
@@ -149,7 +158,7 @@ export default function ProfileScreen() {
                                 icon={isDark ? 'moon' : 'sunny'}
                                 iconColor={isDark ? '#818cf8' : '#f59e0b'}
                                 label={isDark ? 'Dark Mode' : 'Light Mode'}
-                                onPress={toggleColorScheme}
+                                onPress={handleToggleTheme}
                                 isDark={isDark}
                                 theme={theme}
                             />
@@ -239,6 +248,7 @@ export default function ProfileScreen() {
                         )}
                     </View>
                 </Animated.View>
+              </View>
             </ScrollView>
 
             {/* Threshold Settings Modal */}

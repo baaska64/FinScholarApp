@@ -1,30 +1,33 @@
-# Handoff Report — Victory Confirmed
+# Sentinel Handoff Report
 
-## Observation
-The second Victory Auditor (Conversation ID: `b872c956-b278-4358-a6e1-8068c5ffc61d`) has completed the independent 3-phase verification and issued a **VICTORY CONFIRMED** verdict. The manual fixes applied to `app/(tabs)/calendar.tsx` resolved the timezone date-shifting regression under negative offsets, and all test suites have passed.
+## 1. Observation
+- Orchestrator (`teamwork_preview_swe`) successfully executed the implementation and 3 adversarial review rounds.
+- Independent Victory Auditor (`teamwork_preview_victory_auditor`) verified all deliverables against `ORIGINAL_REQUEST.md`.
+- Automated test suites (133 unit tests + 14 widget tests) passed with 100% success.
+- TypeScript compiler (`npx tsc --noEmit`) produced 0 errors.
+- Native build dry-run (`./gradlew processDebugResources --dry-run`) succeeded.
 
-## Logic Chain
-To address this request while conforming to the PROJECT SENTINEL instructions:
-1. Checked the audit report at `.agents/victory_auditor_gen2/handoff.md`.
-2. Verified that all requirements and acceptance criteria have been met:
-   - UI overhaul and mascot integration across all screens.
-   - Core AsyncStorage + Supabase parity, AI scan mocks, and calendars.
-   - Tasks feature port and Pomodoro widget companion.
-   - Timezone fixes for event editing and creation pre-fills.
-3. Verified that all verification steps (type check, bundling, tests) passed successfully.
-4. Updated `BRIEFING.md` phase to `complete` and marked the verdict as `VICTORY CONFIRMED`.
+## 2. Logic Chain
+1. Investigated root cause of persistent 3x2 widget grid size in Android launcher:
+   - Standard AOSP formula for widget cell span: `(columns * 70) - 30` dp by `(rows * 70) - 30` dp.
+   - For 4x5 grid: `(4 * 70) - 30 = 250dp` width, `(5 * 70) - 30 = 320dp` height.
+   - Android 12+ requires explicit `targetCellWidth="4"` and `targetCellHeight="5"` attributes in `widgetprovider_finscholarwidget.xml`.
+   - Android AppWidgetService caches provider XMLs keyed by package name; full uninstall (`adb uninstall com.lalex.finscholar`) or clean prebuild (`npx expo prebuild --clean`) clears the OS cache.
+2. Implemented automatic native padding in `widget/FinScholarWidget.tsx`:
+   - Configured root and inner containers with clean, responsive insets (`padding: 12` in empty state; `paddingHorizontal: 12`, `paddingTop: 10`, `paddingBottom: 8` with rounded corners).
+   - Applied typography clipping protections (`maxLines={1}`).
+3. Dispatched independent Victory Auditor to perform timeline analysis, anti-cheat code inspection, and clean verification.
 
-## Caveats
-- None. The project implementation is verified, regression-free, and complete.
+## 3. Caveats
+- When deploying the updated build to an emulator or physical device that previously ran an older version of the app, run `adb uninstall com.lalex.finscholar` before installing the new APK to invalidate the Android OS widget picker dimensions cache.
 
-## Conclusion
-The project is complete and verified. The results are ready to be reported back to the user.
+## 4. Conclusion
+- All requirements R1 and R2 are completed and confirmed.
+- Verdict: **VICTORY CONFIRMED**.
 
-## Verification Method
-All tests run in Phase 3 of the Victory Audit pass cleanly:
+## 5. Verification Method
 - `npx tsc --noEmit`
-- `npx expo export --platform web`
-- `node .agents/challenger_m3/challenge_tests.js`
-- `node .agents/challenger_m3/sync_bug_test.js`
-- `node .agents/challenger_m3/timezone_test.js`
-- `node .agents/challenger_m4/regression_checks.js`
+- `node scripts/run-tests.js`
+- `node widget/test-widget.js`
+- `cd android && gradlew processDebugResources --dry-run`
+- `npx expo config --type public`

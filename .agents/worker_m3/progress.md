@@ -1,25 +1,15 @@
-# progress.md — worker_m3
+# Progress Log - Worker M3
 
-Last visited: 2026-07-17T21:18:10+08:00
+Last visited: 2026-08-08T10:41:30Z
 
-## Milestone 3 Progress
-
-- [x] Fix Calendar & Timezone Bugs:
-  - Fixed cellWidth padding in VisualCalendar.tsx to use `48 + 40 + 4` (92px).
-  - Normalized date comparisons to string slice Comparisons (YYYY-MM-DD) in VisualCalendar.tsx and app/(tabs)/calendar.tsx.
-  - Constructed manual ISO date string on day press in VisualCalendar.tsx.
-  - Parsed selectedDateStr as local midnight in app/(tabs)/calendar.tsx Day Details modal.
-- [x] Port Tasks/Requirements Feature in app/(tabs)/requirements.tsx:
-  - Subject, Year, Term (Semester) selectors.
-  - Subjects filter chips list.
-  - Tasks lists grouped by status (Pending, Submitted, Graded).
-  - Task Add / Edit / Delete CRUD modal.
-  - Link task to grade Component.
-  - Auto-grading integration (syncing task graded status with grade items in ledger).
-  - Save and sync to AsyncStorage and Supabase (saveData).
-- [x] Autonomous Companion Features:
-  - Mascot Fin encourages user with randomized quotes in index.tsx Dashboard.
-  - Pomodoro Focus widget in requirements.tsx showing studying/sleeping/happy state of Fin.
-- [x] Build and Type Verification:
-  - Ran `npx tsc --noEmit` -> Passed with 0 errors!
-  - Ran `npx expo export --platform web` -> Passed successfully!
+- [x] Read DISPATCH.md, ORIGINAL_REQUEST.md, and `app/(tabs)/grades.tsx`.
+- [x] Integrate redesigned `GwaSummary` (Overall GWA banner with Fin mascot & side-by-side Semester/Year Donut Cards).
+- [x] Integrate redesigned `Tabs` (Term selector modal & All / Tracked view filter tabs).
+- [x] Integrate redesigned `SubjectCard` into main ledger list with score progress bars and action chips.
+- [x] Refactor header actions bar with Pro badge / Get Pro paywall trigger, Cloud Sync indicator, Settings button, and Profile navigation.
+- [x] Refactor selection toolbar in Edit Mode (Select All / Deselect All, Delete Selected count badge button, Done / Cancel pill).
+- [x] Refactor empty state cards (No terms found, No semester selected, No subjects added, No tracked subjects) with rounded surfaces, soft drop shadows, clean typography, and pill CTA buttons.
+- [x] Preserve full feature parity for Add subject modal (`ensureSubjectExists`), grade tracking toggle (`handleToggleTracking`), single delete (`handleDeleteSubject`), batch delete (`handleDeleteSelected`), duplicate subject (`handleDuplicateSubject`), ActiveSubjectView detail view, and grading system settings switcher.
+- [x] Verified zero TypeScript compilation errors in `app/(tabs)/grades.tsx` via `npx tsc --noEmit`.
+- [x] Verified 100% test pass rate (42/42 tests passing across 10 test suites) via `npm test`.
+- [x] Written handoff report to `c:\Projects\FinScholarApp\.agents\worker_m3\handoff.md`.

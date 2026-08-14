@@ -1,20 +1,13 @@
-# Progress — Milestone 2
+# Progress Log - worker_m2
 
-- Last visited: 2026-07-17T21:13:00+08:00
-- Mission: Implement Milestone 2
-- Current status: All tasks fully completed and verified! Preparing handoff.
+Last visited: 2026-08-08T10:39:10Z
 
-## Completed Tasks
-- [x] Record original request in ORIGINAL_REQUEST.md
-- [x] Initialize BRIEFING.md
-- [x] Move temp_active.tsx to worker folder as .bak
-- [x] Resolve TypeScript type errors (app/index.tsx, components/Themed.tsx, components/schedule/AttendanceTracker.tsx, components/schedule/ClassModals.tsx, components/schedule/ScheduleScannerModal.tsx, app/(tabs)/index.tsx, components/ExternalLink.tsx, components/ledger/ActiveSubjectView.tsx)
-- [x] Redesign Screens/Views for Cute UI/UX Overhaul (Dashboard, Calendar, Schedule, Grades, Profile)
-- [x] Deep Integration of Fin Mascot (Empty Term Manager, Clear Skies, Top GWA, Empty Timetable)
-- [x] Run Build & Type Verification (`npx tsc --noEmit` and `npx expo export --platform web` pass cleanly)
-
-## Active Tasks
-- [x] Generate Handoff Report and message orchestrator
-
-## Future Tasks
-- None! All tasks complete.
+- [x] Step 1: Update DISPATCH.md, BRIEFING.md, and progress.md
+- [x] Step 2: Read current implementation of `components/ledger/Tabs.tsx`, `components/ledger/SubjectCard.tsx`, `constants/Theme.ts`, and test files
+- [x] Step 3: Run existing tests and `npx tsc --noEmit` to verify baseline state
+- [x] Step 4: Redesign `components/ledger/Tabs.tsx` with pill-shaped buttons, soft drop shadows, clean typography, dynamic active highlight, and term selector modal styling
+- [x] Step 5: Redesign `components/ledger/SubjectCard.tsx` with rounded card surfaces, soft shadows, pill status badges, score progress bar, and rounded action buttons
+- [x] Step 6: Verify full prop and callback parity on `TabsProps` and `SubjectCardProps`
+- [x] Step 7: Run `npx tsc --noEmit` and `npm test` to confirm compilation and test passes (42/42 tests pass)
+- [x] Step 8: Add unit tests for ledger components contract in `__tests__/ledger.test.js` (Suite 5)
+- [x] Step 9: Write `handoff.md` and send completion message to parent

@@ -22,6 +22,8 @@ export {
   ErrorBoundary,
 } from 'expo-router';
 
+import { StatusBar } from 'expo-status-bar';
+
 export const unstable_settings = {
   // Ensure that reloading on `/modal` keeps a back button present.
   initialRouteName: '(tabs)',
@@ -56,6 +58,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     NotificationService.initNotifications();
+    // ScreenOrientation removed to prevent native module crash
   }, []);
 
   useEffect(() => {
@@ -111,9 +114,11 @@ function RootLayoutNav() {
 
   return (
     <ThemeProvider value={navTheme}>
+      <StatusBar style="auto" />
       <SyncProvider>
         <SemesterProvider>
           <Stack screenOptions={{ animation: 'slide_from_right' }}>
+            <Stack.Screen name="index" options={{ headerShown: false, animation: 'none' }} />
             <Stack.Screen name="welcome" options={{ headerShown: false, animation: 'fade' }} />
             <Stack.Screen name="login" options={{ headerShown: false, animation: 'slide_from_right' }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false, animation: 'fade' }} />

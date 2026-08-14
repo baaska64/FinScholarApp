@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, Animated, Dimensions, Platform } from 're
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
 import { getTheme } from '@/constants/Theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -32,21 +33,25 @@ export default function CustomTabBar({ state, descriptors, navigation }: CustomT
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const theme = getTheme(isDark);
+  const insets = useSafeAreaInsets();
 
-  const focusedIndex = state.index;
+  const currentRouteName = state.routes[state.index]?.name;
+  const activeTabIndex = TABS.findIndex(t => t.key === currentRouteName);
+  const visualIndex = activeTabIndex >= 0 ? activeTabIndex : 0;
+  
   const tabWidth = SCREEN_WIDTH / TABS.length;
 
   // Sliding indicator animation
-  const slideAnim = useRef(new Animated.Value(focusedIndex * tabWidth)).current;
+  const slideAnim = useRef(new Animated.Value(visualIndex * tabWidth)).current;
 
   useEffect(() => {
     Animated.spring(slideAnim, {
-      toValue: focusedIndex * tabWidth,
+      toValue: visualIndex * tabWidth,
       useNativeDriver: true,
       friction: 8,
       tension: 60,
     }).start();
-  }, [focusedIndex]);
+  }, [visualIndex, tabWidth]);
 
   return (
     <View
@@ -58,7 +63,7 @@ export default function CustomTabBar({ state, descriptors, navigation }: CustomT
         backgroundColor: isDark ? 'rgba(30, 41, 59, 0.95)' : 'rgba(255, 255, 255, 0.95)',
         borderTopWidth: 1,
         borderTopColor: isDark ? theme.tabBorder : '#f1f5f9',
-        paddingBottom: Platform.OS === 'ios' ? 28 : 12,
+        paddingBottom: Platform.OS === 'ios' ? Math.max(28, insets.bottom) : Math.max(12, insets.bottom + 8),
         paddingTop: 8,
         ...Platform.select({
           ios: { shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.06, shadowRadius: 12 },
@@ -90,25 +95,27 @@ export default function CustomTabBar({ state, descriptors, navigation }: CustomT
 
       <View style={{ flexDirection: 'row' }}>
         {TABS.map((tab, index) => {
-          const isFocused = index === focusedIndex;
-          const route = state.routes[index];
-          const descriptor = descriptors[route?.key];
+          const route = state.routes.find((r: any) => r.name === tab.key);
+          const isFocused = currentRouteName === tab.key;
+          const descriptor = route ? descriptors[route.key] : null;
 
           const onPress = () => {
+            if (!route) return;
             const event = navigation.emit({
               type: 'tabPress',
-              target: route?.key,
+              target: route.key,
               canPreventDefault: true,
             });
             if (!isFocused && !event.defaultPrevented) {
-              navigation.navigate(route?.name, route?.params);
+              navigation.navigate(route.name, route.params);
             }
           };
 
           const onLongPress = () => {
+            if (!route) return;
             navigation.emit({
               type: 'tabLongPress',
-              target: route?.key,
+              target: route.key,
             });
           };
 

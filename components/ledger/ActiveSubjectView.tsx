@@ -81,7 +81,7 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
     
     let targetMsg = "";
     let targetIcon = "";
-    let distributionHtml = null;
+    let distributionHtml: any = null;
     
     if (needed <= 0) {
         targetMsg = "You have reached your desired grade!";

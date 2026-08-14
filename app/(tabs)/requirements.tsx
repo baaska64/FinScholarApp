@@ -82,26 +82,8 @@ export default function RequirementsScreen() {
 
     const [data, setData] = useState<any>(null);
     const [user, setUser] = useState<any>(null);
-  const { selectedYear, selectedSemester, setYearAndSemester, isLoaded } = useSemesterContext();
-  const [activeYearId, setLocalYearId] = useState<string | null>(null);
-  const [activeSemId, setLocalSemId] = useState<string | null>(null);
+  const { selectedYear: activeYearId, selectedSemester: activeSemId } = useSemesterContext();
 
-  useEffect(() => {
-    if (isLoaded) {
-      if (selectedYear) setLocalYearId(selectedYear);
-      if (selectedSemester) setLocalSemId(selectedSemester);
-    }
-  }, [isLoaded, selectedYear, selectedSemester]);
-
-  const setActiveYearId = (id: string | null) => {
-    setLocalYearId(id);
-    if (id && activeSemId) setYearAndSemester(id, activeSemId);
-  };
-
-  const setActiveSemId = (id: string | null) => {
-    setLocalSemId(id);
-    if (activeYearId && id) setYearAndSemester(activeYearId, id);
-  };
     const [syncStatus, setSyncStatus] = useState<'syncing' | 'saved' | 'error' | 'offline'>('offline');
     const params = useLocalSearchParams();
     const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<string>(
@@ -606,13 +588,20 @@ export default function RequirementsScreen() {
             {/* Header */}
             <View style={{
                 flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-                paddingHorizontal: 24, paddingVertical: 16, zIndex: 10,
+                paddingHorizontal: 16, paddingVertical: 16, zIndex: 10,
                 borderBottomWidth: 1, borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
                 backgroundColor: theme.surface,
                 ...(!isDark ? { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 4 } : {}),
             }}>
-                <Text style={{ ...Typography.title, color: theme.text }}>Tasks & Tracker</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, paddingRight: 12 }}>
+                    <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginRight: 12, backgroundColor: isDark ? 'rgba(37,99,235,0.2)' : '#dbeafe' }}>
+                        <Ionicons name="list" size={20} color={isDark ? '#60a5fa' : '#3b82f6'} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ ...Typography.title, color: theme.text }}>Tasks & Tracker</Text>
+                    </View>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={22} color={theme.textTertiary} />}
                     {syncStatus === 'saved' && <Ionicons name="cloud-done" size={22} color={theme.success} />}
                     {(syncStatus === 'error' || syncStatus === 'offline') && <Ionicons name="cloud-offline" size={22} color={theme.textTertiary} />}
@@ -640,13 +629,6 @@ export default function RequirementsScreen() {
                         years={data.years} 
                         activeYearId={activeYearId} 
                         activeSemId={activeSemId} 
-                        onSelectYear={id => {
-                            setActiveYearId(id);
-                            const yr = data.years.find((y: any) => y.id === id);
-                            if (yr && yr.semesters.length > 0) setActiveSemId(yr.semesters[0].id);
-                            else setActiveSemId(null);
-                        }}
-                        onSelectSem={id => setActiveSemId(id)}
                     />
                 ) : (
                     <View className="py-8 items-center">
@@ -929,7 +911,7 @@ export default function RequirementsScreen() {
 
                             {/* Score Inputs (only if graded and component linked) */}
                             {form.status === 'graded' && form.linkedComponentId ? (
-                                <View className="flex-row mb-4" style={{ gap: 12 }}>
+                                <View className="flex-row mb-4" style={{ gap: 8 }}>
                                     <View className="flex-1">
                                         <Text className={`font-nunito-bold text-sm mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Earned Score</Text>
                                         <TextInput
@@ -957,7 +939,7 @@ export default function RequirementsScreen() {
 
                             {/* Due Date & Time */}
                             <Text className={`font-nunito-bold text-sm mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Deadline</Text>
-                            <View className="flex-row" style={{ gap: 12 }}>
+                            <View className="flex-row" style={{ gap: 8 }}>
                                 <TouchableOpacity 
                                     onPress={() => setShowDatePicker(true)}
                                     className={`flex-1 p-4 rounded-2xl mb-6 font-nunito border flex-row items-center justify-between ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'}`}

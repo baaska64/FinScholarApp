@@ -29,3 +29,6 @@ This document serves as the single source of truth for the app's current state, 
   - A Supabase PostgreSQL trigger automatically grants `is_premium = true` to the first 50 users who sign up in the `profiles` table.
   - The frontend `SyncService` fetches this flag. If the user is premium, they bypass the RevenueCat paywall entirely.
   - *Note: Privacy policies and Google Play declarations must reflect that you process payments and offer digital goods.*
+
+## 🛠 Development Environment
+- **Emulator:** The user uses **LDPlayer**. Beware of ADB port conflicts (LDPlayer often uses port 5555 or 5554 but operates on its own daemon). Expo CLI might sometimes fail to connect; when in doubt, use native Gradle builds (`.\gradlew.bat installDebug`) to bypass Expo CLI's aggressive emulator checks.

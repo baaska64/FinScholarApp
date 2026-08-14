@@ -1,39 +1,63 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Modal, TouchableOpacity, StyleSheet, Linking } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, StyleSheet, Linking, ImageBackground, Dimensions, ScrollView } from 'react-native';
 import { supabase } from '../services/supabaseClient';
-import Constants from 'expo-constants';
+import appJson from '../app.json';
 import { useColorScheme } from 'nativewind';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const SCREEN_HEIGHT = Dimensions.get('window').height;
+const LAST_SEEN_VERSION_KEY = '@last_seen_version';
+
+// The hardcoded changelog for the current version
+const CURRENT_CHANGELOG = [
+  { icon: 'grid', title: '4x5 Widget Redesign', desc: 'The home screen widget is now natively 4x5, perfectly padded and properly sized out of the box.' },
+  { icon: 'color-palette', title: 'Premium UI Polish', desc: 'Sleek new glassmorphism and rounded corners applied across menus and popups.' },
+  { icon: 'bug', title: 'Bug Fixes', desc: 'General performance improvements and Android 12+ launcher compatibility fixes.' }
+];
 
 export default function UpdateWarningModal() {
-  const [visible, setVisible] = useState(false);
+  const [modalType, setModalType] = useState<'none' | 'changelog' | 'update'>('none');
   const [updateInfo, setUpdateInfo] = useState<any>(null);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
 
+  const currentVersion = appJson.expo.version || '1.0.0';
+
   useEffect(() => {
-    checkUpdate();
+    checkAppStates();
   }, []);
 
-  const checkUpdate = async () => {
+  const checkAppStates = async () => {
     try {
+      // 1. Check if we need to show the Changelog (first time opening this new version)
+      const lastSeenVersion = await AsyncStorage.getItem(LAST_SEEN_VERSION_KEY);
+      let showingChangelog = false;
+      
+      if (!lastSeenVersion || isNewerVersion(lastSeenVersion, currentVersion)) {
+        setModalType('changelog');
+        showingChangelog = true;
+      }
+
+      // 2. Check Supabase for remote updates in the background
       const { data, error } = await supabase
         .from('app_versions')
         .select('*')
         .eq('id', 1)
         .single();
         
-      if (error || !data) return;
-
-      const currentVersion = Constants.expoConfig?.version || '1.0.0';
-      
-      // Simple semver compare
-      if (isNewerVersion(currentVersion, data.latest_version)) {
-        setUpdateInfo(data);
-        setVisible(true);
+      if (!error && data) {
+        if (isNewerVersion(currentVersion, data.latest_version)) {
+          setUpdateInfo(data);
+          // Only show update modal immediately if we aren't already showing the changelog
+          if (!showingChangelog) {
+            setModalType('update');
+          }
+        }
       }
     } catch (e) {
-      console.error("Failed to check for updates:", e);
+      console.error("Failed to check app states:", e);
     }
   };
 
@@ -47,41 +71,109 @@ export default function UpdateWarningModal() {
     return false;
   };
 
-  if (!visible || !updateInfo) return null;
+  const handleDismissChangelog = async () => {
+    await AsyncStorage.setItem(LAST_SEEN_VERSION_KEY, currentVersion);
+    // If an update was discovered while they were reading the changelog, pivot to it
+    if (updateInfo) {
+      setModalType('update');
+    } else {
+      setModalType('none');
+    }
+  };
+
+  if (modalType === 'none') return null;
 
   return (
-    <Modal visible={visible} transparent animationType="fade">
-      <View style={styles.overlay}>
-        <View style={[styles.modalContainer, { backgroundColor: isDark ? '#1e293b' : 'white' }]}>
-          <View style={[styles.iconContainer, { backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#e0e7ff' }]}>
-            <Ionicons name="cloud-download" size={32} color="#6366f1" />
-          </View>
-          
-          <Text style={[styles.title, { color: isDark ? 'white' : '#0f172a' }]}>Update Available</Text>
-          <Text style={[styles.message, { color: isDark ? '#94a3b8' : '#475569' }]}>
-            {updateInfo.update_message || "A new version is available. Update now to get the latest features!"}
-          </Text>
+    <Modal visible={true} transparent animationType="slide">
+      <View className="flex-1 justify-end bg-black/60">
+        <TouchableOpacity className="absolute inset-0" onPress={() => modalType === 'update' ? setModalType('none') : handleDismissChangelog()} activeOpacity={1} />
+        
+        <View className="w-full rounded-t-3xl overflow-hidden border-t border-white/20" style={{ maxHeight: SCREEN_HEIGHT * 0.85 }}>
+          <ImageBackground 
+            source={require('../assets/images/GlassBg.png')} 
+            style={{ width: '100%' }}
+            resizeMode="cover"
+          >
+            <BlurView intensity={90} tint="dark" style={{ width: '100%' }}>
+              <ScrollView contentContainerStyle={{ padding: 24, paddingTop: 40, paddingBottom: 40 }}>
+                
+                {modalType === 'changelog' && (
+                  <>
+                    <View className="w-16 h-16 rounded-full items-center justify-center bg-indigo-500/20 border border-indigo-400/30 self-center mb-4">
+                      <Ionicons name="sparkles" size={32} color="#818cf8" />
+                    </View>
+                    <Text className="text-3xl font-extrabold text-white text-center mb-2" style={styles.textShadow}>
+                      What's New
+                    </Text>
+                    <Text className="text-base text-center text-indigo-200 font-semibold mb-6" style={styles.textShadow}>
+                      Version {currentVersion} is here!
+                    </Text>
 
-          <View style={styles.buttonRow}>
-            <TouchableOpacity 
-              style={[styles.button, styles.laterButton, { backgroundColor: isDark ? '#334155' : '#f1f5f9' }]} 
-              onPress={() => setVisible(false)}
-            >
-              <Text style={[styles.buttonText, { color: isDark ? '#cbd5e1' : '#475569' }]}>Later</Text>
-            </TouchableOpacity>
+                    <View className="bg-black/40 rounded-3xl p-6 mb-8 border border-white/10">
+                      {CURRENT_CHANGELOG.map((item, index) => (
+                        <View key={index} className={`flex-row items-center ${index !== CURRENT_CHANGELOG.length - 1 ? 'mb-5' : ''}`}>
+                          <View className="w-10 h-10 rounded-full bg-white/10 items-center justify-center mr-4">
+                            <Ionicons name={item.icon as any} size={20} color="#818cf8" />
+                          </View>
+                          <View className="flex-1">
+                            <Text className="text-white font-bold text-base">{item.title}</Text>
+                            <Text className="text-slate-300 text-sm mt-1">{item.desc}</Text>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
 
-            <TouchableOpacity 
-              style={[styles.button, styles.updateButton]} 
-              onPress={() => {
-                if (updateInfo.store_url) {
-                  Linking.openURL(updateInfo.store_url);
-                }
-                setVisible(false);
-              }}
-            >
-              <Text style={[styles.buttonText, { color: 'white' }]}>Update Now</Text>
-            </TouchableOpacity>
-          </View>
+                    <TouchableOpacity 
+                      className="py-4 rounded-full flex-row items-center justify-center shadow-lg bg-indigo-500 shadow-indigo-500/50"
+                      onPress={handleDismissChangelog}
+                    >
+                      <Text className="text-white font-extrabold text-lg tracking-wider">
+                        Awesome!
+                      </Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+
+                {modalType === 'update' && (
+                  <>
+                    <View className="w-16 h-16 rounded-full items-center justify-center bg-emerald-500/20 border border-emerald-400/30 self-center mb-4">
+                      <Ionicons name="cloud-download" size={32} color="#34d399" />
+                    </View>
+                    <Text className="text-3xl font-extrabold text-white text-center mb-2" style={styles.textShadow}>
+                      Update Available
+                    </Text>
+                    <Text className="text-base text-center text-slate-200 font-semibold mb-8 px-2" style={styles.textShadow}>
+                      {updateInfo?.update_message || "A new version is available. Update now to get the latest features!"}
+                    </Text>
+
+                    <View className="flex-row justify-between mb-4 gap-4">
+                      <TouchableOpacity 
+                        style={{ flex: 1 }}
+                        className="py-4 rounded-full items-center justify-center border-2 border-white/10 bg-black/40"
+                        onPress={() => setModalType('none')}
+                      >
+                        <Text className="text-white font-bold text-base">Later</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity 
+                        style={{ flex: 1 }}
+                        className="py-4 rounded-full items-center justify-center shadow-lg bg-emerald-500 shadow-emerald-500/50"
+                        onPress={() => {
+                          if (updateInfo?.store_url) {
+                            Linking.openURL(updateInfo.store_url);
+                          }
+                          setModalType('none');
+                        }}
+                      >
+                        <Text className="text-white font-extrabold text-base">Update Now</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
+
+              </ScrollView>
+            </BlurView>
+          </ImageBackground>
         </View>
       </View>
     </Modal>
@@ -89,62 +181,10 @@ export default function UpdateWarningModal() {
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  modalContainer: {
-    width: '100%',
-    maxWidth: 400,
-    borderRadius: 24,
-    padding: 24,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  iconContainer: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  message: {
-    fontSize: 16,
-    textAlign: 'center',
-    lineHeight: 24,
-    marginBottom: 24,
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    gap: 12,
-    width: '100%',
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  laterButton: {
-    // bg injected
-  },
-  updateButton: {
-    backgroundColor: '#6366f1',
-  },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  textShadow: {
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  }
 });
+

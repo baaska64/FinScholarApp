@@ -4,27 +4,36 @@ import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
 import { useRouter } from 'expo-router';
 import { useSemesterContext } from '@/components/SemesterContext';
+import { getTheme, Radius, Shadows } from '@/constants/Theme';
 
-interface TabsProps {
-    years: any[];
-    activeYearId: string | null;
-    activeSemId: string | null;
-    onSelectYear: (id: string) => void;
-    onSelectSem: (id: string) => void;
+export interface TabsProps {
+    years?: any[];
+    activeYearId?: string | null;
+    activeSemId?: string | null;
+    onSelectYear?: (id: string) => void;
+    onSelectSem?: (id: string) => void;
+    activeTab?: 'all' | 'tracked';
+    setActiveTab?: (tab: 'all' | 'tracked') => void;
 }
 
 export default function Tabs({ 
-    years, activeYearId, activeSemId, 
-    onSelectYear, onSelectSem
+    years = [], 
+    activeYearId = null, 
+    activeSemId = null, 
+    onSelectYear, 
+    onSelectSem,
+    activeTab,
+    setActiveTab,
 }: TabsProps) {
     const { colorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
+    const theme = getTheme(isDark);
     const [modalVisible, setModalVisible] = useState(false);
     const { setYearAndSemester } = useSemesterContext();
     const router = useRouter();
 
-    const currentYear = years.find(y => y.id === activeYearId);
-    const currentSem = currentYear?.semesters.find((s: any) => s.id === activeSemId);
+    const currentYear = years.find((y: any) => y.id === activeYearId);
+    const currentSem = currentYear?.semesters?.find((s: any) => s.id === activeSemId);
 
     const buttonLabel = currentYear && currentSem 
         ? `${currentYear.name} • ${currentSem.name}`
@@ -34,39 +43,119 @@ export default function Tabs({
 
     return (
         <View className="mb-4 mt-2 z-50">
-            <TouchableOpacity 
-                onPress={() => setModalVisible(true)}
-                activeOpacity={0.8}
-                className={`flex-row items-center justify-between px-5 py-3.5 rounded-2xl border ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200 shadow-sm shadow-slate-200'}`}
-            >
-                <View className="flex-row items-center">
-                    <View className={`w-8 h-8 rounded-full items-center justify-center mr-3 ${isDark ? 'bg-blue-900/40' : 'bg-blue-100'}`}>
-                        <Ionicons name="calendar" size={16} color={isDark ? '#60a5fa' : '#3b82f6'} />
+            <View className="flex-row items-center justify-between gap-3">
+                {/* Term Selector Button */}
+                <TouchableOpacity 
+                    onPress={() => setModalVisible(true)}
+                    activeOpacity={0.7}
+                    style={{
+                        borderRadius: Radius.full,
+                        borderWidth: 1,
+                        borderColor: isDark ? theme.cardBorder : '#e2e8f0',
+                        backgroundColor: isDark ? theme.surfaceSecondary : theme.surface,
+                        ...Shadows.sm,
+                    }}
+                    className="flex-1 flex-row items-center justify-between px-4 py-2.5"
+                >
+                    <View className="flex-row items-center flex-1 mr-2">
+                        <View className={`w-8 h-8 rounded-full items-center justify-center mr-2.5 ${isDark ? 'bg-indigo-950/60' : 'bg-indigo-50'}`}>
+                            <Ionicons name="calendar" size={15} color={isDark ? '#818cf8' : '#4f46e5'} />
+                        </View>
+                        <Text 
+                            numberOfLines={1} 
+                            className={`font-nunito-bold text-sm flex-1 ${isDark ? 'text-slate-200' : 'text-slate-800'}`}
+                        >
+                            {buttonLabel}
+                        </Text>
                     </View>
-                    <Text className={`font-nunito-bold text-base ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
-                        {buttonLabel}
-                    </Text>
-                </View>
-                <Ionicons name="chevron-down" size={20} color={isDark ? '#94a3b8' : '#64748b'} />
-            </TouchableOpacity>
+                    <Ionicons name="chevron-down" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
+                </TouchableOpacity>
 
+                {/* View Filter Tabs (All / Tracked) */}
+                {setActiveTab && (
+                    <View 
+                        style={{ borderRadius: Radius.full }}
+                        className={`flex-row p-1 border ${isDark ? 'bg-slate-800/80 border-slate-700/60' : 'bg-slate-100 border-slate-200'}`}
+                    >
+                        <TouchableOpacity
+                            onPress={() => setActiveTab('all')}
+                            activeOpacity={0.7}
+                            style={{ borderRadius: Radius.full, ...(activeTab === 'all' ? Shadows.sm : {}) }}
+                            className={`px-3 py-1.5 flex-row items-center ${
+                                activeTab === 'all' 
+                                    ? (isDark ? 'bg-indigo-500' : 'bg-indigo-600') 
+                                    : 'bg-transparent'
+                            }`}
+                        >
+                            <Ionicons 
+                                name="layers-outline" 
+                                size={14} 
+                                color={activeTab === 'all' ? '#ffffff' : (isDark ? '#94a3b8' : '#64748b')} 
+                                style={{ marginRight: 4 }}
+                            />
+                            <Text className={`font-nunito-bold text-xs ${
+                                activeTab === 'all' ? 'text-white' : (isDark ? 'text-slate-400' : 'text-slate-600')
+                            }`}>
+                                All
+                            </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            onPress={() => setActiveTab('tracked')}
+                            activeOpacity={0.7}
+                            style={{ borderRadius: Radius.full, ...(activeTab === 'tracked' ? Shadows.sm : {}) }}
+                            className={`px-3 py-1.5 flex-row items-center ${
+                                activeTab === 'tracked' 
+                                    ? (isDark ? 'bg-indigo-500' : 'bg-indigo-600') 
+                                    : 'bg-transparent'
+                            }`}
+                        >
+                            <Ionicons 
+                                name="eye-outline" 
+                                size={14} 
+                                color={activeTab === 'tracked' ? '#ffffff' : (isDark ? '#94a3b8' : '#64748b')} 
+                                style={{ marginRight: 4 }}
+                            />
+                            <Text className={`font-nunito-bold text-xs ${
+                                activeTab === 'tracked' ? 'text-white' : (isDark ? 'text-slate-400' : 'text-slate-600')
+                            }`}>
+                                Tracked
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+            </View>
+
+            {/* Academic Term Switcher Modal */}
             <Modal
                 visible={modalVisible}
                 transparent={true}
                 animationType="slide"
                 onRequestClose={() => setModalVisible(false)}
             >
-                <View className="flex-1 justify-end bg-black/50">
+                <View className="flex-1 justify-end bg-black/60">
                     <Pressable className="flex-1" onPress={() => setModalVisible(false)} />
                     
-                    <View className={`rounded-t-[32px] pt-4 pb-10 px-6 max-h-[80%] ${isDark ? 'bg-slate-900' : 'bg-white'}`}>
-                        <View className="items-center mb-6">
+                    <View 
+                        style={{ borderTopLeftRadius: Radius['4xl'], borderTopRightRadius: Radius['4xl'] }}
+                        className={`pt-4 pb-10 px-6 max-h-[80%] ${isDark ? 'bg-slate-900' : 'bg-white'}`}
+                    >
+                        <View className="items-center mb-5">
                             <View className={`w-12 h-1.5 rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
                         </View>
                         
                         <View className="flex-row justify-between items-center mb-6">
-                            <Text className={`font-nunito-black text-2xl ${isDark ? 'text-white' : 'text-slate-800'}`}>Select Term</Text>
-                            <TouchableOpacity onPress={() => setModalVisible(false)} className={`w-8 h-8 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                            <View className="flex-row items-center">
+                                <View className={`w-8 h-8 rounded-full items-center justify-center mr-2.5 ${isDark ? 'bg-indigo-950/60' : 'bg-indigo-50'}`}>
+                                    <Ionicons name="calendar-outline" size={18} color={isDark ? '#818cf8' : '#4f46e5'} />
+                                </View>
+                                <Text className={`font-nunito-black text-2xl ${isDark ? 'text-white' : 'text-slate-800'}`}>Select Term</Text>
+                            </View>
+                            <TouchableOpacity 
+                                onPress={() => setModalVisible(false)} 
+                                activeOpacity={0.7}
+                                className={`w-8 h-8 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
+                            >
                                 <Ionicons name="close" size={20} color={isDark ? '#cbd5e1' : '#475569'} />
                             </TouchableOpacity>
                         </View>
@@ -74,8 +163,8 @@ export default function Tabs({
                         <ScrollView showsVerticalScrollIndicator={false}>
                             {years.length === 0 && (
                                 <View className="items-center py-8">
-                                    <View className={`w-16 h-16 rounded-full items-center justify-center mb-4 ${isDark ? 'bg-indigo-900/30' : 'bg-indigo-100'}`}>
-                                        <Ionicons name="school-outline" size={32} color={isDark ? '#818cf8' : '#6366f1'} />
+                                    <View className={`w-16 h-16 rounded-full items-center justify-center mb-4 ${isDark ? 'bg-indigo-900/30' : 'bg-indigo-50'}`}>
+                                        <Ionicons name="school-outline" size={32} color={isDark ? '#818cf8' : '#4f46e5'} />
                                     </View>
                                     <Text className={`font-nunito-bold text-lg mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>No Terms Found</Text>
                                     <Text className={`font-nunito text-center px-4 mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
@@ -84,48 +173,65 @@ export default function Tabs({
                                     <TouchableOpacity
                                         onPress={() => {
                                             setModalVisible(false);
-                                            router.push('/academic-manager');
+                                            router.push('/(tabs)/academic-manager');
                                         }}
-                                        className={`px-6 py-3 rounded-xl flex-row items-center ${isDark ? 'bg-indigo-500' : 'bg-indigo-600'}`}
+                                        activeOpacity={0.8}
+                                        style={{ borderRadius: Radius.full, ...Shadows.sm }}
+                                        className={`px-6 py-3 flex-row items-center ${isDark ? 'bg-indigo-500' : 'bg-indigo-600'}`}
                                     >
                                         <Ionicons name="add" size={20} color="white" />
-                                        <Text className="font-nunito-bold text-white ml-2">Setup Academic Term</Text>
+                                        <Text className="font-nunito-bold text-white ml-2 text-sm">Setup Academic Term</Text>
                                     </TouchableOpacity>
                                 </View>
                             )}
                             
-                            {years.map(year => (
+                            {years.map((year: any) => (
                                 <View key={year.id} className="mb-6">
                                     <View className="flex-row items-center mb-3 px-2">
-                                        <Ionicons name="school" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-                                        <Text className={`font-nunito-bold text-base ml-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                                        <Ionicons name="school-outline" size={18} color={isDark ? '#818cf8' : '#4f46e5'} />
+                                        <Text className={`font-nunito-bold text-base ml-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                                             {year.name}
                                         </Text>
                                     </View>
                                     
-                                    <View className={`rounded-3xl overflow-hidden border ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
-                                        {year.semesters.length === 0 && (
+                                    <View 
+                                        style={{ borderRadius: Radius['2xl'] }}
+                                        className={`overflow-hidden border ${isDark ? 'bg-slate-800/80 border-slate-700/70' : 'bg-slate-50/80 border-slate-200/80'}`}
+                                    >
+                                        {(!year.semesters || year.semesters.length === 0) && (
                                             <View className="p-4">
                                                 <Text className={`font-nunito text-sm italic ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>No semesters added.</Text>
                                             </View>
                                         )}
-                                        {year.semesters.map((sem: any, index: number) => {
+                                        {year.semesters?.map((sem: any, index: number) => {
                                             const isSelected = year.id === activeYearId && sem.id === activeSemId;
                                             return (
                                                 <TouchableOpacity
                                                     key={sem.id}
+                                                    activeOpacity={0.7}
                                                     onPress={() => {
-                                                        // Bypass the buggy sequential updates in parent components
+                                                        if (onSelectYear) onSelectYear(year.id);
+                                                        if (onSelectSem) onSelectSem(sem.id);
                                                         setYearAndSemester(year.id, sem.id);
                                                         setModalVisible(false);
                                                     }}
-                                                    className={`flex-row items-center justify-between p-4 ${index !== year.semesters.length - 1 ? (isDark ? 'border-b border-slate-700' : 'border-b border-slate-200') : ''} ${isSelected ? (isDark ? 'bg-blue-900/30' : 'bg-blue-50') : ''}`}
+                                                    className={`flex-row items-center justify-between p-4 ${
+                                                        index !== year.semesters.length - 1 
+                                                            ? (isDark ? 'border-b border-slate-700/60' : 'border-b border-slate-200/80') 
+                                                            : ''
+                                                    } ${isSelected ? (isDark ? 'bg-indigo-950/40' : 'bg-indigo-50/80') : ''}`}
                                                 >
-                                                    <Text className={`font-nunito-bold text-lg ${isSelected ? (isDark ? 'text-blue-400' : 'text-blue-600') : (isDark ? 'text-slate-200' : 'text-slate-700')}`}>
-                                                        {sem.name}
-                                                    </Text>
+                                                    <View className="flex-row items-center">
+                                                        <Text className={`font-nunito-bold text-base ${
+                                                            isSelected 
+                                                                ? (isDark ? 'text-indigo-400' : 'text-indigo-600') 
+                                                                : (isDark ? 'text-slate-200' : 'text-slate-700')
+                                                        }`}>
+                                                            {sem.name}
+                                                        </Text>
+                                                    </View>
                                                     {isSelected && (
-                                                        <Ionicons name="checkmark-circle" size={24} color={isDark ? '#60a5fa' : '#3b82f6'} />
+                                                        <Ionicons name="checkmark-circle" size={22} color={isDark ? '#818cf8' : '#4f46e5'} />
                                                     )}
                                                 </TouchableOpacity>
                                             );
@@ -140,3 +246,4 @@ export default function Tabs({
         </View>
     );
 }
+
