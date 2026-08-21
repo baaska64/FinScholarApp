@@ -35,6 +35,14 @@ const wavyDividerSvg = `
 </svg>
 `;
 
+function getWavyDividerSvg(fillColor: string = '#ffffff'): string {
+  return `
+<svg viewBox="0 0 400 24" width="100%" height="24" preserveAspectRatio="none" fill="none">
+  <path d="M0,12 C100,24 200,0 300,16 C350,24 380,18 400,12 L400,24 L0,24 Z" fill="${fillColor}" />
+</svg>
+`;
+}
+
 export function getFirstGrapheme(str: string): string {
   const cleanStr = String(str ?? '').trim();
   if (!cleanStr) return 'C';
@@ -53,17 +61,68 @@ export function getFirstGrapheme(str: string): string {
   return (Array.from(cleanStr)[0] || 'C').toUpperCase();
 }
 
-export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetProps) {
+export function FinScholarWidget({ classes = [], isDark = false, widgetInfo }: FinScholarWidgetProps) {
   const todayStr    = new Date().toISOString().split('T')[0];
   const deepLinkUrl = `finscholarapp://schedule?viewMode=attendance&targetDate=${todayStr}&trigger=${Date.now()}`;
 
-  const wHeight = typeof widgetInfo?.height === 'number' && !isNaN(widgetInfo.height) ? widgetInfo.height : 400; 
-  const isVerySmall = wHeight < 150; 
-  const isSmall = wHeight < 260; 
+  const theme = isDark
+    ? {
+        gradientFrom: '#0f172a' as ColorProp,
+        gradientTo: '#1e293b' as ColorProp,
+        nextPanelBg: 'rgba(255, 255, 255, 0.16)' as ColorProp,
+        activeStatusText: 'rgba(255, 255, 255, 0.75)' as ColorProp,
+        activeTitleText: '#f8fafc' as ColorProp,
+        activeSubText: 'rgba(255, 255, 255, 0.85)' as ColorProp,
+        activeTimeBg: 'rgba(255, 255, 255, 0.22)' as ColorProp,
+        activeTimeText: '#ffffff' as ColorProp,
+        headerIconBg: 'rgba(255, 255, 255, 0.18)' as ColorProp,
+        waveFill: '#0f172a',
+        bottomBg: '#0f172a' as ColorProp,
+        cardBg: '#1e293b' as ColorProp,
+        cardBorder: '#334155' as ColorProp,
+        cardTitle: '#f8fafc' as ColorProp,
+        cardSubtitle: '#94a3b8' as ColorProp,
+        avatarBg: '#334155' as ColorProp,
+        avatarText: '#f8fafc' as ColorProp,
+        badgeBg: '#334155' as ColorProp,
+        badgeText: '#f8fafc' as ColorProp,
+        emptyText: '#94a3b8' as ColorProp,
+      }
+    : {
+        gradientFrom: '#6366f1' as ColorProp,
+        gradientTo: '#4338ca' as ColorProp,
+        nextPanelBg: 'rgba(255, 255, 255, 0.16)' as ColorProp,
+        activeStatusText: 'rgba(255, 255, 255, 0.75)' as ColorProp,
+        activeTitleText: '#ffffff' as ColorProp,
+        activeSubText: 'rgba(255, 255, 255, 0.85)' as ColorProp,
+        activeTimeBg: 'rgba(255, 255, 255, 0.22)' as ColorProp,
+        activeTimeText: '#ffffff' as ColorProp,
+        headerIconBg: 'rgba(255, 255, 255, 0.18)' as ColorProp,
+        waveFill: '#ffffff',
+        bottomBg: '#ffffff' as ColorProp,
+        cardBg: '#f1f5f9' as ColorProp,
+        cardBorder: '#e2e8f0' as ColorProp,
+        cardTitle: '#1e293b' as ColorProp,
+        cardSubtitle: '#64748b' as ColorProp,
+        avatarBg: '#e0e7ff' as ColorProp,
+        avatarText: '#4f46e5' as ColorProp,
+        badgeBg: '#e0e7ff' as ColorProp,
+        badgeText: '#4f46e5' as ColorProp,
+        emptyText: '#94a3b8' as ColorProp,
+      };
+
+  const wHeight = typeof widgetInfo?.height === 'number' && !isNaN(widgetInfo.height) ? widgetInfo.height : 250; 
 
   let visibleCount = 3;
-  if (isVerySmall) visibleCount = 0;
-  else if (isSmall) visibleCount = 1;
+  if (wHeight < 110) {
+    visibleCount = 0;
+  } else if (wHeight < 160) {
+    visibleCount = 1;
+  } else if (wHeight < 240) {
+    visibleCount = 2;
+  } else {
+    visibleCount = 3;
+  }
 
   const safeClassesList = Array.isArray(classes)
     ? classes.filter((c): c is WidgetClassData => Boolean(c && typeof c === 'object' && !Array.isArray(c)))
@@ -85,10 +144,10 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
           justifyContent: 'center',
           borderRadius: 32,
           overflow: 'hidden',
-          backgroundColor: '#6366f1' as ColorProp,
+          backgroundColor: theme.gradientFrom,
           backgroundGradient: {
-            from: '#6366f1' as ColorProp,
-            to: '#4338ca' as ColorProp,
+            from: theme.gradientFrom,
+            to: theme.gradientTo,
             orientation: 'TOP_BOTTOM',
           },
           padding: 12,
@@ -99,7 +158,7 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
             width: 36,
             height: 36,
             borderRadius: 18,
-            backgroundColor: 'rgba(255,255,255,0.18)' as ColorProp,
+            backgroundColor: theme.headerIconBg,
             alignItems: 'center',
             justifyContent: 'center',
             marginBottom: 8,
@@ -109,12 +168,12 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
         </FlexWidget>
         <TextWidget
           text="No upcoming classes!"
-          style={{ fontSize: 14, color: '#ffffff' as ColorProp, fontWeight: 'bold', marginBottom: 2 }}
+          style={{ fontSize: 14, color: theme.activeTitleText, fontWeight: 'bold', marginBottom: 2 }}
           maxLines={1}
         />
         <TextWidget
           text="Enjoy your free time ☀️"
-          style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)' as ColorProp }}
+          style={{ fontSize: 11, color: isDark ? '#94a3b8' as ColorProp : 'rgba(255, 255, 255, 0.85)' as ColorProp }}
         />
       </FlexWidget>
     );
@@ -138,10 +197,10 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
         flexDirection: 'column',
         borderRadius: 32,
         overflow: 'hidden',
-        backgroundColor: '#6366f1' as ColorProp,
+        backgroundColor: theme.gradientFrom,
         backgroundGradient: {
-          from: '#6366f1' as ColorProp,
-          to: '#4338ca' as ColorProp,
+          from: theme.gradientFrom,
+          to: theme.gradientTo,
           orientation: 'TOP_BOTTOM',
         },
       }}
@@ -163,7 +222,7 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
               width: 28,
               height: 28,
               borderRadius: 14,
-              backgroundColor: 'rgba(255,255,255,0.18)' as ColorProp,
+              backgroundColor: theme.headerIconBg,
               alignItems: 'center',
               justifyContent: 'center',
             }}
@@ -180,23 +239,23 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
             paddingHorizontal: 12,
             paddingVertical: 8,
             borderRadius: 14,
-            backgroundColor: 'rgba(255,255,255,0.16)' as ColorProp,
+            backgroundColor: theme.nextPanelBg,
           }}
         >
           <TextWidget
             text={activeClass.isOngoing ? 'ONGOING CLASS' : 'NEXT CLASS'}
-            style={{ fontSize: 9, color: 'rgba(255,255,255,0.75)' as ColorProp, fontWeight: 'bold' }}
+            style={{ fontSize: 9, color: theme.activeStatusText, fontWeight: 'bold' }}
           />
 
           <TextWidget
             text={safeActiveName}
-            style={{ fontSize: 15, color: '#ffffff' as ColorProp, fontWeight: 'bold', marginTop: 2, marginBottom: 1 }}
+            style={{ fontSize: 15, color: theme.activeTitleText, fontWeight: 'bold', marginTop: 2, marginBottom: 1 }}
             maxLines={1}
           />
 
           <TextWidget
             text={activeSubtitle}
-            style={{ fontSize: 10, color: 'rgba(255,255,255,0.85)' as ColorProp }}
+            style={{ fontSize: 10, color: theme.activeSubText }}
             maxLines={1}
           />
 
@@ -207,7 +266,7 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
                 style={{
                   flexDirection: 'row',
                   alignItems: 'center',
-                  backgroundColor: 'rgba(255,255,255,0.22)' as ColorProp,
+                  backgroundColor: theme.activeTimeBg,
                   paddingHorizontal: 7,
                   paddingVertical: 2,
                   borderRadius: 10,
@@ -216,7 +275,7 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
                 <SvgWidget svg={greenDotSvg} style={{ width: 6, height: 6 }} />
                 <TextWidget
                   text={activeTimeStr}
-                  style={{ fontSize: 9.5, color: '#ffffff' as ColorProp, fontWeight: 'bold', marginLeft: 4 }}
+                  style={{ fontSize: 9.5, color: theme.activeTimeText, fontWeight: 'bold', marginLeft: 4 }}
                 />
               </FlexWidget>
             </FlexWidget>
@@ -226,15 +285,15 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
 
       {/* ── Middle Section: Wavy SVG Divider ── */}
       <FlexWidget style={{ width: 'match_parent', height: 14, marginTop: 2 }}>
-        <SvgWidget svg={wavyDividerSvg} style={{ width: 'match_parent', height: 14 }} />
+        <SvgWidget svg={getWavyDividerSvg(theme.waveFill)} style={{ width: 'match_parent', height: 14 }} />
       </FlexWidget>
 
-      {/* ── Bottom Section: Solid White Container holding Upcoming Classes ── */}
+      {/* ── Bottom Section: Container holding Upcoming Classes ── */}
       <FlexWidget
         style={{
           flex: 1,
           width: 'match_parent',
-          backgroundColor: '#ffffff' as ColorProp,
+          backgroundColor: theme.bottomBg,
           paddingHorizontal: 10,
           paddingTop: 2,
           paddingBottom: 8,
@@ -262,7 +321,7 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
                     flexDirection: 'row',
                     alignItems: 'center',
                     borderRadius: 28,
-                    backgroundColor: '#f1f5f9' as ColorProp,
+                    backgroundColor: theme.cardBg,
                     padding: 5,
                     marginBottom: 4,
                   }}
@@ -273,18 +332,18 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
                       width: 28,
                       height: 28,
                       borderRadius: 14,
-                      backgroundColor: '#e0e7ff' as ColorProp,
+                      backgroundColor: theme.avatarBg,
                       alignItems: 'center',
                       justifyContent: 'center',
                     }}
                   >
-                    <TextWidget text={initial} style={{ fontSize: 12, color: '#4f46e5' as ColorProp, fontWeight: 'bold' }} />
+                    <TextWidget text={initial} style={{ fontSize: 12, color: theme.avatarText, fontWeight: 'bold' }} />
                   </FlexWidget>
 
                   {/* Middle Content Slot */}
                   <FlexWidget style={{ flex: 1, paddingHorizontal: 7, justifyContent: 'center' }}>
-                    <TextWidget text={safeName} style={{ fontSize: 11.5, color: '#0f172a' as ColorProp, fontWeight: 'bold' }} maxLines={1} />
-                    <TextWidget text={itemSubtitle} style={{ fontSize: 9.5, color: '#64748b' as ColorProp }} maxLines={1} />
+                    <TextWidget text={safeName} style={{ fontSize: 11.5, color: theme.cardTitle, fontWeight: 'bold' }} maxLines={1} />
+                    <TextWidget text={itemSubtitle} style={{ fontSize: 9.5, color: theme.cardSubtitle }} maxLines={1} />
                   </FlexWidget>
 
                   {/* Right Circular Slot: Time Remaining */}
@@ -293,12 +352,12 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
                       width: 28,
                       height: 28,
                       borderRadius: 14,
-                      backgroundColor: '#e0e7ff' as ColorProp,
+                      backgroundColor: theme.badgeBg,
                       alignItems: 'center',
                       justifyContent: 'center',
                     }}
                   >
-                    <TextWidget text={countdown} style={{ fontSize: 8.5, color: '#4f46e5' as ColorProp, fontWeight: 'bold' }} maxLines={1} />
+                    <TextWidget text={countdown} style={{ fontSize: 8.5, color: theme.badgeText, fontWeight: 'bold' }} maxLines={1} />
                   </FlexWidget>
                 </FlexWidget>
               );
@@ -306,7 +365,7 @@ export function FinScholarWidget({ classes = [], widgetInfo }: FinScholarWidgetP
           </FlexWidget>
         ) : (
           <FlexWidget style={{ width: 'match_parent', flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 6 }}>
-            <TextWidget text="No other classes today" style={{ fontSize: 11, color: '#94a3b8' as ColorProp }} />
+            <TextWidget text="No other classes today" style={{ fontSize: 11, color: theme.emptyText }} />
           </FlexWidget>
         )}
       </FlexWidget>

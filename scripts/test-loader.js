@@ -25,6 +25,27 @@ export async function resolve(specifier, context, nextResolve) {
       url: pathToFileURL(mockPath).href,
     };
   }
+  if (specifier === '@react-native-google-signin/google-signin') {
+    const mockPath = path.resolve(process.cwd(), 'scripts/mocks/google-signin.js');
+    return {
+      shortCircuit: true,
+      url: pathToFileURL(mockPath).href,
+    };
+  }
+  if (specifier === 'expo-router') {
+    const mockPath = path.resolve(process.cwd(), 'scripts/mocks/expo-router.js');
+    return {
+      shortCircuit: true,
+      url: pathToFileURL(mockPath).href,
+    };
+  }
+  if (specifier === 'expo-constants') {
+    const mockPath = path.resolve(process.cwd(), 'scripts/mocks/expo-constants.js');
+    return {
+      shortCircuit: true,
+      url: pathToFileURL(mockPath).href,
+    };
+  }
   if (specifier.startsWith('@/')) {
     const relativePath = specifier.slice(2);
     let fullPath = path.resolve(process.cwd(), relativePath);

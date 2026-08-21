@@ -13,9 +13,17 @@ import {
   Dimensions,
   KeyboardAvoidingView,
 } from 'react-native';
+import {
+  GoogleSignin,
+  statusCodes,
+  isErrorWithCode,
+  isSuccessResponse,
+} from '@react-native-google-signin/google-signin';
 import { supabase } from '../services/supabaseClient';
+import { configureGoogleSignIn, getGoogleWebClientId } from '../services/googleAuth';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Path } from 'react-native-svg';
 import { useColorScheme } from 'nativewind';
 import { AlertService } from '@/components/CustomAlert';
 import { getTheme } from '@/constants/Theme';
@@ -63,6 +71,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [isLogin, setIsLogin] = useState(mode !== 'signup');
   const [showPassword, setShowPassword] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
@@ -98,6 +107,9 @@ export default function LoginScreen() {
       Animated.spring(blob3Scale, { toValue: 1, friction: 5, tension: 30, useNativeDriver: true }),
       Animated.spring(cardSlide, { toValue: 1, friction: 7, tension: 35, useNativeDriver: true }),
     ]).start();
+
+    // Initialize Google Sign-In configuration robustly
+    configureGoogleSignIn();
   }, []);
 
   // ─── Auth Handlers (unchanged logic) ─────────────────────────────────────
@@ -136,9 +148,113 @@ export default function LoginScreen() {
     setLoading(false);
   }
 
-  function handleGoogleSignIn() {
-    // Dummy handler — ready for future @react-native-google-signin integration
-    console.log('[FinScholar] Google Sign-In tapped — not yet implemented');
+  async function handleGoogleSignIn() {
+    setGoogleLoading(true);
+    try {
+      const webClientId = configureGoogleSignIn();
+
+      if (!webClientId) {
+        AlertService.alert(
+          'Google Sign-In Setup Required',
+          'Google Web Client ID is not configured. Please check your configuration.'
+        );
+        return;
+      }
+
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const response = await GoogleSignin.signIn();
+
+      if (response?.type === 'cancelled') {
+        return;
+      }
+
+      let idToken: string | null | undefined = null;
+      if (isSuccessResponse(response)) {
+        idToken = response.data.idToken;
+      } else if (response && 'data' in response && (response as any).data?.idToken) {
+        idToken = (response as any).data.idToken;
+      } else if (response && (response as any).idToken) {
+        idToken = (response as any).idToken;
+      }
+
+      if (!idToken) {
+        AlertService.alert(
+          'Sign-In Incomplete',
+          'Could not obtain Google ID token. Please verify your Google Cloud Console configuration.'
+        );
+        return;
+      }
+
+      const { data, error } = await supabase.auth.signInWithIdToken({
+        provider: 'google',
+        token: idToken,
+      });
+
+      if (error) {
+        AlertService.alert('Google Sign-In Failed', error.message);
+      } else if (data?.session) {
+        router.replace('/(tabs)');
+      } else if (data?.user) {
+        AlertService.alert('Sign-In Successful', 'Please check your email to complete verification if required.');
+      } else {
+        AlertService.alert('Google Sign-In Incomplete', 'Unable to start session. Please try again.');
+      }
+    } catch (error: any) {
+      const errorString =
+        typeof error === 'string'
+          ? error
+          : typeof error?.message === 'string'
+          ? error.message
+          : String(error ?? '');
+
+      const isCode10 =
+        error?.code === 10 ||
+        error?.code === '10' ||
+        String(error?.code) === '10' ||
+        error?.code === 'DEVELOPER_ERROR' ||
+        errorString.includes('10') ||
+        errorString.toLowerCase().includes('developer error') ||
+        errorString.toLowerCase().includes('developer_error');
+
+      const genericErrorMessage =
+        (typeof error === 'string' ? error : error?.message) ||
+        'An unexpected error occurred during Google Sign-In.';
+
+      if (isErrorWithCode(error)) {
+        switch (error.code) {
+          case statusCodes.SIGN_IN_CANCELLED:
+            // User cancelled the sign-in flow
+            break;
+          case statusCodes.IN_PROGRESS:
+            AlertService.alert('Sign-In In Progress', 'Google Sign-In is already in progress.');
+            break;
+          case statusCodes.PLAY_SERVICES_NOT_AVAILABLE:
+            AlertService.alert(
+              'Play Services Unavailable',
+              'Google Play Services is not available or outdated on this device. Please update Play Services and try again.'
+            );
+            break;
+          default:
+            if (isCode10) {
+              AlertService.alert(
+                'Configuration Error (Code 10)',
+                'Developer Error: Check that the SHA-1 fingerprint (5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25) and package name (com.lalex.finscholar) match your Google Cloud Console Android Client ID.'
+              );
+            } else {
+              AlertService.alert('Google Sign-In Error', genericErrorMessage);
+            }
+        }
+      } else if (isCode10) {
+        AlertService.alert(
+          'Configuration Error (Code 10)',
+          'Developer Error: Check that the SHA-1 fingerprint (5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25) and package name (com.lalex.finscholar) match your Google Cloud Console Android Client ID.'
+        );
+      } else {
+        AlertService.alert('Google Sign-In Error', genericErrorMessage);
+      }
+    } finally {
+      setGoogleLoading(false);
+    }
   }
 
   // ─── Derived Styles ──────────────────────────────────────────────────────
@@ -362,20 +478,25 @@ export default function LoginScreen() {
                     color={emailFocused ? BRAND.inputFocusBorder : textSecondary}
                     style={{ marginRight: 12 }}
                   />
-                  <TextInput
-                    style={{
-                      flex: 1, fontSize: 15, fontFamily: 'Nunito_600SemiBold',
-                      color: textPrimary, padding: 0,
-                    }}
-                    onChangeText={setEmail}
-                    value={email}
-                    placeholder="student@university.edu"
-                    placeholderTextColor={isDark ? '#475569' : '#94a3b8'}
-                    autoCapitalize="none"
-                    keyboardType="email-address"
-                    onFocus={() => setEmailFocused(true)}
-                    onBlur={() => setEmailFocused(false)}
-                  />
+                    <TextInput
+                      style={{
+                        flex: 1, fontSize: 15, fontFamily: 'Nunito_600SemiBold',
+                        color: textPrimary, padding: 0,
+                      }}
+                      onChangeText={setEmail}
+                      value={email}
+                      placeholder="student@university.edu"
+                      placeholderTextColor={isDark ? '#475569' : '#94a3b8'}
+                      autoCapitalize="none"
+                      keyboardType="email-address"
+                      onFocus={() => setEmailFocused(true)}
+                      onBlur={() => setEmailFocused(false)}
+                      textContentType="username"
+                      autoComplete="username"
+                      importantForAutofill="yes"
+                      nativeID="email"
+                      accessibilityLabel="Email address"
+                    />
                 </View>
               </View>
 
@@ -421,6 +542,11 @@ export default function LoginScreen() {
                     autoCapitalize="none"
                     onFocus={() => setPasswordFocused(true)}
                     onBlur={() => setPasswordFocused(false)}
+                    textContentType={isLogin ? 'password' : 'newPassword'}
+                    autoComplete={isLogin ? 'current-password' : 'new-password'}
+                    importantForAutofill="yes"
+                    nativeID="password"
+                    accessibilityLabel="Password"
                   />
                   <TouchableOpacity onPress={() => setShowPassword(!showPassword)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                     <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={textSecondary} />
@@ -431,7 +557,7 @@ export default function LoginScreen() {
                 {isLogin && (
                   <TouchableOpacity 
                     onPress={handleResetPassword} 
-                    disabled={loading} 
+                    disabled={loading || googleLoading} 
                     style={{ 
                       marginTop: 8,
                       width: '100%',
@@ -452,13 +578,13 @@ export default function LoginScreen() {
                   marginTop: 22, height: 54, borderRadius: 16,
                   alignItems: 'center', justifyContent: 'center', flexDirection: 'row',
                   backgroundColor: BRAND.primaryBtn,
-                  opacity: loading ? 0.7 : 1,
+                  opacity: loading || googleLoading ? 0.7 : 1,
                   ...Platform.select({
                     ios: { shadowColor: BRAND.primaryBtn, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 12 },
                     android: { elevation: 6 },
                   }),
                 }}
-                disabled={loading}
+                disabled={loading || googleLoading}
                 onPress={handleAuth}
                 activeOpacity={0.85}
               >
@@ -494,7 +620,7 @@ export default function LoginScreen() {
                 <View style={{ flex: 1, height: 1, backgroundColor: isDark ? '#2d2f54' : '#e2e2f0' }} />
               </View>
 
-              {/* ─── Continue with Google (Dummy) ─── */}
+              {/* ─── Continue with Google ─── */}
               <TouchableOpacity
                 style={{
                   height: 54, borderRadius: 16,
@@ -502,27 +628,39 @@ export default function LoginScreen() {
                   backgroundColor: isDark ? BRAND.googleBgDark : BRAND.googleBgLight,
                   borderWidth: 1.5,
                   borderColor: isDark ? BRAND.googleBorderDark : BRAND.googleBorderLight,
+                  opacity: googleLoading ? 0.7 : 1,
                 }}
+                disabled={loading || googleLoading}
                 onPress={handleGoogleSignIn}
                 activeOpacity={0.7}
               >
-                {/* Google "G" Icon */}
-                <View style={{ marginRight: 12 }}>
-                  <View style={{ width: 22, height: 22, alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ fontSize: 18, fontFamily: 'Nunito_900Black', color: '#4285F4' }}>G</Text>
-                  </View>
-                </View>
-                <Text
-                  style={{
-                    fontFamily: 'Nunito_700Bold',
-                    fontSize: 15,
-                    color: textPrimary,
-                    paddingHorizontal: 4,
-                  }}
-                >
-                  Continue with Google
-                </Text>
-                <Ionicons name="arrow-forward" size={16} color={textSecondary} style={{ marginLeft: 8 }} />
+                {googleLoading ? (
+                  <ActivityIndicator color={isDark ? '#ffffff' : BRAND.primaryBtn} size="small" />
+                ) : (
+                  <>
+                    {/* Google SVG Logo */}
+                    <View style={{ marginRight: 12 }}>
+                      <Svg width="22" height="22" viewBox="0 0 48 48">
+                        <Path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.7 17.74 9.5 24 9.5z"/>
+                        <Path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                        <Path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                        <Path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                        <Path fill="none" d="M0 0h48v48H0z"/>
+                      </Svg>
+                    </View>
+                    <Text
+                      style={{
+                        fontFamily: 'Nunito_700Bold',
+                        fontSize: 15,
+                        color: textPrimary,
+                        paddingHorizontal: 4,
+                      }}
+                    >
+                      Continue with Google
+                    </Text>
+                    <Ionicons name="arrow-forward" size={16} color={textSecondary} style={{ marginLeft: 8 }} />
+                  </>
+                )}
               </TouchableOpacity>
             </View>
 

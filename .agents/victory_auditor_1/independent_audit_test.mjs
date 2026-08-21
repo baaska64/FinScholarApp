@@ -1,140 +1,163 @@
 import { register } from 'node:module';
+import assert from 'node:assert';
+
 register('../../scripts/test-loader.js', import.meta.url);
 
-import assert from 'node:assert';
-import fs from 'node:fs';
-import path from 'node:path';
+const {
+  DEFAULT_SR_SETTINGS,
+  DECK_COLORS,
+  DECK_ICONS,
+  STATUS_CONFIG,
+  applyRating,
+  makeNewCard,
+  buildDeckTree,
+  getNodeStats,
+  collectCards,
+  collectDecksFromNode,
+  parseImport,
+  parseCsvLine,
+  computeExamPlan,
+  getCardStatus,
+  getNextDueText,
+  getDeckThematicIcon,
+  calculateLevel,
+  calculateXpGain,
+  updateStudyStats,
+  getWeekDaysActivity,
+  getLocalDateString,
+  getColorWithAlpha,
+  LEVEL_THRESHOLDS,
+} = await import('../../components/study/utils.ts');
 
-function getChildren(node) {
-  if (!node || !node.props) return [];
-  if (Array.isArray(node.props.children)) return node.props.children.filter(Boolean);
-  return node.props.children ? [node.props.children] : [];
+console.log('=== RUNNING INDEPENDENT VICTORY AUDIT TEST SUITE ===\n');
+
+let passCount = 0;
+let failCount = 0;
+
+function runTest(name, fn) {
+  try {
+    fn();
+    passCount++;
+    console.log(`  ✓ ${name}`);
+  } catch (e) {
+    failCount++;
+    console.error(`  ✖ ${name}:`, e.message);
+  }
 }
 
-async function runIndependentAudit() {
-  console.log('=== VICTORY AUDITOR INDEPENDENT VERIFICATION ===\n');
-
-  // 1. Native Provider XML Verification
-  console.log('1. Checking Native Widget Provider XML...');
-  const xmlPath = path.resolve('android/app/src/main/res/xml/widgetprovider_finscholarwidget.xml');
-  const xml = fs.readFileSync(xmlPath, 'utf8');
-  assert(xml.includes('android:minWidth="250dp"'), 'Missing minWidth 250dp');
-  assert(xml.includes('android:minHeight="330dp"'), 'Missing minHeight 330dp');
-  assert(xml.includes('android:targetCellWidth="4"'), 'Missing targetCellWidth 4');
-  assert(xml.includes('android:targetCellHeight="5"'), 'Missing targetCellHeight 5');
-  console.log('   ✓ Native XML correctly specifies 4x5 dimensions (250dp x 330dp, cells 4x5)');
-
-  // 2. app.json Verification
-  console.log('2. Checking app.json...');
-  const appJson = JSON.parse(fs.readFileSync(path.resolve('app.json'), 'utf8'));
-  const widgetPlugin = appJson.expo.plugins.find(p => Array.isArray(p) && p[0] === 'react-native-android-widget');
-  assert(widgetPlugin, 'Widget plugin missing');
-  const wConfig = widgetPlugin[1].widgets[0];
-  assert.strictEqual(wConfig.minWidth, '250dp');
-  assert.strictEqual(wConfig.minHeight, '330dp');
-  assert.strictEqual(wConfig.targetCellWidth, 4);
-  assert.strictEqual(wConfig.targetCellHeight, 5);
-  console.log('   ✓ app.json correctly specifies 4x5 dimensions (250dp x 330dp, cells 4x5)');
-
-  // 3. UI Font Sizes and Compaction Bounds
-  console.log('3. Checking UI Compaction Bounds in FinScholarWidget...');
-  const { FinScholarWidget, getFirstGrapheme } = await import('../../widget/FinScholarWidget.tsx');
-  const { formatTimeStr, formatCountdown, isValidClass } = await import('../../widget/WidgetTaskHandler.tsx');
-
-  const testClasses = [
-    { courseName: 'CS 101 - Intro to CS', room: 'Room 301', timeStr: '8:00 AM', timeRemainingStr: 'In 10m', isOngoing: false },
-    { courseName: 'MATH 201 - Calculus II', room: 'Hall B', timeStr: '10:00 AM', timeRemainingStr: 'In 2h', isOngoing: false },
-    { courseName: 'PHYS 301 - Physics', room: 'Lab 2', timeStr: '1:00 PM', timeRemainingStr: 'In 5h', isOngoing: false },
-    { courseName: 'ENG 401 - Literature', room: 'Room 105', timeStr: '3:00 PM', timeRemainingStr: 'In 7h', isOngoing: false },
-  ];
-
-  const widget = FinScholarWidget({ classes: testClasses, widgetInfo: { width: 250, height: 330 } });
-  const rootChildren = getChildren(widget);
-  assert.strictEqual(rootChildren.length, 3, 'Root widget must have 3 child sections (top, wave, bottom)');
-
-  const [topSection, waveSection, bottomSection] = rootChildren;
-
-  // Check top section compaction
-  assert(topSection.props.style.paddingTop <= 10, 'Top padding top must be <= 10');
-  assert(topSection.props.style.paddingHorizontal <= 12, 'Top padding horizontal must be <= 12');
-
-  const topChildren = getChildren(topSection);
-  const iconBtn = getChildren(topChildren[0])[0];
-  assert(iconBtn.props.style.width <= 28, 'Icon button width must be <= 28');
-  assert(iconBtn.props.style.height <= 28, 'Icon button height must be <= 28');
-
-  const activePanel = topChildren[1];
-  assert(activePanel.props.style.paddingVertical <= 8, 'Active panel padding vertical must be <= 8');
-  const panelChildren = getChildren(activePanel);
-  const statusText = panelChildren[0];
-  const titleText = panelChildren[1];
-  const subText = panelChildren[2];
-  assert(statusText.props.style.fontSize <= 9, 'Status text font size must be <= 9');
-  assert(titleText.props.style.fontSize <= 15, 'Title text font size must be <= 15');
-  assert(subText.props.style.fontSize <= 10, 'Subtitle text font size must be <= 10');
-
-  // Check bottom upcoming classes list
-  const bottomChildren = getChildren(bottomSection);
-  const upcomingList = getChildren(bottomChildren[0]);
-  assert.strictEqual(upcomingList.length, 3, 'Must render up to 3 upcoming classes');
-
-  upcomingList.forEach((item, idx) => {
-    assert(item.props.style.padding <= 5, `Upcoming item ${idx} padding must be <= 5`);
-    assert(item.props.style.marginBottom <= 4, `Upcoming item ${idx} margin bottom must be <= 4`);
-    const [avatar, content, countdown] = getChildren(item);
-    assert(avatar.props.style.width <= 28, `Avatar ${idx} width must be <= 28`);
-    assert(avatar.props.style.height <= 28, `Avatar ${idx} height must be <= 28`);
-    assert(countdown.props.style.width <= 28, `Countdown ${idx} width must be <= 28`);
-    assert(countdown.props.style.height <= 28, `Countdown ${idx} height must be <= 28`);
-  });
-
-  console.log('   ✓ UI compaction properties verified: active title 15px, sub 10px, status 9px, avatars 28x28dp, item padding 5dp');
-
-  // 4. Unicode & Emoji Resilience
-  console.log('4. Checking Unicode and Emoji grapheme handling...');
-  assert.strictEqual(getFirstGrapheme('CS 101'), 'C');
-  assert.strictEqual(getFirstGrapheme('🎨 ART 105'), '🎨');
-  assert.strictEqual(getFirstGrapheme('🚀 ADV-CS 499'), '🚀');
-  assert.strictEqual(getFirstGrapheme('🇵🇭 HIST 101'), '🇵🇭');
-  assert.strictEqual(getFirstGrapheme('👨‍🎓 GRAD 400'), '👨‍🎓');
-  assert.strictEqual(getFirstGrapheme('👍🏽 PE 101'), '👍🏽');
-  assert.strictEqual(getFirstGrapheme(''), 'C');
-  assert.strictEqual(getFirstGrapheme(null), 'C');
-  console.log('   ✓ Grapheme cluster extraction passed all Unicode/Emoji tests');
-
-  // 5. Time & Countdown Formatters
-  console.log('5. Checking Time & Countdown formatters...');
-  assert.strictEqual(formatTimeStr(8), '8:00 AM');
-  assert.strictEqual(formatTimeStr(12), '12:00 PM');
-  assert.strictEqual(formatTimeStr(13.5), '1:30 PM');
-  assert.strictEqual(formatTimeStr(0), '12:00 AM');
-  assert.strictEqual(formatTimeStr(8.999), '9:00 AM');
-  assert.strictEqual(formatTimeStr(23.999), '12:00 AM');
-  assert.strictEqual(formatTimeStr(NaN), '12:00 AM');
-  assert.strictEqual(formatTimeStr(Infinity), '12:00 AM');
-
-  assert.strictEqual(formatCountdown(0, true), 'In progress');
-  assert.strictEqual(formatCountdown(0.5, false), 'In 30m');
-  assert.strictEqual(formatCountdown(1.5, false), 'In 1h 30m');
-  assert.strictEqual(formatCountdown(24, false), 'In 1 day');
-  assert.strictEqual(formatCountdown(48, false), 'In 2 days');
-  assert.strictEqual(formatCountdown(NaN, false), 'In progress');
-  console.log('   ✓ Time and countdown formatters passed all boundary tests');
-
-  // 6. Layout Budget Audit Calculation
-  console.log('6. Calculating exact pixel/dp layout budget for 4x5 widget...');
-  const topH = 10 + 28 + 6 + (8 * 2) + 12 + 20 + 14 + 5 + 16 + 2; // ~109dp
-  const waveH = 14 + 2; // 16dp
-  const bottomH = 2 + 8 + (3 * (28 + 10 + 4)); // 10 + 3*42 = 136dp
-  const totalH = topH + waveH + bottomH; // 261dp
-  console.log(`   Estimated total vertical layout budget: ${totalH}dp (Limit: 330dp minHeight)`);
-  assert(totalH < 300, 'Total layout height must be comfortably under 300dp to fit 330dp');
-  console.log('   ✓ Layout budget strictly conforms to native 4x5 dimensions');
-
-  console.log('\n=== ALL AUDITOR INDEPENDENT VERIFICATION CHECKS PASSED ===');
-}
-
-runIndependentAudit().catch(err => {
-  console.error('Audit verification error:', err);
-  process.exit(1);
+// 1. Gamification & XP
+runTest('Gamification: calculateLevel tiers 1 to 6 and progress', () => {
+  assert.strictEqual(calculateLevel(0).title, 'Novice Scholar');
+  assert.strictEqual(calculateLevel(100).title, 'Apprentice Scholar');
+  assert.strictEqual(calculateLevel(250).title, 'Scholar');
+  assert.strictEqual(calculateLevel(500).title, 'Senior Scholar');
+  assert.strictEqual(calculateLevel(1000).title, 'Master Scholar');
+  assert.strictEqual(calculateLevel(2000).title, 'Grandmaster Scholar');
+  assert.strictEqual(calculateLevel(2500).isMaxLevel, true);
 });
+
+runTest('Gamification: calculateXpGain calculation logic', () => {
+  assert.strictEqual(calculateXpGain({ isReview: true }), 10);
+  assert.strictEqual(calculateXpGain({ isMastered: true }), 25);
+  assert.strictEqual(calculateXpGain({ isReview: true, isMastered: true }), 35);
+  assert.strictEqual(calculateXpGain({ isSessionComplete: true, cardsCount: 10 }), 50);
+});
+
+runTest('Gamification: updateStudyStats streak increments and resets', () => {
+  const today = getLocalDateString(new Date());
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterday = getLocalDateString(yesterdayDate);
+
+  const initial = updateStudyStats({ lastStudyDate: '', currentStreak: 0, masteredToday: 0 }, 1, 0);
+  assert.strictEqual(initial.currentStreak, 1);
+  assert.strictEqual(initial.lastStudyDate, today);
+
+  const continued = updateStudyStats({ lastStudyDate: yesterday, currentStreak: 3, masteredToday: 2 }, 2, 1);
+  assert.strictEqual(continued.currentStreak, 4);
+  assert.strictEqual(continued.cardsReviewedToday, 2);
+  assert.strictEqual(continued.masteredToday, 1);
+});
+
+// 2. SM-2 Algorithm & Edge Cases
+runTest('SM-2: Initial card creation defaults', () => {
+  const card = makeNewCard('Front', 'Back');
+  assert.strictEqual(card.front, 'Front');
+  assert.strictEqual(card.back, 'Back');
+  assert.strictEqual(card.interval, 0);
+  assert.strictEqual(card.easeFactor, 2.5);
+  assert.strictEqual(card.stepIndex, 0);
+});
+
+runTest('SM-2: Rating transitions & graduation', () => {
+  const card = makeNewCard('Q', 'A');
+  const step1 = applyRating(card, 3, { ...DEFAULT_SR_SETTINGS, learningSteps: '1 10', graduatingInterval: 1 });
+  assert.strictEqual(step1.interval, 0);
+  assert.strictEqual(step1.stepIndex, 1);
+
+  const grad = applyRating(step1, 3, { ...DEFAULT_SR_SETTINGS, learningSteps: '1 10', graduatingInterval: 1 });
+  assert.strictEqual(grad.interval, 1);
+  assert.strictEqual(grad.reviewCount, 2);
+});
+
+runTest('SM-2: Corrupt data recovery and NaN protection', () => {
+  const corrupt = { id: 'x', front: '', back: '', interval: NaN, easeFactor: NaN, nextDue: NaN, reviewCount: null, stepIndex: 999 };
+  const fixed = applyRating(corrupt, 2, DEFAULT_SR_SETTINGS);
+  assert.ok(Number.isFinite(fixed.nextDue));
+  assert.ok(Number.isFinite(fixed.easeFactor));
+  assert.ok(Number.isFinite(fixed.interval));
+  assert.strictEqual(fixed.stepIndex, 1);
+});
+
+// 3. Tree Hierarchy & Node Statistics
+runTest('Tree: buildDeckTree nested hierarchy and deduplication', () => {
+  const decks = [
+    { id: '1', name: 'Intro', subject: 'Math::Calc', color: '#fff', createdAt: 1, cards: [makeNewCard('a', 'b')] },
+    { id: '2', name: 'Derivatives', subject: 'Math::Calc', color: '#fff', createdAt: 2, cards: [makeNewCard('c', 'd')] },
+  ];
+  const tree = buildDeckTree(decks);
+  assert.strictEqual(tree.length, 1);
+  assert.strictEqual(tree[0].name, 'Math');
+  const calc = tree[0].children.get('Calc');
+  assert.ok(calc);
+  assert.strictEqual(calc.children.size, 2);
+
+  const stats = getNodeStats(tree[0]);
+  assert.strictEqual(stats.total, 2);
+});
+
+// 4. Parser Verification
+runTest('Parser: CSV with RFC-4180 quotes', () => {
+  const csv = '"Term with ""quotes""","Definition with, comma"';
+  const parsed = parseImport(csv, 'comma');
+  assert.strictEqual(parsed.length, 1);
+  assert.strictEqual(parsed[0].front, 'Term with "quotes"');
+  assert.strictEqual(parsed[0].back, 'Definition with, comma');
+});
+
+runTest('Parser: Semicolon delimiter precedence in auto mode', () => {
+  const text = 'Term A; Def A, with comma\nTerm B; Def B';
+  const parsed = parseImport(text, 'auto');
+  assert.strictEqual(parsed.length, 2);
+  assert.strictEqual(parsed[0].front, 'Term A');
+  assert.strictEqual(parsed[0].back, 'Def A, with comma');
+});
+
+// 5. Exam Prep Schedule
+runTest('Exam Prep: Strict interval monotonicity', () => {
+  const { plan } = computeExamPlan(5, 50, 4);
+  assert.strictEqual(plan.length, 4);
+  for (let i = 1; i < plan.length; i++) {
+    assert.ok(plan[i].day > plan[i - 1].day);
+  }
+});
+
+// 6. Colors & Theme
+runTest('Colors: 4-digit and 8-digit hex parsing and alpha clamping', () => {
+  assert.strictEqual(getColorWithAlpha('#f00f', 0.5), 'rgba(255, 0, 0, 0.5)');
+  assert.strictEqual(getColorWithAlpha('#4f46e5ff', 0.8), 'rgba(79, 70, 229, 0.8)');
+  assert.strictEqual(getColorWithAlpha('#4f46e5', 2.0), 'rgba(79, 70, 229, 1)');
+});
+
+console.log(`\nIndependent Audit Summary: ${passCount} passed, ${failCount} failed.`);
+if (failCount > 0) process.exit(1);

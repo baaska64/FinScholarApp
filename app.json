@@ -2,7 +2,7 @@
   "expo": {
     "name": "FinScholarApp",
     "slug": "FinScholarApp",
-    "version": "1.0.4",
+    "version": "1.0.7",
     "orientation": "default",
     "icon": "./assets/images/FinScholarAppLogo.png",
     "scheme": "finscholarapp",
@@ -27,7 +27,7 @@
         "com.android.vending.BILLING"
       ],
       "package": "com.lalex.finscholar",
-      "versionCode": 19
+      "versionCode": 23
     },
     "web": {
       "bundler": "metro",
@@ -67,10 +67,10 @@
             {
               "name": "FinScholarWidget",
               "label": "FinScholar Schedule",
-              "minWidth": "250dp",
-              "minHeight": "320dp",
-              "targetCellWidth": 4,
-              "targetCellHeight": 5,
+              "minWidth": "110dp",
+              "minHeight": "180dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 3,
               "resizeMode": "horizontal|vertical",
               "updatePeriodMillis": 1800000
             }
@@ -85,6 +85,7 @@
     },
     "extra": {
       "router": {},
+      "googleWebClientId": "398238102082-q812a4ki3c7qg9mp19jqbpqq6hbv88ns.apps.googleusercontent.com",
       "eas": {
         "projectId": "5fd95516-0198-488d-aea9-a8db7155435c"
       }

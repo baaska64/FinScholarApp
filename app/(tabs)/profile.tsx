@@ -190,6 +190,15 @@ export default function ProfileScreen() {
                             />
                             <View style={{ height: 1, backgroundColor: theme.cardBorder, marginHorizontal: 16 }} />
                             <SettingsRow
+                                icon="layers-outline"
+                                iconColor={isDark ? '#f472b6' : '#ec4899'}
+                                label="Study Options"
+                                onPress={() => router.push('/study-options')}
+                                isDark={isDark}
+                                theme={theme}
+                            />
+                            <View style={{ height: 1, backgroundColor: theme.cardBorder, marginHorizontal: 16 }} />
+                            <SettingsRow
                                 icon="options"
                                 iconColor={isDark ? '#a78bfa' : '#8b5cf6'}
                                 label="Dashboard Priority Settings"

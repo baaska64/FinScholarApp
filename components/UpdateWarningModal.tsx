@@ -18,7 +18,7 @@ const CURRENT_CHANGELOG = [
 ];
 
 export default function UpdateWarningModal() {
-  const [modalType, setModalType] = useState<'none' | 'changelog' | 'update'>('none');
+  const [modalType, setModalType] = useState<'none' | 'update'>('none');
   const [updateInfo, setUpdateInfo] = useState<any>(null);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
@@ -31,16 +31,7 @@ export default function UpdateWarningModal() {
 
   const checkAppStates = async () => {
     try {
-      // 1. Check if we need to show the Changelog (first time opening this new version)
-      const lastSeenVersion = await AsyncStorage.getItem(LAST_SEEN_VERSION_KEY);
-      let showingChangelog = false;
-      
-      if (!lastSeenVersion || isNewerVersion(lastSeenVersion, currentVersion)) {
-        setModalType('changelog');
-        showingChangelog = true;
-      }
-
-      // 2. Check Supabase for remote updates in the background
+      // Check Supabase for remote updates in the background
       const { data, error } = await supabase
         .from('app_versions')
         .select('*')
@@ -50,10 +41,7 @@ export default function UpdateWarningModal() {
       if (!error && data) {
         if (isNewerVersion(currentVersion, data.latest_version)) {
           setUpdateInfo(data);
-          // Only show update modal immediately if we aren't already showing the changelog
-          if (!showingChangelog) {
-            setModalType('update');
-          }
+          setModalType('update');
         }
       }
     } catch (e) {
@@ -71,14 +59,8 @@ export default function UpdateWarningModal() {
     return false;
   };
 
-  const handleDismissChangelog = async () => {
-    await AsyncStorage.setItem(LAST_SEEN_VERSION_KEY, currentVersion);
-    // If an update was discovered while they were reading the changelog, pivot to it
-    if (updateInfo) {
-      setModalType('update');
-    } else {
-      setModalType('none');
-    }
+  const handleDismiss = () => {
+    setModalType('none');
   };
 
   if (modalType === 'none') return null;
@@ -86,54 +68,18 @@ export default function UpdateWarningModal() {
   return (
     <Modal visible={true} transparent animationType="slide">
       <View className="flex-1 justify-end bg-black/60">
-        <TouchableOpacity className="absolute inset-0" onPress={() => modalType === 'update' ? setModalType('none') : handleDismissChangelog()} activeOpacity={1} />
+        <TouchableOpacity className="absolute inset-0" onPress={handleDismiss} activeOpacity={1} />
         
-        <View className="w-full rounded-t-3xl overflow-hidden border-t border-white/20" style={{ maxHeight: SCREEN_HEIGHT * 0.85 }}>
+        <View className="w-full rounded-t-3xl overflow-hidden" style={{ maxHeight: SCREEN_HEIGHT * 0.85 }}>
           <ImageBackground 
             source={require('../assets/images/GlassBg.png')} 
             style={{ width: '100%' }}
+            imageStyle={{ height: SCREEN_HEIGHT, top: undefined, bottom: 0 }}
             resizeMode="cover"
           >
             <BlurView intensity={90} tint="dark" style={{ width: '100%' }}>
               <ScrollView contentContainerStyle={{ padding: 24, paddingTop: 40, paddingBottom: 40 }}>
                 
-                {modalType === 'changelog' && (
-                  <>
-                    <View className="w-16 h-16 rounded-full items-center justify-center bg-indigo-500/20 border border-indigo-400/30 self-center mb-4">
-                      <Ionicons name="sparkles" size={32} color="#818cf8" />
-                    </View>
-                    <Text className="text-3xl font-extrabold text-white text-center mb-2" style={styles.textShadow}>
-                      What's New
-                    </Text>
-                    <Text className="text-base text-center text-indigo-200 font-semibold mb-6" style={styles.textShadow}>
-                      Version {currentVersion} is here!
-                    </Text>
-
-                    <View className="bg-black/40 rounded-3xl p-6 mb-8 border border-white/10">
-                      {CURRENT_CHANGELOG.map((item, index) => (
-                        <View key={index} className={`flex-row items-center ${index !== CURRENT_CHANGELOG.length - 1 ? 'mb-5' : ''}`}>
-                          <View className="w-10 h-10 rounded-full bg-white/10 items-center justify-center mr-4">
-                            <Ionicons name={item.icon as any} size={20} color="#818cf8" />
-                          </View>
-                          <View className="flex-1">
-                            <Text className="text-white font-bold text-base">{item.title}</Text>
-                            <Text className="text-slate-300 text-sm mt-1">{item.desc}</Text>
-                          </View>
-                        </View>
-                      ))}
-                    </View>
-
-                    <TouchableOpacity 
-                      className="py-4 rounded-full flex-row items-center justify-center shadow-lg bg-indigo-500 shadow-indigo-500/50"
-                      onPress={handleDismissChangelog}
-                    >
-                      <Text className="text-white font-extrabold text-lg tracking-wider">
-                        Awesome!
-                      </Text>
-                    </TouchableOpacity>
-                  </>
-                )}
-
                 {modalType === 'update' && (
                   <>
                     <View className="w-16 h-16 rounded-full items-center justify-center bg-emerald-500/20 border border-emerald-400/30 self-center mb-4">

@@ -112,6 +112,23 @@ async function run() {
     const { runEmpiricalStressHarness } = await import('../__tests__/challenger-stress-harness.js');
     runEmpiricalStressHarness(harness.describe, harness.test);
 
+    const { runChallengerAuthAdversarialTests } = await import('../__tests__/challenger-auth-adversarial.test.js');
+    runChallengerAuthAdversarialTests(harness.describe, harness.test);
+
+    const { runTasksRedesignTests } = await import('../__tests__/tasks-redesign.test.js');
+    runTasksRedesignTests(harness.describe, harness.test);
+
+    const { runStudyRedesignTests } = await import('../__tests__/study.test.js');
+    runStudyRedesignTests(harness.describe, harness.test);
+
+    const { runChallengerStudyAdversarialTests } = await import('../__tests__/challenger-study-adversarial.test.js');
+    runChallengerStudyAdversarialTests(harness.describe, harness.test);
+
+    const { runGamificationPersistenceStressTests } = await import('../__tests__/challenger-gamification-persistence-stress.test.js');
+    runGamificationPersistenceStressTests(harness.describe, harness.test);
+
+    const { runGoogleAuthProductionTests } = await import('../__tests__/google-auth-production.test.js');
+    runGoogleAuthProductionTests(harness.describe, harness.test);
 
   } catch (err) {
     console.error(`\n${RED}Fatal runner error:${RESET}`, err);

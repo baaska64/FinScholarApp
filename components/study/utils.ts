@@ -1,0 +1,688 @@
+import {
+  Flashcard,
+  FlashcardDeck,
+  SessionCard,
+  DeckNode,
+  NodeStats,
+  SRSettings,
+  FlashcardStats,
+  LevelInfo,
+  DayActivity,
+  ExamScheduleSlot,
+} from './types';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+export const generateId = (): string => Math.random().toString(36).substring(2, 11);
+
+export const DEFAULT_SR_SETTINGS: SRSettings = {
+  learningSteps: '1 10',
+  graduatingInterval: 1,
+  easyInterval: 4,
+  studyTimeHour: 8,
+  studyTimeMinute: 0,
+};
+
+export const DECK_COLORS = [
+  '#4f46e5', // Indigo
+  '#3b82f6', // Blue
+  '#06b6d4', // Cyan
+  '#10b981', // Emerald
+  '#eab308', // Amber
+  '#f97316', // Orange
+  '#ec4899', // Pink
+  '#8b5cf6', // Violet
+];
+
+export const DECK_ICONS = [
+  'albums-outline',
+  'book-outline',
+  'school-outline',
+  'bulb-outline',
+  'calculator-outline',
+  'flask-outline',
+  'code-slash-outline',
+  'globe-outline',
+  'language-outline',
+  'library-outline',
+  'medkit-outline',
+  'musical-notes-outline',
+  'planet-outline',
+  'sparkles-outline',
+  'trophy-outline',
+  'stats-chart-outline',
+];
+
+export const STATUS_CONFIG = {
+  new: { label: 'New', color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)', darkBg: 'rgba(139,92,246,0.25)' },
+  learning: { label: 'Learning', color: '#f97316', bg: 'rgba(249,115,22,0.12)', darkBg: 'rgba(249,115,22,0.25)' },
+  due: { label: 'Review', color: '#3b82f6', bg: 'rgba(59,130,246,0.12)', darkBg: 'rgba(59,130,246,0.25)' },
+  mastered: { label: 'Mastered', color: '#10b981', bg: 'rgba(16,185,129,0.12)', darkBg: 'rgba(16,185,129,0.25)' },
+};
+
+// ─── Utilities & Helpers ──────────────────────────────────────────────────────
+
+export function getLocalDateString(d: Date = new Date()): string {
+  const dateObj = d instanceof Date && !isNaN(d.getTime()) ? d : new Date();
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function getColorWithAlpha(color: string, alpha: number = 1): string {
+  const safeAlpha = typeof alpha === 'number' && Number.isFinite(alpha) ? Math.min(1, Math.max(0, alpha)) : 1;
+  if (!color) return `rgba(79, 70, 229, ${safeAlpha})`;
+  if (color.startsWith('rgba') || color.startsWith('hsla')) return color;
+  if (color.startsWith('#')) {
+    let hex = color.slice(1);
+    if (hex.length === 3 || hex.length === 4) {
+      hex = hex.split('').map((c) => c + c).join('');
+    }
+    if (hex.length === 6 || hex.length === 8) {
+      const r = parseInt(hex.substring(0, 2), 16);
+      const g = parseInt(hex.substring(2, 4), 16);
+      const b = parseInt(hex.substring(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+    }
+  }
+  return color;
+}
+
+export function applyRating(
+  card: Flashcard,
+  rating: 1 | 2 | 3 | 4,
+  sr: SRSettings = DEFAULT_SR_SETTINGS
+): Flashcard {
+  if (!card) return card;
+  const safeInterval = typeof card.interval === 'number' && Number.isFinite(card.interval) ? Math.max(0, card.interval) : 0;
+  const safeEase = typeof card.easeFactor === 'number' && Number.isFinite(card.easeFactor) ? Math.min(4.0, Math.max(1.3, card.easeFactor)) : 2.5;
+  const safeReviewCount = typeof card.reviewCount === 'number' && Number.isFinite(card.reviewCount) ? Math.max(0, card.reviewCount) : 0;
+
+  let interval = safeInterval;
+  let easeFactor = safeEase;
+  let nextDueOffsetMs = 0;
+
+  const parseSteps = (str: string | undefined): number[] => {
+    const parsed = (str || '1 10')
+      .split(' ')
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => !isNaN(n) && n > 0);
+    return parsed.length > 0 ? parsed : [1, 10];
+  };
+
+  const steps = parseSteps(sr?.learningSteps);
+  let stepIndex = typeof card.stepIndex === 'number' && Number.isFinite(card.stepIndex) ? Math.max(0, card.stepIndex) : 0;
+  const validStepIndex = Math.min(steps.length - 1, stepIndex);
+
+  if (interval === 0) {
+    if (rating === 1) {
+      stepIndex = 0;
+      nextDueOffsetMs = steps[0] * 60 * 1000;
+      easeFactor = Math.max(1.3, easeFactor - 0.2);
+    } else if (rating === 2) {
+      stepIndex = validStepIndex;
+      nextDueOffsetMs = steps[validStepIndex] * 60 * 1000;
+      easeFactor = Math.max(1.3, easeFactor - 0.15);
+    } else if (rating === 3) {
+      stepIndex = validStepIndex + 1;
+      if (stepIndex >= steps.length) {
+        interval = Math.max(1, sr?.graduatingInterval || 1);
+        nextDueOffsetMs = interval * 24 * 60 * 60 * 1000;
+      } else {
+        nextDueOffsetMs = steps[stepIndex] * 60 * 1000;
+      }
+    } else {
+      interval = Math.max(1, sr?.easyInterval || 4);
+      nextDueOffsetMs = interval * 24 * 60 * 60 * 1000;
+      easeFactor = Math.min(4.0, easeFactor + 0.1);
+    }
+  } else {
+    if (rating === 1) {
+      interval = 0;
+      stepIndex = 0;
+      nextDueOffsetMs = steps[0] * 60 * 1000;
+      easeFactor = Math.max(1.3, easeFactor - 0.2);
+    } else if (rating === 2) {
+      interval = Math.max(1, Math.round(interval * 1.2));
+      nextDueOffsetMs = interval * 24 * 60 * 60 * 1000;
+      easeFactor = Math.max(1.3, easeFactor - 0.15);
+    } else if (rating === 3) {
+      interval = Math.max(1, Math.round(interval * easeFactor));
+      nextDueOffsetMs = interval * 24 * 60 * 60 * 1000;
+    } else {
+      interval = Math.max(1, Math.round(interval * easeFactor * 1.3));
+      nextDueOffsetMs = interval * 24 * 60 * 60 * 1000;
+      easeFactor = Math.min(4.0, easeFactor + 0.1);
+    }
+  }
+
+  const safeOffset = Number.isFinite(nextDueOffsetMs) ? nextDueOffsetMs : 60 * 1000;
+
+  return {
+    ...card,
+    interval,
+    easeFactor: Math.round(easeFactor * 100) / 100,
+    stepIndex,
+    nextDue: Date.now() + safeOffset,
+    reviewCount: safeReviewCount + 1,
+  };
+}
+
+export function makeNewCard(front: string, back: string): Flashcard {
+  return {
+    id: generateId(),
+    front: (front || '').trim(),
+    back: (back || '').trim(),
+    interval: 0,
+    easeFactor: 2.5,
+    nextDue: Date.now(),
+    reviewCount: 0,
+    stepIndex: 0,
+  };
+}
+
+// ─── Tree & Hierarchical Structure ────────────────────────────────────────────
+
+export function buildDeckTree(decks: FlashcardDeck[]): DeckNode[] {
+  const rootNodes = new Map<string, DeckNode>();
+  if (!Array.isArray(decks)) return [];
+
+  decks.forEach((deck) => {
+    if (!deck) return;
+    const s = deck.subject ? deck.subject.trim() : '';
+    const rawName = deck.name ? deck.name.trim() : '';
+    const n = rawName || (s ? s.split('::').pop() || 'Untitled Deck' : 'Untitled Deck');
+    let fullPath = n;
+    if (s) {
+      if (n === s || n.startsWith(s + '::')) {
+        fullPath = n;
+      } else if (s.startsWith(n + '::') || s.endsWith('::' + n) || s.includes('::' + n + '::')) {
+        fullPath = s;
+      } else {
+        fullPath = `${s}::${n}`;
+      }
+    }
+    const parts = fullPath.split('::').filter(Boolean);
+    if (parts.length === 0) {
+      parts.push(n);
+    }
+    let currentMap = rootNodes;
+    let currentPath = '';
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      currentPath = currentPath ? `${currentPath}::${part}` : part;
+      if (!currentMap.has(part)) {
+        currentMap.set(part, { name: part, fullPath: currentPath, deck: null, children: new Map() });
+      }
+      const node = currentMap.get(part)!;
+      if (i === parts.length - 1) {
+        node.deck = deck;
+      }
+      currentMap = node.children;
+    }
+  });
+
+  const sortNodes = (map: Map<string, DeckNode>): DeckNode[] => {
+    return Array.from(map.values())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((node) => {
+        node.children = new Map(sortNodes(node.children).map((n) => [n.name, n]));
+        return node;
+      });
+  };
+
+  return sortNodes(rootNodes);
+}
+
+export function getNodeStats(node: DeckNode): NodeStats {
+  const stats: NodeStats = { new: 0, learning: 0, due: 0, total: 0, mastered: 0 };
+  if (!node) return stats;
+  const now = Date.now();
+
+  const addCards = (cards: Flashcard[]) => {
+    if (!Array.isArray(cards)) return;
+    for (const c of cards) {
+      if (!c) continue;
+      stats.total++;
+      if (c.reviewCount === 0) stats.new++;
+      else if (c.interval === 0) stats.learning++;
+      else if (c.nextDue <= now) stats.due++;
+      else stats.mastered++;
+    }
+  };
+
+  if (node.deck) addCards(node.deck.cards);
+  for (const child of node.children.values()) {
+    const cs = getNodeStats(child);
+    stats.new += cs.new;
+    stats.learning += cs.learning;
+    stats.due += cs.due;
+    stats.total += cs.total;
+    stats.mastered += cs.mastered;
+  }
+  return stats;
+}
+
+export function collectCards(node: DeckNode): SessionCard[] {
+  let cards: SessionCard[] = [];
+  if (!node) return cards;
+  if (node.deck && Array.isArray(node.deck.cards)) {
+    cards = cards.concat(
+      node.deck.cards
+        .filter(Boolean)
+        .map((c) => ({ ...c, deckId: node.deck!.id }))
+    );
+  }
+  for (const child of node.children.values()) {
+    cards = cards.concat(collectCards(child));
+  }
+  return cards;
+}
+
+export function collectDecksFromNode(node: DeckNode): FlashcardDeck[] {
+  let list: FlashcardDeck[] = [];
+  if (!node) return list;
+  if (node.deck) list.push(node.deck);
+  node.children.forEach((child) => {
+    list = list.concat(collectDecksFromNode(child));
+  });
+  return list;
+}
+
+export function getCardStatus(card: Flashcard): 'new' | 'learning' | 'due' | 'mastered' {
+  if (!card) return 'new';
+  const now = Date.now();
+  if (card.reviewCount === 0) return 'new';
+  if (card.interval === 0) return 'learning';
+  if (card.nextDue <= now) return 'due';
+  return 'mastered';
+}
+
+export function getNextDueText(node: DeckNode): string {
+  if (!node) return '';
+  const now = Date.now();
+  let soonest = Infinity;
+  const checkCards = (n: DeckNode) => {
+    if (!n) return;
+    if (n.deck && Array.isArray(n.deck.cards)) {
+      for (const c of n.deck.cards) {
+        if (c && typeof c.nextDue === 'number' && c.nextDue > now && c.nextDue < soonest) {
+          soonest = c.nextDue;
+        }
+      }
+    }
+    for (const child of n.children.values()) checkCards(child);
+  };
+  checkCards(node);
+  if (soonest === Infinity) return '';
+  const diffSec = Math.max(0, Math.round((soonest - now) / 1000));
+  if (diffSec < 60) return `${diffSec}s`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h`;
+  return `${Math.floor(diffSec / 86400)}d`;
+}
+
+// ─── Thematic Deck Icons ──────────────────────────────────────────────────────
+
+export function getDeckThematicIcon(subject?: string, name?: string): string {
+  const text = `${subject || ''} ${name || ''}`.toLowerCase();
+  if (/comp|code|prog|\bcs\b|dev|algo|python|java|react|script|web|software|sql|data|c\+\+|html|css|js|ts/i.test(text)) return 'code-slash-outline';
+  if (/med|health|nurs|anat|pharm|doctor|clinic|dent|physio/i.test(text)) return 'medkit-outline';
+  if (/math|calc|algeb|geom|stat|trig|num|quant|linear/i.test(text)) return 'calculator-outline';
+  if (/bio|chem|phys|sci|lab|\batom|cell|gene|organ/i.test(text)) return 'flask-outline';
+  if (/lang|span|french|german|jap|vocab|eng|lit|write|grammar|chinese|korean|latin|words/i.test(text)) return 'language-outline';
+  if (/hist|civic|gov|law|world|geo|politic|social/i.test(text)) return 'globe-outline';
+  if (/bus|econ|fin|acc|market|money|trade|invest|bank|manage/i.test(text)) return 'stats-chart-outline';
+  if (/art|music|design|sound|paint|draw|photo|theat/i.test(text)) return 'musical-notes-outline';
+  if (/psy|mind|phil|think|logic|cognit|neuro/i.test(text)) return 'bulb-outline';
+  return 'book-outline';
+}
+
+// ─── Gamification & XP System ─────────────────────────────────────────────────
+
+export const LEVEL_THRESHOLDS = [
+  { level: 1, minXp: 0, title: 'Novice Scholar', badge: '🥉' },
+  { level: 2, minXp: 100, title: 'Apprentice Scholar', badge: '🥈' },
+  { level: 3, minXp: 250, title: 'Scholar', badge: '🥇' },
+  { level: 4, minXp: 500, title: 'Senior Scholar', badge: '💎' },
+  { level: 5, minXp: 1000, title: 'Master Scholar', badge: '👑' },
+  { level: 6, minXp: 2000, title: 'Grandmaster Scholar', badge: '🏆' },
+];
+
+export function calculateLevel(totalXp: number = 0): LevelInfo {
+  const safeXp = typeof totalXp === 'number' && Number.isFinite(totalXp) ? Math.max(0, Math.floor(totalXp)) : 0;
+  let currentLevel = LEVEL_THRESHOLDS[0];
+
+  for (let i = LEVEL_THRESHOLDS.length - 1; i >= 0; i--) {
+    if (safeXp >= LEVEL_THRESHOLDS[i].minXp) {
+      currentLevel = LEVEL_THRESHOLDS[i];
+      break;
+    }
+  }
+
+  const nextLevel = LEVEL_THRESHOLDS.find((t) => t.level === currentLevel.level + 1);
+
+  if (!nextLevel) {
+    // Max level achieved
+    const levelBase = currentLevel.minXp;
+    return {
+      level: currentLevel.level,
+      title: currentLevel.title,
+      badge: currentLevel.badge,
+      currentLevelXp: safeXp,
+      nextLevelXp: safeXp,
+      levelXpEarned: safeXp - levelBase,
+      levelXpRequired: 1000,
+      progress: 1.0,
+      isMaxLevel: true,
+    };
+  }
+
+  const levelBase = currentLevel.minXp;
+  const levelTarget = nextLevel.minXp;
+  const levelSpan = levelTarget - levelBase;
+  const levelEarned = safeXp - levelBase;
+  const progress = Number.isFinite(levelEarned / levelSpan) ? Math.min(1, Math.max(0, levelEarned / levelSpan)) : 0;
+
+  return {
+    level: currentLevel.level,
+    title: currentLevel.title,
+    badge: currentLevel.badge,
+    currentLevelXp: safeXp,
+    nextLevelXp: levelTarget,
+    levelXpEarned: Number.isFinite(levelEarned) ? levelEarned : 0,
+    levelXpRequired: levelSpan,
+    progress,
+    isMaxLevel: false,
+  };
+}
+
+export function calculateXpGain(options: {
+  isReview?: boolean;
+  isMastered?: boolean;
+  isSessionComplete?: boolean;
+  cardsCount?: number;
+}): number {
+  if (!options) return 0;
+  let xp = 0;
+  if (options.isReview) xp += 10;
+  if (options.isMastered) xp += 25;
+  if (options.isSessionComplete) {
+    const count = typeof options.cardsCount === 'number' && Number.isFinite(options.cardsCount) ? Math.max(1, options.cardsCount) : 1;
+    xp += Math.max(20, Math.min(100, count * 5));
+  }
+  return xp;
+}
+
+export function updateStudyStats(
+  currentStats: FlashcardStats | undefined = { lastStudyDate: '', currentStreak: 0, masteredToday: 0 },
+  reviewsCount: number = 0,
+  masteredCount: number = 0,
+  sessionDone: boolean = false,
+  sessionTotalCards?: number
+): FlashcardStats {
+  const safeCurrent = currentStats || { lastStudyDate: '', currentStreak: 0, masteredToday: 0 };
+  const safeReviews = typeof reviewsCount === 'number' && Number.isFinite(reviewsCount) ? Math.max(0, Math.floor(reviewsCount)) : 0;
+  const safeMastered = typeof masteredCount === 'number' && Number.isFinite(masteredCount) ? Math.max(0, Math.floor(masteredCount)) : 0;
+  const safeSessionTotal = typeof sessionTotalCards === 'number' && Number.isFinite(sessionTotalCards) ? Math.max(0, Math.floor(sessionTotalCards)) : undefined;
+
+  const todayStr = getLocalDateString(new Date());
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = getLocalDateString(yesterday);
+
+  let streak = typeof safeCurrent.currentStreak === 'number' && Number.isFinite(safeCurrent.currentStreak)
+    ? Math.max(0, Math.floor(safeCurrent.currentStreak))
+    : 0;
+
+  if (safeCurrent.lastStudyDate !== todayStr) {
+    streak = safeCurrent.lastStudyDate === yesterdayStr ? streak + 1 : 1;
+  } else if (streak === 0) {
+    streak = 1;
+  }
+
+  const isSameDay = safeCurrent.lastStudyDate === todayStr;
+  const baseReviewed = typeof safeCurrent.cardsReviewedToday === 'number' && Number.isFinite(safeCurrent.cardsReviewedToday) ? safeCurrent.cardsReviewedToday : 0;
+  const baseMastered = typeof safeCurrent.masteredToday === 'number' && Number.isFinite(safeCurrent.masteredToday) ? safeCurrent.masteredToday : 0;
+
+  const cardsReviewedToday = (isSameDay ? baseReviewed : 0) + safeReviews;
+  const masteredToday = (isSameDay ? baseMastered : 0) + safeMastered;
+
+  // Calculate XP gain
+  const completionBonus = sessionDone ? Math.max(20, Math.min(100, (safeSessionTotal ?? safeReviews) * 5)) : 0;
+  const xpGained = safeReviews * 10 + safeMastered * 25 + completionBonus;
+
+  const baseTotalXp = typeof safeCurrent.totalXp === 'number' && Number.isFinite(safeCurrent.totalXp) ? Math.max(0, Math.floor(safeCurrent.totalXp)) : 0;
+  const totalXp = baseTotalXp + xpGained;
+
+  // Update weekly history with 60-day bounded retention
+  const rawHistory = Array.isArray(safeCurrent.weeklyHistory) ? safeCurrent.weeklyHistory : [];
+  const historySet = new Set(rawHistory.filter((d): d is string => typeof d === 'string' && d.length > 0));
+  historySet.add(todayStr);
+  const sixtyDaysAgo = new Date();
+  sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+  const cutoffStr = getLocalDateString(sixtyDaysAgo);
+  const cleanHistory = Array.from(historySet).filter((d) => d >= cutoffStr).sort();
+
+  return {
+    lastStudyDate: todayStr,
+    currentStreak: streak,
+    masteredToday,
+    cardsReviewedToday,
+    totalXp,
+    dailyGoal: typeof safeCurrent.dailyGoal === 'number' && Number.isFinite(safeCurrent.dailyGoal) && safeCurrent.dailyGoal > 0 ? safeCurrent.dailyGoal : 20,
+    weeklyHistory: cleanHistory,
+  };
+}
+
+export function isStreakLive(
+  lastStudyDate?: string,
+  todayStr?: string,
+  yesterdayStr?: string
+): boolean {
+  if (!lastStudyDate || typeof lastStudyDate !== 'string' || !lastStudyDate.trim()) {
+    return false;
+  }
+  const cleanDate = lastStudyDate.trim();
+  const today = todayStr || getLocalDateString(new Date());
+  if (cleanDate === today) return true;
+  let yStr = yesterdayStr;
+  if (!yStr) {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yStr = getLocalDateString(yesterday);
+  }
+  return cleanDate === yStr;
+}
+
+export function getWeekDaysActivity(
+  weeklyHistory: string[] = [],
+  lastStudyDate: string = '',
+  nowDate: Date = new Date()
+): DayActivity[] {
+  const days: DayActivity[] = [];
+  const dayNames = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+  const now = nowDate || new Date();
+
+  // Find Monday of the current week (assuming Monday is start of week)
+  const currentDayOfWeek = now.getDay(); // 0 = Sun, 1 = Mon, ...
+  const mondayOffset = currentDayOfWeek === 0 ? -6 : 1 - currentDayOfWeek;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + mondayOffset);
+
+  const rawHistory = Array.isArray(weeklyHistory) ? weeklyHistory : [];
+  const historySet = new Set(rawHistory.filter((d): d is string => typeof d === 'string' && d.length > 0));
+  if (lastStudyDate && typeof lastStudyDate === 'string') historySet.add(lastStudyDate);
+
+  const todayStr = getLocalDateString(now);
+
+  for (let i = 0; i < 7; i++) {
+    const dayDate = new Date(monday);
+    dayDate.setDate(monday.getDate() + i);
+    const dateStr = getLocalDateString(dayDate);
+    const isToday = dateStr === todayStr;
+    const isCompleted = historySet.has(dateStr);
+
+    days.push({
+      dayLabel: dayNames[i],
+      dateStr,
+      isToday,
+      isCompleted,
+    });
+  }
+
+  return days;
+}
+
+// ─── File Import Parser ───────────────────────────────────────────────────────
+
+export function parseCsvLine(line: string): [string, string] | null {
+  if (!line || typeof line !== 'string') return null;
+  const tokens: string[] = [];
+  let current = '';
+  let quoteChar: string | null = null;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    const prevChar = i > 0 ? line[i - 1] : '';
+
+    if ((char === '"' || char === "'") && prevChar !== '\\') {
+      if (!quoteChar && current.trim() === '') {
+        quoteChar = char;
+        continue;
+      } else if (quoteChar === char) {
+        // Check for RFC 4180 escaped quote ("")
+        if (i + 1 < line.length && line[i + 1] === char) {
+          current += char;
+          i++; // Skip the second quote
+          continue;
+        }
+        quoteChar = null;
+        continue;
+      }
+    }
+
+    if (char === ',' && !quoteChar) {
+      tokens.push(current.trim());
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+  tokens.push(current.trim());
+
+  if (tokens.length >= 2 && (tokens[0] || tokens[1])) {
+    const validRest = tokens.slice(1).filter((t) => t.length > 0);
+    if (validRest.length > 0) {
+      return [tokens[0], validRest.join(', ')];
+    }
+  }
+  return null;
+}
+
+export function parseImport(
+  content: string,
+  separator: 'comma' | 'pipe' | 'tab' | 'semicolon' | 'auto' = 'auto'
+): { front: string; back: string }[] {
+  if (!content || typeof content !== 'string') return [];
+  const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  const cards: { front: string; back: string }[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith('#') || line.startsWith('//')) continue;
+    let front = '',
+      back = '';
+
+    if (separator === 'tab' || (separator === 'auto' && line.includes('\t'))) {
+      const [f, ...rest] = line.split('\t');
+      front = f?.trim() || '';
+      back = rest.filter((t) => t.trim().length > 0).join('\t').trim();
+    } else if (separator === 'pipe' || (separator === 'auto' && line.includes('|'))) {
+      const [f, ...rest] = line.split('|');
+      front = f ? f.trim().replace(/^Q:\s*/i, '').trim() : '';
+      back = rest.length > 0 ? rest.filter((t) => t.trim().length > 0).join('|').trim().replace(/^A:\s*/i, '').trim() : '';
+    } else if (separator === 'semicolon' || (separator === 'auto' && line.includes(';'))) {
+      const [f, ...rest] = line.split(';');
+      front = f?.trim() || '';
+      back = rest.filter((t) => t.trim().length > 0).join('; ').trim();
+    } else if (separator === 'comma' || (separator === 'auto' && line.includes(','))) {
+      const parsedCsv = parseCsvLine(line);
+      if (parsedCsv) {
+        front = parsedCsv[0];
+        back = parsedCsv[1];
+      }
+    }
+
+    if (front && back) cards.push({ front, back });
+  }
+
+  return cards;
+}
+
+// ─── Exam Prep Scheduling Algorithm (Cepeda et al. 2008) ──────────────────────
+
+export function computeExamPlan(
+  daysUntilExam: number,
+  totalCards: number,
+  overrideReviews: number = 0
+): { plan: ExamScheduleSlot[]; numReviews: number } {
+  const safeDays = typeof daysUntilExam === 'number' && Number.isFinite(daysUntilExam) ? Math.max(0, daysUntilExam) : 0;
+  const safeTotalCards = typeof totalCards === 'number' && Number.isFinite(totalCards) ? Math.max(0, Math.floor(totalCards)) : 0;
+  const safeOverride = typeof overrideReviews === 'number' && Number.isFinite(overrideReviews) ? Math.max(0, Math.floor(overrideReviews)) : 0;
+
+  let numReviews: number;
+  if (safeDays <= 1) numReviews = 4; // cram mode: 4 sessions today
+  else if (safeDays <= 3) numReviews = 3;
+  else if (safeDays <= 7) numReviews = 4;
+  else if (safeDays <= 14) numReviews = 5;
+  else if (safeDays <= 30) numReviews = 6;
+  else numReviews = 7;
+
+  if (safeOverride > 0) numReviews = safeOverride;
+  numReviews = Math.max(1, numReviews);
+
+  const intervals: number[] = [];
+  if (safeDays <= 1) {
+    const cramGaps = [0, 0.014, 0.042, 0.125]; // fractions of a day
+    for (let i = 0; i < numReviews; i++) {
+      if (i < cramGaps.length) {
+        intervals.push(cramGaps[i]);
+      } else {
+        intervals.push(0.125 + (i - 3) * 0.08);
+      }
+    }
+  } else {
+    const maxSpan = Math.max(0.5, safeDays);
+    const optimalFirstGap = Math.max(0.2, safeDays * 0.12);
+    let currentGap = optimalFirstGap;
+    let dayOffset = 0;
+    for (let i = 0; i < numReviews; i++) {
+      intervals.push(Math.round(dayOffset * 100) / 100);
+      const remainingReviews = numReviews - 1 - i;
+      if (remainingReviews > 0) {
+        const remainingSpan = Math.max(0.1, maxSpan - dayOffset);
+        const minStep = remainingSpan / (remainingReviews + 1);
+        dayOffset += Math.max(minStep * 0.5, Math.min(remainingSpan - (remainingReviews - 1) * 0.05, currentGap));
+        currentGap *= 1.4;
+      }
+    }
+  }
+
+  const now = new Date();
+  const plan: ExamScheduleSlot[] = intervals.map((dayOff, i) => {
+    const reviewDate = new Date(now.getTime() + dayOff * 24 * 60 * 60 * 1000);
+    const isToday = dayOff < 1;
+    const label = isToday
+      ? i === 0
+        ? 'Now'
+        : `+${Math.round(dayOff * 24)}h`
+      : reviewDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return { day: Math.round(dayOff * 10) / 10, label, cardsPerSession: safeTotalCards };
+  });
+
+  return { plan, numReviews };
+}
+

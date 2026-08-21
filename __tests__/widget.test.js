@@ -214,20 +214,26 @@ export function runWidgetTests(describe, test) {
         { courseName: 'CS 4', room: 'R4', timeStr: '2:00 PM', timeRemainingStr: 'In 6h', isOngoing: false },
       ];
 
-      // Very small widget height (< 150)
-      const smallWidget = FinScholarWidget({ classes, widgetInfo: { width: 300, height: 140 } });
+      // Very small widget height (< 110) -> 0 upcoming
+      const smallWidget = FinScholarWidget({ classes, widgetInfo: { width: 300, height: 100 } });
       const smallBottom = getChildren(smallWidget)[2];
       const smallEmpty = getChildren(smallBottom)[0];
       assert.strictEqual(getChildren(smallEmpty)[0].props.text, 'No other classes today');
 
-      // Medium widget height (200) -> 1 upcoming
+      // Compact 3x2 widget height (< 160) -> 1 upcoming
+      const compactWidget = FinScholarWidget({ classes, widgetInfo: { width: 300, height: 140 } });
+      const compactBottom = getChildren(compactWidget)[2];
+      const compactCards = getChildren(getChildren(compactBottom)[0]);
+      assert.strictEqual(compactCards.length, 1);
+
+      // Medium 3x3 widget height (< 240) -> 2 upcoming
       const medWidget = FinScholarWidget({ classes, widgetInfo: { width: 300, height: 200 } });
       const medBottom = getChildren(medWidget)[2];
       const medCards = getChildren(getChildren(medBottom)[0]);
-      assert.strictEqual(medCards.length, 1);
+      assert.strictEqual(medCards.length, 2);
 
-      // Normal widget height (400) -> up to 3 upcoming
-      const normWidget = FinScholarWidget({ classes, widgetInfo: { width: 300, height: 400 } });
+      // Normal 3x4 / 4x5 widget height (>= 240) -> up to 3 upcoming
+      const normWidget = FinScholarWidget({ classes, widgetInfo: { width: 300, height: 250 } });
       const normBottom = getChildren(normWidget)[2];
       const normCards = getChildren(getChildren(normBottom)[0]);
       assert.strictEqual(normCards.length, 3);
@@ -428,7 +434,7 @@ export function runWidgetTests(describe, test) {
     });
   });
 
-  describe('Widget Compaction & Native 4x5 Registration Suite 6', () => {
+  describe('Widget Compaction & Native 3x4 Registration Suite 6', () => {
     test('6.1 UI Compaction: Active class panel, typography, and paddings are measurably smaller', () => {
       const sampleClass = [{
         courseName: 'CS 101 - Intro to CS',
@@ -516,7 +522,7 @@ export function runWidgetTests(describe, test) {
       assert(rightText.props.style.fontSize <= 10, 'Countdown text fontSize should be <= 10');
     });
 
-    test('6.3 Native Widget Registration: app.json and native XML reflect 4x5 grid dimensions', async () => {
+    test('6.3 Native Widget Registration: app.json and native XML reflect 3x4 grid dimensions', async () => {
       const fs = await import('node:fs');
       const path = await import('node:path');
 
@@ -528,23 +534,23 @@ export function runWidgetTests(describe, test) {
       );
       assert(widgetPlugin, 'react-native-android-widget plugin must be present in app.json');
       const widgetConfig = widgetPlugin[1].widgets[0];
-      assert.strictEqual(widgetConfig.minWidth, '250dp', 'app.json minWidth should be 250dp for 4 columns');
-      assert.strictEqual(widgetConfig.minHeight, '320dp', 'app.json minHeight should be 320dp for 5 rows');
-      assert.strictEqual(widgetConfig.targetCellWidth, 4, 'targetCellWidth should be 4');
-      assert.strictEqual(widgetConfig.targetCellHeight, 5, 'targetCellHeight should be 5');
+      assert.strictEqual(widgetConfig.minWidth, '180dp', 'app.json minWidth should be 180dp for 3 columns');
+      assert.strictEqual(widgetConfig.minHeight, '250dp', 'app.json minHeight should be 250dp for 4 rows');
+      assert.strictEqual(widgetConfig.targetCellWidth, 3, 'targetCellWidth should be 3');
+      assert.strictEqual(widgetConfig.targetCellHeight, 4, 'targetCellHeight should be 4');
 
       // Check android native xml
       const xmlPath = path.resolve('android/app/src/main/res/xml/widgetprovider_finscholarwidget.xml');
       const xmlContent = fs.readFileSync(xmlPath, 'utf8');
-      assert(xmlContent.includes('android:minWidth="250dp"'), 'Native XML must contain android:minWidth="250dp"');
-      assert(xmlContent.includes('android:minHeight="320dp"'), 'Native XML must contain android:minHeight="320dp"');
-      assert(xmlContent.includes('android:targetCellWidth="4"'), 'Native XML must contain android:targetCellWidth="4"');
-      assert(xmlContent.includes('android:targetCellHeight="5"'), 'Native XML must contain android:targetCellHeight="5"');
+      assert(xmlContent.includes('android:minWidth="180dp"'), 'Native XML must contain android:minWidth="180dp"');
+      assert(xmlContent.includes('android:minHeight="250dp"'), 'Native XML must contain android:minHeight="250dp"');
+      assert(xmlContent.includes('android:targetCellWidth="3"'), 'Native XML must contain android:targetCellWidth="3"');
+      assert(xmlContent.includes('android:targetCellHeight="4"'), 'Native XML must contain android:targetCellHeight="4"');
     });
   });
 
   describe('Widget Adversarial Reviewer Suite 7: Strict Boundary & Layout Budget Contracts', () => {
-    test('7.1 Precise responsive height threshold boundary checks (149 vs 150, 259 vs 260)', () => {
+    test('7.1 Precise responsive height threshold boundary checks (<110, <160, <240, >=240)', () => {
       const classes = [
         { courseName: 'Active Class', room: 'R0', timeStr: '8:00 AM', isOngoing: false },
         { courseName: 'Class 1', room: 'R1', timeStr: '9:00 AM', isOngoing: false },
@@ -552,25 +558,35 @@ export function runWidgetTests(describe, test) {
         { courseName: 'Class 3', room: 'R3', timeStr: '11:00 AM', isOngoing: false },
       ];
 
-      // At height 149 (very small) -> 0 upcoming
-      const w149 = FinScholarWidget({ classes, widgetInfo: { width: 250, height: 149 } });
-      const b149 = getChildren(w149)[2];
-      assert.strictEqual(getChildren(getChildren(b149)[0])[0].props.text, 'No other classes today');
+      // At height 109 (< 110) -> 0 upcoming
+      const w109 = FinScholarWidget({ classes, widgetInfo: { width: 250, height: 109 } });
+      const b109 = getChildren(w109)[2];
+      assert.strictEqual(getChildren(getChildren(b109)[0])[0].props.text, 'No other classes today');
 
-      // At height 150 (small) -> 1 upcoming
-      const w150 = FinScholarWidget({ classes, widgetInfo: { width: 250, height: 150 } });
-      const b150 = getChildren(w150)[2];
-      assert.strictEqual(getChildren(getChildren(b150)[0]).length, 1);
+      // At height 110 (< 160) -> 1 upcoming
+      const w110 = FinScholarWidget({ classes, widgetInfo: { width: 250, height: 110 } });
+      const b110 = getChildren(w110)[2];
+      assert.strictEqual(getChildren(getChildren(b110)[0]).length, 1);
 
-      // At height 259 (small) -> 1 upcoming
-      const w259 = FinScholarWidget({ classes, widgetInfo: { width: 250, height: 259 } });
-      const b259 = getChildren(w259)[2];
-      assert.strictEqual(getChildren(getChildren(b259)[0]).length, 1);
+      // At height 159 (< 160) -> 1 upcoming
+      const w159 = FinScholarWidget({ classes, widgetInfo: { width: 250, height: 159 } });
+      const b159 = getChildren(w159)[2];
+      assert.strictEqual(getChildren(getChildren(b159)[0]).length, 1);
 
-      // At height 260 (normal 4x5) -> 3 upcoming
-      const w260 = FinScholarWidget({ classes, widgetInfo: { width: 250, height: 260 } });
-      const b260 = getChildren(w260)[2];
-      assert.strictEqual(getChildren(getChildren(b260)[0]).length, 3);
+      // At height 160 (< 240) -> 2 upcoming
+      const w160 = FinScholarWidget({ classes, widgetInfo: { width: 250, height: 160 } });
+      const b160 = getChildren(w160)[2];
+      assert.strictEqual(getChildren(getChildren(b160)[0]).length, 2);
+
+      // At height 239 (< 240) -> 2 upcoming
+      const w239 = FinScholarWidget({ classes, widgetInfo: { width: 250, height: 239 } });
+      const b239 = getChildren(w239)[2];
+      assert.strictEqual(getChildren(getChildren(b239)[0]).length, 2);
+
+      // At height 240 (>= 240) -> 3 upcoming
+      const w240 = FinScholarWidget({ classes, widgetInfo: { width: 250, height: 240 } });
+      const b240 = getChildren(w240)[2];
+      assert.strictEqual(getChildren(getChildren(b240)[0]).length, 3);
     });
 
     test('7.2 Overflow class capping: 10 classes passed -> exactly 3 upcoming rendered', () => {
@@ -704,8 +720,8 @@ export function runWidgetTests(describe, test) {
     });
   });
 
-  describe('Widget 4x5 Math & Automatic Inset Verification Suite 8', () => {
-    test('8.1 Mathematical precision for 4x5 grid formula: (cells * 70) - 30', async () => {
+  describe('Widget 3x4 Math & Automatic Inset Verification Suite 8', () => {
+    test('8.1 Mathematical precision for 3x4 grid formula: (cells * 70) - 30', async () => {
       const fs = await import('node:fs');
       const path = await import('node:path');
 
@@ -723,19 +739,19 @@ export function runWidgetTests(describe, test) {
       const calculatedCols = (minWidthDp + 30) / 70;
       const calculatedRows = (minHeightDp + 30) / 70;
 
-      assert.strictEqual(calculatedCols, 4, `minWidth ${minWidthDp}dp must correspond to exactly 4 columns`);
-      assert.strictEqual(calculatedRows, 5, `minHeight ${minHeightDp}dp must correspond to exactly 5 rows (not 5.14)`);
-      assert.strictEqual(widgetConfig.minWidth, '250dp');
-      assert.strictEqual(widgetConfig.minHeight, '320dp');
-      assert.strictEqual(widgetConfig.targetCellWidth, 4);
-      assert.strictEqual(widgetConfig.targetCellHeight, 5);
+      assert.strictEqual(calculatedCols, 3, `minWidth ${minWidthDp}dp must correspond to exactly 3 columns`);
+      assert.strictEqual(calculatedRows, 4, `minHeight ${minHeightDp}dp must correspond to exactly 4 rows`);
+      assert.strictEqual(widgetConfig.minWidth, '180dp');
+      assert.strictEqual(widgetConfig.minHeight, '250dp');
+      assert.strictEqual(widgetConfig.targetCellWidth, 3);
+      assert.strictEqual(widgetConfig.targetCellHeight, 4);
 
       const xmlPath = path.resolve('android/app/src/main/res/xml/widgetprovider_finscholarwidget.xml');
       const xmlContent = fs.readFileSync(xmlPath, 'utf8');
-      assert(xmlContent.includes('android:minWidth="250dp"'));
-      assert(xmlContent.includes('android:minHeight="320dp"'));
-      assert(xmlContent.includes('android:targetCellWidth="4"'));
-      assert(xmlContent.includes('android:targetCellHeight="5"'));
+      assert(xmlContent.includes('android:minWidth="180dp"'));
+      assert(xmlContent.includes('android:minHeight="250dp"'));
+      assert(xmlContent.includes('android:targetCellWidth="3"'));
+      assert(xmlContent.includes('android:targetCellHeight="4"'));
     });
 
     test('8.2 Automatic native padding & comfortable insetting out of the box', () => {
@@ -832,6 +848,119 @@ export function runWidgetTests(describe, test) {
 
       assert.strictEqual(itemTitle.props.maxLines, 1, 'Upcoming item title must have maxLines=1');
       assert.strictEqual(itemSubtitle.props.maxLines, 1, 'Upcoming item subtitle must have maxLines=1');
+    });
+  });
+
+  describe('Widget Adaptive Dark/Light Mode Theming Suite 9', () => {
+    const sampleClasses = [
+      { courseName: 'CS 101', room: 'Lab 1', timeStr: '9:00 AM', timeRemainingStr: 'In 30m', isOngoing: false },
+      { courseName: 'MATH 201', room: 'Room 202', timeStr: '11:00 AM', timeRemainingStr: 'In 2h', isOngoing: false },
+    ];
+
+    test('9.1 Dark mode applies slate-900 / slate-800 color tokens across all widget sections', () => {
+      const darkWidget = FinScholarWidget({ classes: sampleClasses, isDark: true });
+      assert.strictEqual(darkWidget.props.style.backgroundColor, '#0f172a');
+      assert.strictEqual(darkWidget.props.style.backgroundGradient.from, '#0f172a');
+      assert.strictEqual(darkWidget.props.style.backgroundGradient.to, '#1e293b');
+
+      const [topSection, waveSection, bottomSection] = getChildren(darkWidget);
+
+      // Top section title in dark mode
+      const nextPanel = getChildren(topSection)[1];
+      const panelChildren = getChildren(nextPanel);
+      const title = panelChildren[1];
+      assert.strictEqual(title.props.style.color, '#f8fafc');
+
+      // Wave SVG fill in dark mode matches bottom container
+      const waveSvg = getChildren(waveSection).find(c => c.type === SvgWidget || c.type?.name === 'SvgWidget');
+      assert(waveSvg.props.svg.includes('fill="#0f172a"'), `Wave SVG should have dark fill #0f172a, got ${waveSvg.props.svg}`);
+
+      // Bottom section in dark mode
+      assert.strictEqual(bottomSection.props.style.backgroundColor, '#0f172a');
+
+      // Upcoming card in dark mode
+      const listContainer = getChildren(bottomSection)[0];
+      const card = getChildren(listContainer)[0];
+      assert.strictEqual(card.props.style.backgroundColor, '#1e293b');
+
+      const cardChildren = getChildren(card);
+      const avatarCircle = cardChildren[0];
+      const avatarText = getChildren(avatarCircle)[0];
+      assert.strictEqual(avatarCircle.props.style.backgroundColor, '#334155');
+      assert.strictEqual(avatarText.props.style.color, '#f8fafc');
+
+      const middleContent = cardChildren[1];
+      const cardTitle = getChildren(middleContent)[0];
+      const cardSubtitle = getChildren(middleContent)[1];
+      assert.strictEqual(cardTitle.props.style.color, '#f8fafc');
+      assert.strictEqual(cardSubtitle.props.style.color, '#94a3b8');
+
+      const badgeCircle = cardChildren[2];
+      const badgeText = getChildren(badgeCircle)[0];
+      assert.strictEqual(badgeCircle.props.style.backgroundColor, '#334155');
+      assert.strictEqual(badgeText.props.style.color, '#f8fafc');
+    });
+
+    test('9.2 Light mode applies indigo / white color tokens across all widget sections', () => {
+      const lightWidget = FinScholarWidget({ classes: sampleClasses, isDark: false });
+      assert.strictEqual(lightWidget.props.style.backgroundColor, '#6366f1');
+      assert.strictEqual(lightWidget.props.style.backgroundGradient.from, '#6366f1');
+      assert.strictEqual(lightWidget.props.style.backgroundGradient.to, '#4338ca');
+
+      const [topSection, waveSection, bottomSection] = getChildren(lightWidget);
+
+      // Top section title in light mode
+      const nextPanel = getChildren(topSection)[1];
+      const panelChildren = getChildren(nextPanel);
+      const title = panelChildren[1];
+      assert.strictEqual(title.props.style.color, '#ffffff');
+
+      // Wave SVG fill in light mode
+      const waveSvg = getChildren(waveSection).find(c => c.type === SvgWidget || c.type?.name === 'SvgWidget');
+      assert(waveSvg.props.svg.includes('fill="#ffffff"'), `Wave SVG should have light fill #ffffff, got ${waveSvg.props.svg}`);
+
+      // Bottom section in light mode
+      assert.strictEqual(bottomSection.props.style.backgroundColor, '#ffffff');
+
+      // Upcoming card in light mode
+      const listContainer = getChildren(bottomSection)[0];
+      const card = getChildren(listContainer)[0];
+      assert.strictEqual(card.props.style.backgroundColor, '#f1f5f9');
+
+      const cardChildren = getChildren(card);
+      const avatarCircle = cardChildren[0];
+      const avatarText = getChildren(avatarCircle)[0];
+      assert.strictEqual(avatarCircle.props.style.backgroundColor, '#e0e7ff');
+      assert.strictEqual(avatarText.props.style.color, '#4f46e5');
+
+      const middleContent = cardChildren[1];
+      const cardTitle = getChildren(middleContent)[0];
+      const cardSubtitle = getChildren(middleContent)[1];
+      assert.strictEqual(cardTitle.props.style.color, '#1e293b');
+      assert.strictEqual(cardSubtitle.props.style.color, '#64748b');
+
+      const badgeCircle = cardChildren[2];
+      const badgeText = getChildren(badgeCircle)[0];
+      assert.strictEqual(badgeCircle.props.style.backgroundColor, '#e0e7ff');
+      assert.strictEqual(badgeText.props.style.color, '#4f46e5');
+    });
+
+    test('9.3 Empty state adapts background gradient and typography to dark mode', () => {
+      const darkEmpty = FinScholarWidget({ classes: [], isDark: true });
+      assert.strictEqual(darkEmpty.props.style.backgroundColor, '#0f172a');
+      assert.strictEqual(darkEmpty.props.style.backgroundGradient.from, '#0f172a');
+      assert.strictEqual(darkEmpty.props.style.backgroundGradient.to, '#1e293b');
+
+      const emptyChildren = getChildren(darkEmpty);
+      const title = emptyChildren[1];
+      const subtitle = emptyChildren[2];
+      assert.strictEqual(title.props.style.color, '#f8fafc');
+      assert.strictEqual(subtitle.props.style.color, '#94a3b8');
+
+      const lightEmpty = FinScholarWidget({ classes: [], isDark: false });
+      assert.strictEqual(lightEmpty.props.style.backgroundColor, '#6366f1');
+      assert.strictEqual(lightEmpty.props.style.backgroundGradient.from, '#6366f1');
+      assert.strictEqual(lightEmpty.props.style.backgroundGradient.to, '#4338ca');
     });
   });
 }

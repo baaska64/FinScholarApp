@@ -391,7 +391,7 @@ export default function DashboardScreen() {
                                 ...(!isDark ? Shadows.sm : {})
                             }}>
                                 <Image 
-                                    source={require('../../assets/images/finanimated.gif')} 
+                                    source={require('../../assets/images/finanimated_opt.gif')} 
                                     style={{ 
                                         width: 175, 
                                         height: 175, 
@@ -489,7 +489,7 @@ export default function DashboardScreen() {
                                 {/* Mascot Graphic */}
                                 <View style={{ width: 100, height: 100, justifyContent: 'center', alignItems: 'center' }}>
                                     <Image 
-                                        source={require('../../assets/images/finanimated.gif')} 
+                                        source={require('../../assets/images/finanimated_opt.gif')} 
                                         style={{ 
                                             width: 200, 
                                             height: 200,

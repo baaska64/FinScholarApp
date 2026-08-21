@@ -103,6 +103,7 @@ import { CustomAlertProvider } from '@/components/CustomAlert';
 import { SemesterProvider } from '@/components/SemesterContext';
 import { SyncProvider } from '@/components/SyncProvider';
 import UpdateWarningModal from '@/components/UpdateWarningModal';
+import ChangelogModal from '@/components/ChangelogModal';
 
 function RootLayoutNav() {
   const { colorScheme } = useColorScheme();
@@ -114,7 +115,7 @@ function RootLayoutNav() {
 
   return (
     <ThemeProvider value={navTheme}>
-      <StatusBar style="auto" />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
       <SyncProvider>
         <SemesterProvider>
           <Stack screenOptions={{ animation: 'slide_from_right' }}>
@@ -125,7 +126,7 @@ function RootLayoutNav() {
             <Stack.Screen name="modal" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           </Stack>
           <CustomAlertProvider />
-          <UpdateWarningModal />
+          <ChangelogModal />
         </SemesterProvider>
       </SyncProvider>
     </ThemeProvider>
