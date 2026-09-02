@@ -16,6 +16,10 @@ import { AlertService } from '@/components/CustomAlert';
 import { useSemesterContext } from '@/components/SemesterContext';
 import { getTheme, Typography, Radius, Shadows } from '@/constants/Theme';
 import { ListSkeleton } from '@/components/ui/LoadingSkeleton';
+import SpotlightTarget from '@/components/spotlight/SpotlightTarget';
+import { useScreenTour } from '@/components/spotlight/useScreenTour';
+import { SPOTLIGHT_IDS, TOUR_KEYS, CALENDAR_TOUR } from '@/constants/tours';
+import { useTabBarHeight } from '@/components/CustomTabBar';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -41,6 +45,7 @@ export default function CalendarScreen() {
     const { colorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
     const theme = getTheme(isDark);
+    const tabBarHeight = useTabBarHeight();
     const activeTypes = isDark ? MILESTONE_TYPES_DARK : MILESTONE_TYPES;
 
     const [data, setData] = useState<any>(null);
@@ -204,6 +209,9 @@ export default function CalendarScreen() {
         AlertService.alert("Success", "Imported events to your calendar.");
     };
 
+    // First visit only: point at the academic-calendar scanner.
+    useScreenTour(TOUR_KEYS.calendar, CALENDAR_TOUR, data !== null);
+
     if (!data) {
         return (
             <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
@@ -262,9 +270,11 @@ export default function CalendarScreen() {
                     {syncStatus === 'error' && <Ionicons name="cloud-offline" size={22} color={theme.error} />}
                     {syncStatus === 'offline' && <Ionicons name="cloud-offline" size={22} color={theme.textTertiary} />}
                     
-                    <TouchableOpacity onPress={() => setShowImportModal(true)} style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9' }}>
-                        <Ionicons name="sparkles" size={20} color={isDark ? '#cbd5e1' : '#475569'} />
-                    </TouchableOpacity>
+                    <SpotlightTarget id={SPOTLIGHT_IDS.calendarImport}>
+                        <TouchableOpacity onPress={() => setShowImportModal(true)} style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9' }}>
+                            <Ionicons name="sparkles" size={20} color={isDark ? '#cbd5e1' : '#475569'} />
+                        </TouchableOpacity>
+                    </SpotlightTarget>
                     
                     <TouchableOpacity 
                         onPress={() => router.push('/(tabs)/profile')} 
@@ -275,7 +285,7 @@ export default function CalendarScreen() {
                 </View>
             </View>
 
-            <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 100 }}>
+            <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}>
               <View style={{ width: '100%', maxWidth: 800, alignSelf: 'center' }}>
                 {data.years.length > 0 ? (
                     <View>

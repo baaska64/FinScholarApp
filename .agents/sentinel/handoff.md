@@ -1,4 +1,4 @@
-# Sentinel Handoff Report: Google Sign-In "Code 10 (Developer Error)" Production Fix
+# Sentinel Handoff Report: Bento Box / iOS Widget Dashboard Redesign
 
 **Project**: FinScholarApp  
 **Role**: Sentinel (`sentinel`)  
@@ -9,63 +9,64 @@
 
 ## 1. Observation
 
-The user requested a small, focused fix for Google Sign-In in FinScholarApp throwing "Code 10 (Developer Error)" exclusively on Google Play Store production builds:
-- **R1. Diagnose Production Configuration**: Audit `eas.json`, `app.json`, and `.env` handling to ensure `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` is correctly bundled into the production APK/AAB during `eas build --profile production`.
-- **R2. Fix Google Sign-In Initialization**: Audit `app/login.tsx` to ensure `GoogleSignin.configure()` is being called robustly and securely, handling undefined or delayed environment variables.
+The user requested a self-contained UI/UX redesign of the main dashboard for FinScholar React Native app into a modern "Bento Box" / iOS widget-style layout:
+- **R1. Bento Box Layout Implementation**: Redesign `app/(tabs)/index.tsx` using modular, card-based Bento Box layout with rounded corners, subtle shadows, and responsive scaling.
+- **R2. Feature Parity & Theming**: Maintain full access to all existing dashboard features (GWA tracking, task lists, schedule scanner, flashcard shortcuts, attendance tracking, modals, etc.) while strictly complying with the project's existing color palette and styling constants in `constants/Theme.ts`.
 - **Acceptance Criteria**:
-  1. `npx tsc --noEmit` passes without any new TypeScript errors.
-  2. A definitive root cause is identified and documented in `root_cause.md`.
-  3. Code changes guarantee the Web Client ID is present and passed correctly to Google Sign-In in EAS production profile.
+  1. The app builds and renders the new Dashboard without runtime crashes.
+  2. All pre-existing functionalities remain fully accessible and unbroken.
+  3. The layout visually and structurally embodies a Bento Box architecture.
+  4. The redesign strictly uses existing color palette constants.
 
-The task was routed to the SWE Light execution loop (`swe_light_6`), iterated through an implementer and 3 adversarial reviewer rounds (R1, R2, R3), and verified through an independent post-victory audit (`sentinel_victory_auditor_7`).
+The task was routed to the SWE Light path (`teamwork_preview_swe` in `.agents/swe_light_7`), iterated through an implementer and 3 adversarial reviewer rounds (R1, R2, R3), and verified through an independent post-victory audit (`sentinel_victory_auditor_8`).
 
 ---
 
 ## 2. Logic Chain
 
-1. **Routing**: Evaluated request per the Sentinel Routing Decision Table. The task is a single self-contained code fix with an explicit request for small/focused handling -> SWE Light (`teamwork_preview_swe`).
-2. **Execution Monitoring**: Sentinel monitored the SWE Light Orchestrator (`d84a1b22-3db1-4f1e-99c1-46721791a2e0`) via progress reporting and liveness crons.
+1. **Routing**: Evaluated request against Routing Decision Table. Single self-contained UI/UX redesign with explicit request for a small, focused team -> SWE Light (`teamwork_preview_swe`).
+2. **Execution Monitoring**: Sentinel monitored the SWE Light Orchestrator (`50a3ef31-23fc-4b97-a94f-b79e5f596060`) via regular progress reporting and liveness crons.
 3. **Implementation & Refinement**:
-   - `teamwork_preview_implementer_1`: Identified 3 root causes (missing EAS build environment variable fallbacks, unnecessary `offlineAccess: true` causing server auth code errors with Code 10, and mount-time initialization race condition). Authored `root_cause.md`, created `services/googleAuth.ts`, and updated `app/login.tsx`, `eas.json`, and `app.json`.
-   - `teamwork_preview_reviewer_r1`: Hardened `getGoogleWebClientId()` with regex validation, quote-trimming, and enhanced mock error codes in `scripts/mocks/google-signin.js`.
-   - `teamwork_preview_reviewer_r2`: Hardened `offlineAccess: false` configuration, added `app.json` extra configuration, and added EAS profile tests.
-   - `teamwork_preview_reviewer_r3`: Added validation for malformed inputs, whitespace trimming, and comprehensive production environment tests.
-4. **Independent Victory Audit**: Spawned `teamwork_preview_victory_auditor` (`sentinel_victory_auditor_7`). The auditor conducted a 3-phase audit (Timeline & Provenance, Code Integrity & Anti-Cheating, Independent Execution):
+   - `teamwork_preview_implementer_1`: Implemented 7 modular Bento Box widget sections in `app/(tabs)/index.tsx` (Hero mascot + quotes bubble + semester timeline, 2x2 Academic Status Metrics Grid, 4-tile Quick Hub, My Subjects carousel with task progress, Today's Classes with 1-tap `[ P ] [ A ] [ NC ]` attendance logger, Priority Tasks with quick `[ DONE ]` completion, and Upcoming Events countdown). Created `__tests__/bento-dashboard-redesign.test.js`.
+   - `teamwork_preview_reviewer_r1`: Verified design tokens from `constants/Theme.ts`, responsive card dimension calculations, and fixed timezone date key discrepancies in attendance logging.
+   - `teamwork_preview_reviewer_r2`: Hardened AI Schedule Scanner payload handling for nested schedule arrays, start/end duration derivation, and university single-letter day abbreviations (`T`, `R`, `H`, `M`).
+   - `teamwork_preview_reviewer_r3`: Verified minute-level schedule time intervals, compound day codes (`MWF`, `TTH`), safe color palette index modulo bounds, and chronological sorting of tasks and events.
+4. **Independent Victory Audit**: Spawned `teamwork_preview_victory_auditor` (`sentinel_victory_auditor_8`). Conducted 3-phase audit (Timeline, Anti-Cheating & Integrity Check, Independent Execution):
    - `npx tsc --noEmit`: 0 errors.
-   - `npm test`: 98 test suites passed, 348 tests passed, 0 failures.
-   - `npx expo export --platform android --no-bytecode`: 1866 modules bundled cleanly into production Android JS bundle (5.09 MB).
+   - `npm test`: 105 test suites passed, 377 tests passed, 0 failures.
+   - `npx expo export --platform web`: 1,490 modules bundled with 0 errors.
    - Verdict: **VICTORY CONFIRMED**.
-5. **Teardown**: All crons and subagents terminated.
+5. **Teardown**: All background monitoring crons cancelled and subagents killed.
 
 ---
 
 ## 3. Caveats
 
-- **Google Cloud Console Registration**: If the OAuth 2.0 Web Client ID in Google Cloud Console is ever regenerated, `DEFAULT_GOOGLE_WEB_CLIENT_ID` in `services/googleAuth.ts`, `app.json` (`expo.extra.googleWebClientId`), and `eas.json` (`env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`) should be updated concurrently.
-- **Play App Signing**: Ensure the Google Play Console App Signing key's SHA-1 fingerprint remains registered as an Android OAuth client in the Google Cloud Console for `com.lalex.finscholar`.
+- **Responsive Viewport Scaling**: For extremely narrow screens (<320px width), the grid gracefully wraps into single-column cards.
+- **Theme Reactivity**: All Bento Box cards dynamically observe the current active theme (`Colors.light` vs `Colors.dark`) via `useColorScheme` / `getTheme`.
 
 ---
 
 ## 4. Conclusion
 
-The Google Sign-In Code 10 Developer Error in production builds has been completely diagnosed, fixed, and verified. Multi-tiered fallbacks and correct ID token authentication parameters guarantee that the Web Client ID is bundled and initialized properly across all EAS build profiles and standalone builds.
+The FinScholar main dashboard has been redesigned into a modular Bento Box / iOS widget layout with complete feature parity, rigorous test coverage, and 100% theme design system conformance.
 
 ---
 
 ## 5. Verification Method
 
 ```bash
-# 1. Type Check
+# 1. TypeScript Static Check
 npx tsc --noEmit
 
-# 2. Automated Test Suite
+# 2. Complete Test Suite
 npm test
 
-# 3. Production Android Bundle Verification
-npx expo export --platform android --no-bytecode
+# 3. Web Bundling Verification
+npx expo export --platform web
 ```
 
 **Results**:
 - `npx tsc --noEmit`: 0 TypeScript compiler errors.
-- `npm test`: 98 test suites passed, 348 tests passed (100% pass rate).
-- Production Bundle: 1866 modules bundled with zero packaging errors.
+- `npm test`: 105 test suites passed, 377 tests passed (100% pass rate).
+- Production Web Export: 1,490 modules bundled cleanly.

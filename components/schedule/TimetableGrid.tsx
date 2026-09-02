@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect, memo } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, useWindowDimensions } from 'react-native';
+import React, { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, useWindowDimensions, Animated, Easing } from 'react-native';
+import { getClassColor } from '@/constants/Theme';
 import { Ionicons } from '@expo/vector-icons';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -32,33 +33,6 @@ const getThemeStyles = (isDark: boolean, isExportMode: boolean) => ({
   borderRadius: isExportMode ? 0 : 20,
 });
 
-const COLORS = [
-  { bg: 'rgba(41, 151, 255, 0.2)', border: '#2997ff', text: '#2997ff' },
-  { bg: 'rgba(48, 209, 88, 0.2)', border: '#30d158', text: '#30d158' },
-  { bg: 'rgba(191, 90, 242, 0.2)', border: '#bf5af2', text: '#bf5af2' },
-  { bg: 'rgba(255, 159, 10, 0.2)', border: '#ff9f0a', text: '#ff9f0a' },
-  { bg: 'rgba(255, 69, 58, 0.2)', border: '#ff453a', text: '#ff453a' },
-  { bg: 'rgba(100, 210, 255, 0.2)', border: '#64d2ff', text: '#64d2ff' },
-];
-
-const EXPORT_DARK_COLORS = [
-  { bg: 'rgba(56, 162, 255, 0.22)', border: '#56aaff', text: '#8ec5ff' },
-  { bg: 'rgba(60, 220, 100, 0.2)', border: '#4ade80', text: '#7defa0' },
-  { bg: 'rgba(200, 100, 252, 0.2)', border: '#c084fc', text: '#d8b4fe' },
-  { bg: 'rgba(255, 170, 30, 0.2)', border: '#fbbf24', text: '#fcd34d' },
-  { bg: 'rgba(255, 80, 70, 0.2)', border: '#f87171', text: '#fca5a5' },
-  { bg: 'rgba(110, 220, 255, 0.2)', border: '#7dd3fc', text: '#a5e1fc' },
-];
-
-const EXPORT_LIGHT_COLORS = [
-  { bg: 'rgba(41, 151, 255, 0.1)', border: '#2997ff', text: '#1a7fd4' },
-  { bg: 'rgba(48, 209, 88, 0.1)', border: '#30d158', text: '#1da34a' },
-  { bg: 'rgba(191, 90, 242, 0.1)', border: '#bf5af2', text: '#a63bd9' },
-  { bg: 'rgba(255, 159, 10, 0.1)', border: '#ff9f0a', text: '#d98404' },
-  { bg: 'rgba(255, 69, 58, 0.1)', border: '#ff453a', text: '#d92c23' },
-  { bg: 'rgba(100, 210, 255, 0.1)', border: '#64d2ff', text: '#3ba8d9' },
-];
-
 const getRoomForClass = (cls: any, allClasses: any[]) => {
   if (!cls.room) return null;
   const rooms = cls.room.split(',').map((r: string) => r.trim()).filter(Boolean);
@@ -82,11 +56,32 @@ const getRoomForClass = (cls: any, allClasses: any[]) => {
 
 const ClassBlock = memo(({ 
   cls, isDark, isQuickEditMode, isSelected, onToggleSelect,
-  onPressClass, START_HOUR, END_HOUR, displayDayIndices, dayWidth, isExportMode = false, allClasses = [], zoomScale = 1
+  onPressClass, START_HOUR, END_HOUR, displayDayIndices, dayWidth, isExportMode = false, zoomScale = 1,
+  appearIndex = 0, appearToken = 0
 }: any) => {
-  const exportColors = isDark ? EXPORT_DARK_COLORS : EXPORT_LIGHT_COLORS;
-  const color = isExportMode ? exportColors[cls.colorIdx % exportColors.length] : COLORS[cls.colorIdx % COLORS.length];
+  // Solid fill in both themes: a wash over grid lines reads as a smudge.
+  const color = getClassColor(cls.colorIdx, isExportMode ? isDark : isDark);
   const z = isExportMode ? 1 : zoomScale;
+
+  // Blocks drop in one after another when a scan fills the timetable, so the
+  // result reads as "these were just added" rather than appearing all at once.
+  const reveal = useRef(new Animated.Value(appearToken ? 0 : 1)).current;
+  useEffect(() => {
+    if (isExportMode || !appearToken) {
+      reveal.setValue(1);
+      return;
+    }
+    reveal.setValue(0);
+    const anim = Animated.timing(reveal, {
+      toValue: 1,
+      duration: 320,
+      delay: Math.min(appearIndex * 55, 1600),
+      easing: Easing.out(Easing.back(1.4)),
+      useNativeDriver: true,
+    });
+    anim.start();
+    return () => anim.stop();
+  }, [appearToken, appearIndex, isExportMode]);
   
   const hourHeight = getHourHeight(isExportMode) * z;
   const timeColWidth = getTimeColWidth(isExportMode) * z;
@@ -121,7 +116,7 @@ const ClassBlock = memo(({
     const showDuration = cls.duration >= 1.25;
 
     return (
-      <View
+      <Animated.View
         style={{
           position: 'absolute',
           top: top,
@@ -129,29 +124,32 @@ const ClassBlock = memo(({
           width: blockWidth,
           height: height,
           zIndex: isSelected ? 100 : 10,
+          opacity: reveal,
+          transform: [
+            { scale: reveal.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] }) },
+            { translateY: reveal.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) },
+          ],
         }}
       >
         <TouchableOpacity
           activeOpacity={0.8}
           onPress={() => {
             if (isQuickEditMode) {
-              onToggleSelect();
+              onToggleSelect(cls.id);
             } else {
               onPressClass(cls);
             }
           }}
           style={{
             flex: 1,
-            backgroundColor: isDark ? `${color.border}60` : `${color.border}15`,
-            borderLeftColor: isSelected ? (isDark ? 'white' : 'black') : color.border,
-            borderBottomColor: isSelected ? (isDark ? 'white' : 'black') : color.border,
-            borderTopColor: isSelected ? (isDark ? 'white' : 'black') : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
-            borderRightColor: isSelected ? (isDark ? 'white' : 'black') : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
-            borderLeftWidth: isSelected ? 2 : (isExportMode ? 3 : 4 * z),
-            borderBottomWidth: isSelected ? 2 : (isExportMode ? 3 : 4 * z),
-            borderTopWidth: isSelected ? 2 : (isExportMode ? 1 : 1 * z),
-            borderRightWidth: isSelected ? 2 : (isExportMode ? 1 : 1 * z),
-            borderRadius: isExportMode ? 14 : 10 * z,
+            backgroundColor: color.solid,
+            // The app's tactile lip, not a cast shadow. Selection swaps it for
+            // a full ring so the state is obvious at any zoom.
+            borderWidth: isSelected ? (isExportMode ? 3 : Math.max(2, 2 * z)) : 0,
+            borderColor: isSelected ? (isDark ? '#ffffff' : '#0f172a') : 'transparent',
+            borderBottomWidth: isSelected ? (isExportMode ? 3 : Math.max(2, 2 * z)) : (isExportMode ? 4 : Math.max(2, 3 * z)),
+            borderBottomColor: isSelected ? (isDark ? '#ffffff' : '#0f172a') : color.edge,
+            borderRadius: isExportMode ? 14 : Math.max(6, 10 * z),
             marginLeft: 2 * z,
             marginRight: isExportMode ? 2 : 0,
             padding: isExportMode ? 12 : 8 * z,
@@ -159,50 +157,50 @@ const ClassBlock = memo(({
           }}
         >
             {isSelected && (
-                <View style={{ position: 'absolute', right: 4 * z, top: 4 * z, width: 16 * z, height: 16 * z, borderRadius: 8 * z, backgroundColor: isDark ? 'white' : 'black', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
-                    <Ionicons name="checkmark" size={12 * z} color={isDark ? 'black' : 'white'} />
+                <View style={{ position: 'absolute', right: 4 * z, top: 4 * z, width: 16 * z, height: 16 * z, borderRadius: 8 * z, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
+                    <Ionicons name="checkmark" size={12 * z} color={color.solid} />
                 </View>
             )}
             
-            <Text style={{ color: isDark ? '#ffffff' : color.text, fontSize: isExportMode ? 18 : Math.max(8, 13 * z), fontWeight: '800', lineHeight: isExportMode ? 22 : Math.max(10, 16 * z), marginBottom: isExportMode ? 4 : 2 * z }} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
+            <Text style={{ color: '#ffffff', fontSize: isExportMode ? 18 : Math.max(8, 13 * z), fontFamily: 'Nunito_800ExtraBold', lineHeight: isExportMode ? 22 : Math.max(10, 16 * z), marginBottom: isExportMode ? 4 : 2 * z }} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.7}>
               {cls.name}
             </Text>
             
             {showTime && (
-              <Text style={{ color: isDark ? 'rgba(255,255,255,0.85)' : color.text, opacity: isDark ? 1 : 0.85, fontSize: isExportMode ? 13 : Math.max(7, 9 * z), fontWeight: '700', marginBottom: isExportMode ? 4 : 2 * z }} numberOfLines={1}>
+              <Text style={{ color: 'rgba(255,255,255,0.92)', fontSize: isExportMode ? 13 : Math.max(7, 9 * z), fontFamily: 'Nunito_700Bold', marginBottom: isExportMode ? 4 : 2 * z }} numberOfLines={1}>
                  {formatH(cls.startHour)} - {formatH(cls.startHour + cls.duration)}
               </Text>
             )}
 
-            {showRoom && getRoomForClass(cls, allClasses) && (
+            {showRoom && cls.displayRoom && (
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: isExportMode ? 2 : 1 * z, marginBottom: isExportMode ? 4 : 2 * z }}>
-                <Ionicons name="location" size={isExportMode ? 12 : 9 * z} color={isDark ? 'rgba(255,255,255,0.7)' : color.text} />
-                <Text style={{ color: isDark ? 'rgba(255,255,255,0.7)' : color.text, fontSize: isExportMode ? 12 : Math.max(7, 9 * z), fontWeight: '600', marginLeft: 2 * z }} numberOfLines={1}>
-                  {getRoomForClass(cls, allClasses)}
+                <Ionicons name="location" size={isExportMode ? 12 : 9 * z} color="rgba(255,255,255,0.8)" />
+                <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: isExportMode ? 12 : Math.max(7, 9 * z), fontFamily: 'Nunito_600SemiBold', marginLeft: 2 * z }} numberOfLines={1}>
+                  {cls.displayRoom}
                 </Text>
               </View>
             )}
 
             {showTeacher && (
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: isExportMode ? 2 : 1 * z, marginBottom: isExportMode ? 4 : 2 * z }}>
-                <Ionicons name="person" size={isExportMode ? 12 : 9 * z} color={isDark ? 'rgba(255,255,255,0.7)' : color.text} />
-                <Text style={{ color: isDark ? 'rgba(255,255,255,0.7)' : color.text, fontSize: isExportMode ? 12 : Math.max(7, 9 * z), fontWeight: '500', marginLeft: 2 * z }} numberOfLines={1}>
+                <Ionicons name="person" size={isExportMode ? 12 : 9 * z} color="rgba(255,255,255,0.8)" />
+                <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: isExportMode ? 12 : Math.max(7, 9 * z), fontFamily: 'Nunito_400Regular', marginLeft: 2 * z }} numberOfLines={1}>
                   {cls.instructor}
                 </Text>
               </View>
             )}
 
             {showDuration && (
-              <Text style={{ color: isDark ? 'rgba(255,255,255,0.5)' : color.text, opacity: isDark ? 1 : 0.6, fontSize: isExportMode ? 11 : Math.max(6, 8 * z), fontWeight: '600', position: 'absolute', bottom: isExportMode ? 8 : 4 * z, left: isExportMode ? 12 : 8 * z }}>
+              <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: isExportMode ? 11 : Math.max(6, 8 * z), fontFamily: 'Nunito_600SemiBold', position: 'absolute', bottom: isExportMode ? 8 : 4 * z, left: isExportMode ? 12 : 8 * z }}>
                 {formatDuration(cls.duration)}
               </Text>
             )}
       </TouchableOpacity>
-    </View>
+    </Animated.View>
   );
 });
 
-export default function TimetableGrid({ classes, isDark, isQuickEditMode = false, isExportMode = false, zoomScale = 1, onUpdateClass, onUpdateClasses, onDeleteClasses, onPressClass }: any) {
+export default function TimetableGrid({ classes, isDark, isQuickEditMode = false, isExportMode = false, zoomScale = 1, fillHeight = false, revealToken = 0, onUpdateClass, onUpdateClasses, onDeleteClasses, onPressClass }: any) {
   const minClassHour = classes?.length > 0 ? Math.min(...classes.map((c:any) => c.startHour)) : 7;
   const maxClassHour = classes?.length > 0 ? Math.max(...classes.map((c:any) => c.startHour + c.duration)) : 20;
   
@@ -219,7 +217,10 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
   const styles = getThemeStyles(isDark, isExportMode);
   const headerScrollRef = useRef<ScrollView>(null);
   const hasSundayClass = classes?.some((c: any) => c.day === 6);
-  const displayDayIndices = isExportMode ? [6, 0, 1, 2, 3, 4, 5] : (hasSundayClass ? [6, 0, 1, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5]);
+  const displayDayIndices = useMemo(
+    () => (isExportMode ? [6, 0, 1, 2, 3, 4, 5] : (hasSundayClass ? [6, 0, 1, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5])),
+    [isExportMode, hasSundayClass],
+  );
   const DAY_WIDTH = getDayWidth(displayDayIndices.length, isExportMode, SCREEN_WIDTH) * (isExportMode ? 1 : zoomScale);
   const hourHeight = getHourHeight(isExportMode) * (isExportMode ? 1 : zoomScale);
   const timeColWidth = getTimeColWidth(isExportMode) * (isExportMode ? 1 : zoomScale);
@@ -232,12 +233,15 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
     }
   }, [isQuickEditMode]);
 
-  const handleToggleSelect = (clsId: string) => {
-    const newSet = new Set(selectedClassIds);
-    if (newSet.has(clsId)) newSet.delete(clsId);
-    else newSet.add(clsId);
-    setSelectedClassIds(newSet);
-  };
+  // Stable identity, so every block does not get a fresh callback each render.
+  const handleToggleSelect = useCallback((clsId: string) => {
+    setSelectedClassIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(clsId)) newSet.delete(clsId);
+      else newSet.add(clsId);
+      return newSet;
+    });
+  }, []);
 
   const handleSelectAll = () => {
     if (selectedClassIds.size === classes.length) {
@@ -291,9 +295,14 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
     return `${displayH} ${ampm}`;
   };
 
-  const processedClasses = classes?.map((c: any) => ({ ...c, col: 0, maxCol: 1 })) || [];
+  // The overlap layout used to run on every render and rebuild every class
+  // object, so the memo on ClassBlock could never hit. It now recomputes only
+  // when the classes actually change, and carries each block's resolved room
+  // so ClassBlock no longer depends on the whole array.
+  const processedClasses = useMemo(() => {
+  const processed = classes?.map((c: any) => ({ ...c, col: 0, maxCol: 1, displayRoom: getRoomForClass(c, classes) })) || [];
   displayDayIndices.forEach(dayIdx => {
-    const dayClasses = processedClasses.filter((c: any) => c.day === dayIdx).sort((a: any, b: any) => a.startHour - b.startHour);
+    const dayClasses = processed.filter((c: any) => c.day === dayIdx).sort((a: any, b: any) => a.startHour - b.startHour);
     
     // Group overlapping classes into contiguous blocks
     const groups: any[][] = [];
@@ -345,9 +354,19 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
       });
     });
   });
+  const order = [...processed].sort((a: any, b: any) => {
+    const da = displayDayIndices.indexOf(a.day);
+    const db = displayDayIndices.indexOf(b.day);
+    if (da !== db) return da - db;
+    return (a.startHour || 0) - (b.startHour || 0);
+  });
+  order.forEach((c: any, i: number) => { c.appearIndex = i; });
+
+  return processed;
+  }, [classes, displayDayIndices]);
 
   return (
-    <View style={{ height: isExportMode ? undefined : 600, backgroundColor: styles.gridBg, borderRadius: styles.borderRadius, overflow: 'hidden', borderWidth: styles.outerBorderWidth, borderColor: styles.outerBorderColor }}>
+    <View style={{ ...(isExportMode ? {} : (fillHeight ? { flex: 1 } : { height: 600 })), backgroundColor: styles.gridBg, borderRadius: styles.borderRadius, overflow: 'hidden', borderWidth: styles.outerBorderWidth, borderColor: styles.outerBorderColor }}>
       <View style={{ flexDirection: 'row', backgroundColor: styles.headerBg }}>
         <View style={{ width: timeColWidth, borderRightWidth: isExportMode ? 2 : 1, borderColor: styles.gridLine }} />
         {isExportMode ? (
@@ -413,14 +432,13 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
                     isDark={isDark}
                     isQuickEditMode={isQuickEditMode}
                     isSelected={selectedClassIds.has(cls.id)}
-                    onToggleSelect={() => handleToggleSelect(cls.id)}
+                    onToggleSelect={handleToggleSelect}
                     onPressClass={onPressClass}
                     START_HOUR={START_HOUR}
                     END_HOUR={END_HOUR}
                     displayDayIndices={displayDayIndices}
                     dayWidth={DAY_WIDTH}
                     isExportMode={true}
-                    allClasses={classes}
                   />
                 ))}
               </View>
@@ -472,14 +490,15 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
                     isDark={isDark}
                     isQuickEditMode={isQuickEditMode}
                     isSelected={selectedClassIds.has(cls.id)}
-                    onToggleSelect={() => handleToggleSelect(cls.id)}
+                    onToggleSelect={handleToggleSelect}
                     onPressClass={onPressClass}
                     START_HOUR={START_HOUR}
                     END_HOUR={END_HOUR}
                     displayDayIndices={displayDayIndices}
                     dayWidth={DAY_WIDTH}
-                    allClasses={classes}
                     zoomScale={zoomScale}
+                    appearIndex={cls.appearIndex}
+                    appearToken={revealToken}
                   />
                 ))}
               </View>

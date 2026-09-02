@@ -1,11 +1,12 @@
 import React from 'react';
-import { View, Text } from 'react-native';
-import Svg, { Defs, LinearGradient, Stop, Rect, Circle } from 'react-native-svg';
+import { View, Text, TouchableOpacity } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 import Animated, { useSharedValue, useAnimatedProps, withTiming, Easing } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
-import DonutChart from './DonutChart';
-import { getTheme, Radius, Shadows } from '../../constants/Theme';
+import Card from '@/components/ui/Card';
+import { getTheme, getTints, Radius } from '../../constants/Theme';
+import { getGradeTierColor, getGradeTierLabel } from '../../utils/gradeTiers';
 import { getGradeQuote } from '../../utils/quotes';
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
@@ -18,36 +19,59 @@ interface GwaSummaryProps {
     yearPercent: number;
     cumPercent: number;
     system: string;
+    /** Human label for the active grading system, shown on the footer row. */
+    systemLabel?: string;
+    /** Opens the ledger settings sheet. The footer row is hidden without it. */
+    onOpenSettings?: () => void;
 }
 
-export default function GwaSummary({ semGwa, yearGwa, cumGwa, semPercent, yearPercent, cumPercent, system }: GwaSummaryProps) {
+/**
+ * The standing panel: one card, three figures.
+ *
+ * This used to be a saturated indigo gradient hero plus two donut cards —
+ * roughly 360pt of chart before a student reached a single subject, with the
+ * one number that actually moves while they enter grades (the semester) given
+ * the smallest ring of the three. Now the semester leads, the year and overall
+ * figures sit under it as two quiet columns, and the whole thing is a normal
+ * `Card` so it obeys the app's lip-not-shadow depth rule.
+ */
+export default function GwaSummary({
+    semGwa,
+    yearGwa,
+    cumGwa,
+    semPercent,
+    yearPercent,
+    cumPercent,
+    system,
+    systemLabel,
+    onOpenSettings,
+}: GwaSummaryProps) {
     const { colorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
     const theme = getTheme(isDark);
+    const tints = getTints(isDark);
 
-    const [heroHeight, setHeroHeight] = React.useState(160);
-    const cumDisplayVal = (system === 'PERCENT') ? `${cumPercent.toFixed(1)}%` : Number(cumGwa || 0).toFixed(3);
+    const format = (gwa: number, percent: number) =>
+        system === 'PERCENT' ? `${(Number(percent) || 0).toFixed(1)}%` : Number(gwa || 0).toFixed(3);
 
-    const getIndicatorText = (gwa: number, percent: number) => {
-        if (!gwa && !percent) return 'No Grades';
-        if (percent >= 90) return 'Outstanding';
-        if (percent >= 75) return 'On Track';
-        if (percent >= 60) return 'Passing';
-        return 'Needs Work';
-    };
+    const semHasData = Boolean(semGwa || semPercent);
+    const yearHasData = Boolean(yearGwa || yearPercent);
+    const cumHasData = Boolean(cumGwa || cumPercent);
 
-    // Ring chart values for the hero card
-    const R = 42;
+    const semColor = getGradeTierColor(semPercent, isDark, semHasData);
+
+    // ── Ring geometry for the semester figure
+    const R = 36;
     const C = 2 * Math.PI * R;
-    let p = cumPercent ?? 0;
-    if (isNaN(p)) p = 0;
+    let p = Number(semPercent);
+    if (!Number.isFinite(p)) p = 0;
     p = Math.max(0, Math.min(100, p));
     const targetOffset = C - (p / 100) * C;
 
     const animatedOffset = useSharedValue(C);
     React.useEffect(() => {
         animatedOffset.value = withTiming(targetOffset, {
-            duration: 1200,
+            duration: 1000,
             easing: Easing.bezier(0.4, 0, 0.2, 1),
         });
     }, [targetOffset]);
@@ -56,151 +80,144 @@ export default function GwaSummary({ semGwa, yearGwa, cumGwa, semPercent, yearPe
         strokeDashoffset: animatedOffset.value,
     }));
 
-    const defaultColor = isDark ? '#94a3b8' : '#cbd5e1';
-    let ringColor = defaultColor;
-    if (p >= 90) { ringColor = '#22c55e'; }
-    else if (p >= 75) { ringColor = '#3b82f6'; }
-    else if (p >= 60) { ringColor = '#eab308'; }
-    else if (p > 0) { ringColor = '#ef4444'; }
+    const microLabel = {
+        fontFamily: 'Nunito_800ExtraBold' as const,
+        fontSize: 10,
+        letterSpacing: 0.8,
+        textTransform: 'uppercase' as const,
+        color: theme.textTertiary,
+    };
 
-    const trackColor = isDark ? '#334155' : '#e2e8f0';
+    const columns = [
+        { key: 'year', label: 'This year', value: format(yearGwa, yearPercent), percent: yearPercent, hasData: yearHasData },
+        { key: 'cum', label: 'Overall', value: format(cumGwa, cumPercent), percent: cumPercent, hasData: cumHasData },
+    ];
 
     return (
-        <View style={{ width: '100%', marginBottom: 16 }}>
-            {/* R1: Hero Card for Overall/Cumulative GWA */}
+        <Card padding={0} radius={Radius['2xl']} style={{ overflow: 'hidden', marginBottom: 16 }}>
+            {/* ── Semester: the figure that moves while you enter grades ────── */}
             <View
-                onLayout={(e) => setHeroHeight(e.nativeEvent.layout.height)}
+                accessible
+                accessibilityLabel={`This semester's GWA is ${semHasData ? format(semGwa, semPercent) : 'not calculated yet'}. ${getGradeTierLabel(semPercent, semHasData)}.`}
                 style={{
-                    borderRadius: Radius['3xl'],
-                    overflow: 'hidden',
-                    marginBottom: 16,
-                    position: 'relative',
-                    backgroundColor: isDark ? '#1e1b4b' : '#6366f1',
-                    borderWidth: 0,
-                    ...(!isDark ? Shadows.lg : {}),
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    padding: 16,
+                    backgroundColor: tints.grades.fill,
+                    borderBottomWidth: 1,
+                    borderBottomColor: tints.grades.line,
                 }}
             >
-                {/* Gradient Background */}
-                <Svg height={heroHeight} width="100%" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-                    <Defs>
-                        <LinearGradient id="heroGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                            <Stop offset="0%" stopColor={isDark ? '#312e81' : '#4f46e5'} />
-                            <Stop offset="100%" stopColor={isDark ? '#1e1b4b' : '#6366f1'} />
-                        </LinearGradient>
-                    </Defs>
-                    <Rect width="100%" height="100%" fill="url(#heroGrad)" />
-                    <Circle cx="100%" cy="0%" r="80" fill="rgba(255,255,255,0.06)" />
-                    <Circle cx="0%" cy="100%" r="60" fill="rgba(255,255,255,0.04)" />
-                </Svg>
+                <View style={{ width: 84, height: 84, alignItems: 'center', justifyContent: 'center', marginRight: 16 }}>
+                    <Svg width="84" height="84" viewBox="0 0 84 84" style={{ position: 'absolute' }}>
+                        <Circle
+                            cx="42" cy="42" r={R}
+                            stroke={isDark ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}
+                            strokeWidth="7"
+                            fill="transparent"
+                        />
+                        <AnimatedCircle
+                            cx="42" cy="42" r={R}
+                            stroke={semColor}
+                            strokeWidth="7"
+                            fill="transparent"
+                            strokeDasharray={C}
+                            animatedProps={animatedProps}
+                            strokeLinecap="round"
+                            transform="rotate(-90 42 42)"
+                        />
+                    </Svg>
+                    <Text
+                        adjustsFontSizeToFit
+                        numberOfLines={1}
+                        style={{
+                            fontFamily: 'Nunito_900Black',
+                            fontSize: 21,
+                            color: theme.text,
+                            letterSpacing: -0.6,
+                            maxWidth: 58,
+                        }}
+                    >
+                        {semHasData ? format(semGwa, semPercent) : '—'}
+                    </Text>
+                </View>
 
-                <View style={{ flexDirection: 'row', alignItems: 'center', padding: 20 }}>
-                    {/* Animated Ring */}
-                    <View style={{ width: 96, height: 96, alignItems: 'center', justifyContent: 'center', position: 'relative', marginRight: 20 }}>
-                        <Svg width="96" height="96" viewBox="0 0 96 96" style={{ position: 'absolute' }}>
-                            <Circle
-                                cx="48" cy="48" r={R}
-                                stroke="rgba(255,255,255,0.2)"
-                                strokeWidth="6"
-                                fill="transparent"
-                            />
-                            <AnimatedCircle
-                                cx="48" cy="48" r={R}
-                                stroke="#ffffff"
-                                strokeWidth="6"
-                                fill="transparent"
-                                strokeDasharray={C}
-                                animatedProps={animatedProps}
-                                strokeLinecap="round"
-                                transform="rotate(-90 48 48)"
-                            />
-                        </Svg>
-                        <View style={{ alignItems: 'center', justifyContent: 'center' }}>
-                            <Text
-                                adjustsFontSizeToFit
-                                numberOfLines={1}
-                                style={{
-                                    fontSize: 22,
-                                    fontFamily: 'Nunito_900Black',
-                                    color: '#ffffff',
-                                    letterSpacing: -0.5,
-                                }}
-                            >
-                                {cumDisplayVal}
-                            </Text>
-                            <Text style={{
-                                fontSize: 9,
-                                fontFamily: 'Nunito_800Bold',
-                                letterSpacing: 1,
-                                color: 'rgba(255,255,255,0.85)',
-                                textTransform: 'uppercase',
-                                marginTop: 2,
-                            }}>
-                                GWA
-                            </Text>
-                        </View>
-                    </View>
+                <View style={{ flex: 1 }}>
+                    <Text style={microLabel}>This semester</Text>
 
-                    {/* Right side: Label, indicator, quote */}
-                    <View style={{ flex: 1 }}>
-                        <Text style={{
-                            fontSize: 12,
-                            fontFamily: 'Nunito_800Bold',
-                            textTransform: 'uppercase',
-                            letterSpacing: 1.2,
-                            color: '#e0e7ff',
-                            marginBottom: 6,
-                        }}>
-                            Overall GWA
-                        </Text>
-
-                        <View style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            marginBottom: 8,
-                        }}>
-                            <View style={{
-                                width: 10, height: 10, borderRadius: 5, marginRight: 8,
-                                backgroundColor: (!cumGwa && !cumPercent) ? 'rgba(255,255,255,0.4)' : (cumPercent >= 90 ? '#4ade80' : cumPercent >= 75 ? '#60a5fa' : cumPercent >= 60 ? '#fbbf24' : '#fb7185')
-                            }} />
-                            <Text style={{
-                                fontSize: 16,
-                                fontFamily: 'Nunito_800Bold',
-                                color: '#ffffff',
-                            }}>
-                                {getIndicatorText(cumGwa, cumPercent)}
-                            </Text>
-                        </View>
-
-                        <Text style={{
-                            fontSize: 13,
-                            fontFamily: 'Nunito_700Bold',
-                            color: '#ffffff',
-                            opacity: 0.9,
-                            lineHeight: 18,
-                        }}>
-                            {getGradeQuote(cumPercent, (cumGwa > 0 || cumPercent > 0))}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, marginBottom: 5 }}>
+                        <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: semColor, marginRight: 7 }} />
+                        <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text, letterSpacing: -0.3 }}>
+                            {getGradeTierLabel(semPercent, semHasData)}
                         </Text>
                     </View>
+
+                    <Text numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textSecondary, lineHeight: 17 }}>
+                        {getGradeQuote(semPercent, semHasData)}
+                    </Text>
                 </View>
             </View>
 
-            {/* R2: Side-by-side Condensed GWA Cards for Semester & Year */}
-            <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-                <DonutChart
-                    label="SEMESTER"
-                    value={semGwa}
-                    percent={semPercent}
-                    system={system}
-                    indicatorText={getIndicatorText(semGwa, semPercent)}
-                />
-                <DonutChart
-                    label="YEAR"
-                    value={yearGwa}
-                    percent={yearPercent}
-                    system={system}
-                    indicatorText={getIndicatorText(yearGwa, yearPercent)}
-                />
+            {/* ── Year and overall: context, not the headline ────────────────── */}
+            <View style={{ flexDirection: 'row' }}>
+                {columns.map((col, i) => (
+                    <View
+                        key={col.key}
+                        accessible
+                        accessibilityLabel={`${col.label}: ${col.hasData ? col.value : 'no grades yet'}`}
+                        style={{
+                            flex: 1,
+                            paddingHorizontal: 14,
+                            paddingTop: 11,
+                            paddingBottom: 12,
+                            borderLeftWidth: i === 0 ? 0 : 1,
+                            borderLeftColor: theme.cardBorder,
+                        }}
+                    >
+                        <View style={{
+                            height: 3, width: 22, borderRadius: 2, marginBottom: 8,
+                            backgroundColor: getGradeTierColor(col.percent, isDark, col.hasData),
+                        }} />
+                        <Text numberOfLines={1} style={microLabel}>{col.label}</Text>
+                        <Text
+                            numberOfLines={1}
+                            adjustsFontSizeToFit
+                            style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: theme.text, letterSpacing: -0.7, marginTop: 3 }}
+                        >
+                            {col.hasData ? col.value : '—'}
+                        </Text>
+                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: theme.textTertiary, marginTop: 2 }}>
+                            {getGradeTierLabel(col.percent, col.hasData)}
+                        </Text>
+                    </View>
+                ))}
             </View>
-        </View>
+
+            {/* ── Grading system lives with the numbers it formats ───────────── */}
+            {onOpenSettings && (
+                <TouchableOpacity
+                    onPress={onOpenSettings}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Ledger settings. Grading system is ${systemLabel || 'set'}.`}
+                    style={{
+                        flexDirection: 'row', alignItems: 'center',
+                        paddingHorizontal: 14, paddingVertical: 11,
+                        borderTopWidth: 1, borderTopColor: theme.cardBorder,
+                        backgroundColor: isDark ? 'rgba(0,0,0,0.14)' : theme.surfaceSecondary,
+                    }}
+                >
+                    <Ionicons name="options-outline" size={14} color={theme.textTertiary} style={{ marginRight: 7 }} />
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: theme.textSecondary }}>
+                        Grading system
+                    </Text>
+                    <View style={{ flex: 1 }} />
+                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: theme.text, marginRight: 3, flexShrink: 1 }}>
+                        {systemLabel}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={14} color={theme.textTertiary} />
+                </TouchableOpacity>
+            )}
+        </Card>
     );
 }

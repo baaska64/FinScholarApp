@@ -41,7 +41,7 @@ export default function DeckCard({
       style={[
         styles.cardContainer,
         {
-          backgroundColor: isDark ? '#1a1a1b' : '#ffffff',
+          backgroundColor: theme.surface,
           borderColor: isDark ? theme.cardBorder : '#e2e8f0',
           ...Shadows.sm,
         },

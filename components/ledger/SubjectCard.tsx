@@ -1,48 +1,56 @@
-import React, { useRef } from 'react';
-import { View, Text, TouchableOpacity, Animated } from 'react-native';
+import React from 'react';
+import { View, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Calculator } from '../../utils/calculator';
 import { useColorScheme } from 'nativewind';
-import { getTheme, Radius, Shadows } from '@/constants/Theme';
+import Card from '@/components/ui/Card';
+import ProgressBar from '@/components/ui/ProgressBar';
+import { getTheme, getTints, Radius } from '@/constants/Theme';
+import { getGradeTierColor } from '@/utils/gradeTiers';
 
 export interface SubjectCardProps {
     subject: any;
     system: string;
     onClick?: () => void;
     onSelect?: () => void;
-    onDuplicate: () => void;
-    onDelete: () => void;
-    onToggleTracking?: () => void;
+    /**
+     * Opens the subject's action sheet — pause/resume tracking, duplicate,
+     * delete. Those used to be three always-visible buttons on every card,
+     * which made the list read as a management console rather than something
+     * you tap to open. The sheet lives on the screen so the list renders one
+     * modal, not one per row.
+     */
+    onOpenMenu?: () => void;
     isSelectionMode?: boolean;
     isEditMode?: boolean;
     isSelected?: boolean;
     onToggleSelect?: () => void;
 }
 
-export default function SubjectCard({ 
-    subject, 
-    system, 
-    onClick, 
+/**
+ * One subject, in one glance: name, grade, how far through it you are.
+ *
+ * The previous card stacked five bands (paused banner, name + three buttons,
+ * three status chips, two stat boxes, progress bar, footer note) into ~200pt,
+ * printed the grade twice, and fit two subjects on a phone screen. This one is
+ * ~96pt and fits five, with everything that was dropped from the surface
+ * reachable from the overflow menu.
+ */
+export default function SubjectCard({
+    subject,
+    system,
+    onClick,
     onSelect,
-    onDuplicate, 
-    onDelete, 
-    onToggleTracking, 
-    isSelectionMode, 
+    onOpenMenu,
+    isSelectionMode,
     isEditMode,
-    isSelected, 
-    onToggleSelect 
+    isSelected,
+    onToggleSelect,
 }: SubjectCardProps) {
     const { colorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
     const theme = getTheme(isDark);
-    const scale = useRef(new Animated.Value(1)).current;
-
-    const handlePressIn = () => {
-        Animated.spring(scale, { toValue: 0.97, useNativeDriver: true, friction: 8 }).start();
-    };
-    const handlePressOut = () => {
-        Animated.spring(scale, { toValue: 1, useNativeDriver: true, friction: 6 }).start();
-    };
+    const tints = getTints(isDark);
 
     const effectiveEditMode = Boolean(isEditMode || isSelectionMode);
     const handleSelectToggle = onToggleSelect || onSelect;
@@ -56,250 +64,147 @@ export default function SubjectCard({
     const rawPercent = isNaN(res.percent) ? 0 : res.percent;
     const p = Math.max(0, Math.min(100, rawPercent));
 
-    let color = isDark ? '#94a3b8' : '#cbd5e1';
-    if (isTracked) {
-        if (p >= 90) { color = isDark ? '#4ade80' : '#16a34a'; }
-        else if (p >= 75) { color = isDark ? '#60a5fa' : '#2563eb'; }
-        else if (p >= 60) { color = isDark ? '#facc15' : '#d97706'; }
-        else if (p > 0) { color = isDark ? '#f87171' : '#dc2626'; }
-    } else {
-        color = isDark ? '#64748b' : '#94a3b8';
-    }
+    const tierColor = getGradeTierColor(p, isDark, isTracked && res.hasData);
+    const railColor = isTracked ? tierColor : (isDark ? '#3d4468' : '#cbd5e1');
 
-    const displayVal = system === 'PERCENT' ? p.toFixed(1) + '%' : res.equivalent.toFixed(2);
+    const displayVal = system === 'PERCENT' ? `${p.toFixed(1)}%` : res.equivalent.toFixed(2);
     const periodsCount = subject?.periods ? subject.periods.length : 0;
-    const units = subject?.units ?? 0;
+    const units = Number(subject?.units) || 0;
+
+    const loadLabel = units > 0
+        ? `${units} unit${units !== 1 ? 's' : ''}`
+        : `${periodsCount} period${periodsCount !== 1 ? 's' : ''}`;
+
+    const accessibilityLabel = [
+        subject?.name,
+        isTracked
+            ? (res.hasData ? `grade ${displayVal}, score ${p.toFixed(1)} percent` : 'no scores yet')
+            : 'paused, excluded from GWA',
+        loadLabel,
+        hasSchedule ? 'scheduled' : 'no class times yet',
+    ].join(', ');
 
     return (
-        <Animated.View style={{ transform: [{ scale }], marginBottom: 16 }}>
-            <TouchableOpacity
-                activeOpacity={1}
-                onPress={handleCardPress}
-                onPressIn={handlePressIn}
-                onPressOut={handlePressOut}
-                style={{
-                    borderRadius: Radius['2xl'],
-                    padding: 20,
-                    borderWidth: 1,
-                    borderColor: isTracked 
-                        ? (isDark ? theme.cardBorder : '#e2e8f0') 
-                        : (isDark ? 'rgba(51,65,85,0.5)' : '#e2e8f0'),
-                    backgroundColor: isTracked 
-                        ? (isDark ? theme.card : theme.surface) 
-                        : (isDark ? '#0f172a' : '#f8fafc'),
-                    ...Shadows.md,
-                }}
-            >
-                {/* Not-tracked banner */}
-                {!isTracked && (
-                    <View 
-                        style={{ borderRadius: Radius.full }}
-                        className={`flex-row items-center mb-3 px-3 py-1 self-start border ${
-                            isDark ? 'bg-amber-950/70 border-amber-800/50' : 'bg-amber-50 border-amber-200'
-                        }`}
+        <Card
+            padding={0}
+            radius={Radius.lg}
+            onPress={handleCardPress}
+            accessibilityLabel={accessibilityLabel}
+            accessibilityHint={effectiveEditMode ? 'Toggles selection' : 'Opens this subject'}
+            style={{
+                marginBottom: 10,
+                overflow: 'hidden',
+                borderColor: isSelected ? theme.primary : theme.cardBorder,
+            }}
+        >
+            <View style={{ flexDirection: 'row', alignItems: 'center', padding: 12 }}>
+                {/* Selection box in edit mode, otherwise the grade-tier rail. */}
+                {effectiveEditMode ? (
+                    <TouchableOpacity
+                        onPress={handleSelectToggle}
+                        activeOpacity={0.7}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: Boolean(isSelected) }}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 6 }}
+                        style={{
+                            width: 22, height: 22, borderRadius: 7, marginRight: 11,
+                            alignItems: 'center', justifyContent: 'center',
+                            borderWidth: 2,
+                            borderColor: isSelected ? theme.primary : (isDark ? '#464d75' : '#cbd5e1'),
+                            backgroundColor: isSelected ? theme.primary : 'transparent',
+                        }}
                     >
-                        <Ionicons name="pause-circle" size={13} color={isDark ? '#fbbf24' : '#d97706'} />
-                        <Text className={`text-[10px] font-bold ml-1.5 tracking-wider uppercase ${
-                            isDark ? 'text-amber-400' : 'text-amber-700'
-                        }`}>
-                            Paused · Excluded from GWA
-                        </Text>
-                    </View>
+                        {isSelected && <Ionicons name="checkmark" size={14} color="#ffffff" />}
+                    </TouchableOpacity>
+                ) : (
+                    <View style={{ width: 4, alignSelf: 'stretch', minHeight: 46, borderRadius: 2, backgroundColor: railColor, marginRight: 11 }} />
                 )}
 
-                {/* Header row: Name + actions */}
-                <View className="flex-row justify-between items-center mb-3">
-                    <View className="flex-row items-center flex-1 mr-2">
-                        {effectiveEditMode && (
-                            <TouchableOpacity
-                                onPress={handleSelectToggle}
-                                activeOpacity={0.7}
-                                style={{ borderRadius: Radius.full }}
-                                className={`w-6 h-6 border-2 mr-3 items-center justify-center ${
-                                    isSelected 
-                                        ? (isDark ? 'bg-indigo-500 border-indigo-500' : 'bg-indigo-600 border-indigo-600') 
-                                        : (isDark ? 'border-slate-600' : 'border-slate-300')
-                                }`}
-                            >
-                                {isSelected && <Ionicons name="checkmark" size={14} color="white" />}
-                            </TouchableOpacity>
-                        )}
+                <View style={{ flex: 1 }}>
+                    {/* Name + the grade in the student's own system */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <Text
-                            className={`text-xl font-nunito-black flex-1 ${
-                                isTracked
-                                    ? (isDark ? 'text-white' : 'text-slate-800')
-                                    : (isDark ? 'text-slate-500' : 'text-slate-400')
-                            }`}
                             numberOfLines={1}
+                            style={{
+                                flex: 1,
+                                fontFamily: 'Nunito_900Black',
+                                fontSize: 15.5,
+                                letterSpacing: -0.3,
+                                marginRight: 8,
+                                color: isTracked ? theme.text : theme.textTertiary,
+                            }}
                         >
                             {subject?.name}
                         </Text>
-                    </View>
 
-                    {/* Action Toolbar */}
-                    <View className="flex-row items-center gap-1.5">
-                        {/* Grade tracking toggle */}
-                        {onToggleTracking && (
-                            <TouchableOpacity
-                                onPress={onToggleTracking}
-                                activeOpacity={0.7}
-                                style={{ borderRadius: Radius.full }}
-                                className={`w-8 h-8 items-center justify-center ${
-                                    isDark ? 'bg-slate-800/90' : 'bg-slate-100'
-                                }`}
-                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            >
-                                <Ionicons
-                                    name={isTracked ? 'eye' : 'eye-off'}
-                                    size={15}
-                                    color={isTracked ? (isDark ? '#818cf8' : '#4f46e5') : (isDark ? '#64748b' : '#94a3b8')}
-                                />
-                            </TouchableOpacity>
+                        {!isTracked && (
+                            <View style={{
+                                flexDirection: 'row', alignItems: 'center',
+                                paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6,
+                                backgroundColor: tints.tasks.fill,
+                                borderWidth: 1, borderColor: tints.tasks.line,
+                            }}>
+                                <Ionicons name="pause" size={9} color={tints.tasks.ink} style={{ marginRight: 3 }} />
+                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 9.5, color: tints.tasks.ink, letterSpacing: 0.2 }}>
+                                    PAUSED
+                                </Text>
+                            </View>
                         )}
-                        <TouchableOpacity 
-                            onPress={onDuplicate} 
-                            activeOpacity={0.7}
-                            style={{ borderRadius: Radius.full }}
-                            className={`w-8 h-8 items-center justify-center ${
-                                isDark ? 'bg-slate-800/90' : 'bg-slate-100'
-                            }`}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                            <Ionicons name="copy-outline" size={15} color={isDark ? '#cbd5e1' : '#475569'} />
-                        </TouchableOpacity>
-                        <TouchableOpacity 
-                            onPress={onDelete} 
-                            activeOpacity={0.7}
-                            style={{ borderRadius: Radius.full }}
-                            className={`w-8 h-8 items-center justify-center ${
-                                isDark ? 'bg-red-950/40' : 'bg-red-50'
-                            }`}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                            <Ionicons name="trash-outline" size={15} color="#ef4444" />
-                        </TouchableOpacity>
-                    </View>
-                </View>
 
-                {/* Status Badges / Chips row */}
-                <View className="flex-row items-center flex-wrap gap-2 mb-4">
-                    {/* Units / Periods Badge */}
-                    <View 
-                        style={{ borderRadius: Radius.full }}
-                        className={`px-2.5 py-1 flex-row items-center border ${
-                            isDark ? 'bg-indigo-950/60 border-indigo-800/40' : 'bg-indigo-50 border-indigo-100'
-                        }`}
-                    >
-                        <Ionicons name="book-outline" size={12} color={isDark ? '#818cf8' : '#4f46e5'} style={{ marginRight: 4 }} />
-                        <Text className={`text-xs font-nunito-bold ${isDark ? 'text-indigo-300' : 'text-indigo-700'}`}>
-                            {units > 0 ? `${units} Units` : `${periodsCount} Period${periodsCount !== 1 ? 's' : ''}`}
-                        </Text>
-                    </View>
-
-                    {/* Schedule Status Badge */}
-                    {!hasSchedule ? (
-                        <View 
-                            style={{ borderRadius: Radius.full }}
-                            className={`px-2.5 py-1 flex-row items-center border ${
-                                isDark ? 'bg-amber-950/60 border-amber-800/50' : 'bg-amber-50 border-amber-200'
-                            }`}
-                        >
-                            <Ionicons name="time-outline" size={12} color="#f59e0b" style={{ marginRight: 4 }} />
-                            <Text className="font-nunito-bold text-xs text-amber-600 dark:text-amber-400">No schedule</Text>
-                        </View>
-                    ) : (
-                        <View 
-                            style={{ borderRadius: Radius.full }}
-                            className={`px-2.5 py-1 flex-row items-center border ${
-                                isDark ? 'bg-emerald-950/60 border-emerald-800/50' : 'bg-emerald-50 border-emerald-200'
-                            }`}
-                        >
-                            <Ionicons name="calendar-outline" size={12} color={isDark ? '#34d399' : '#10b981'} style={{ marginRight: 4 }} />
-                            <Text className="font-nunito-bold text-xs text-emerald-600 dark:text-emerald-400">Scheduled</Text>
-                        </View>
-                    )}
-
-                    {/* Grade Equivalent Chip */}
-                    {isTracked && (
-                        <View 
-                            style={{ borderRadius: Radius.full }}
-                            className={`px-2.5 py-1 flex-row items-center border ${
-                                isDark ? 'bg-slate-800/90 border-slate-700' : 'bg-slate-100 border-slate-200'
-                            }`}
-                        >
-                            <Ionicons name="ribbon-outline" size={12} color={color} style={{ marginRight: 4 }} />
-                            <Text className={`font-nunito-bold text-xs ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
-                                {displayVal}
+                        {isTracked && (
+                            <Text
+                                numberOfLines={1}
+                                style={{ fontFamily: 'Nunito_900Black', fontSize: 17, letterSpacing: -0.5, color: res.hasData ? tierColor : theme.textTertiary }}
+                            >
+                                {res.hasData ? displayVal : '—'}
                             </Text>
-                        </View>
-                    )}
-                </View>
+                        )}
+                    </View>
 
-                {/* Stats blocks: SCORE and GWA */}
-                <View className="flex-row gap-3 mb-3">
-                    <View 
-                        style={{ borderRadius: Radius.xl }}
-                        className={`py-2.5 px-4 flex-1 flex-row justify-between items-center ${
-                            isTracked
-                                ? (isDark ? 'bg-slate-800/90' : 'bg-slate-50')
-                                : (isDark ? 'bg-slate-900/60' : 'bg-slate-100/70')
-                        }`}
-                    >
-                        <Text className={`text-[11px] font-nunito-bold tracking-wider ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>SCORE</Text>
-                        <Text className={`text-sm font-nunito-bold ${isTracked ? (isDark ? 'text-slate-100' : 'text-slate-800') : (isDark ? 'text-slate-600' : 'text-slate-400')}`}>
-                            {isTracked ? `${p.toFixed(1)}%` : '—'}
+                    {/* One quiet meta line instead of three chip pills */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
+                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, flexShrink: 1 }}>
+                            {loadLabel}
+                            {isTracked && res.hasData ? ` · ${p.toFixed(1)}% earned` : ''}
+                            {!isTracked ? ' · Excluded from GWA' : ''}
+                            {' · '}
+                        </Text>
+                        <Text
+                            numberOfLines={1}
+                            style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: hasSchedule ? theme.textTertiary : tints.tasks.ink }}
+                        >
+                            {hasSchedule ? 'Scheduled' : 'No class times'}
                         </Text>
                     </View>
-                    <View 
-                        style={{ borderRadius: Radius.xl }}
-                        className={`py-2.5 px-4 flex-1 flex-row justify-between items-center ${
-                            isTracked
-                                ? (isDark ? 'bg-slate-800/90' : 'bg-slate-50')
-                                : (isDark ? 'bg-slate-900/60' : 'bg-slate-100/70')
-                        }`}
+
+                    <ProgressBar
+                        progress={isTracked ? p / 100 : 1}
+                        height={5}
+                        color={isTracked ? tierColor : (isDark ? 'rgba(255,255,255,0.06)' : '#e2e8f0')}
+                        animate={false}
+                        style={{ marginTop: 9 }}
+                        accessibilityLabel={`${subject?.name} score`}
+                    />
+                </View>
+
+                {/* Every action the card used to wear on its sleeve now lives here. */}
+                {!effectiveEditMode && onOpenMenu && (
+                    <TouchableOpacity
+                        onPress={onOpenMenu}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={`More options for ${subject?.name}`}
+                        hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+                        style={{
+                            width: 30, height: 30, borderRadius: 10, marginLeft: 8,
+                            alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: theme.surfaceSecondary,
+                        }}
                     >
-                        <Text className={`text-[11px] font-nunito-bold tracking-wider ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>GWA</Text>
-                        <Text className={`text-sm font-nunito-bold ${isTracked ? (isDark ? 'text-slate-100' : 'text-slate-800') : (isDark ? 'text-slate-600' : 'text-slate-400')}`}>
-                            {isTracked ? displayVal : '—'}
-                        </Text>
-                    </View>
-                </View>
-
-                {/* Score Progress Bar */}
-                <View 
-                    style={{ borderRadius: Radius.full }}
-                    className={`h-2.5 overflow-hidden w-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-                >
-                    {isTracked ? (
-                        <View
-                            style={{ 
-                                width: `${p}%`, 
-                                backgroundColor: color,
-                                borderRadius: Radius.full,
-                                height: '100%',
-                            }}
-                        />
-                    ) : (
-                        <View
-                            style={{ 
-                                width: '100%', 
-                                backgroundColor: isDark ? '#44403c' : '#d6d3d1', 
-                                opacity: 0.5,
-                                borderRadius: Radius.full,
-                                height: '100%',
-                            }}
-                        />
-                    )}
-                </View>
-
-                {/* "Not tracked" footer note */}
-                {!isTracked && (
-                    <Text className={`text-[11px] font-nunito text-center mt-2.5 ${isDark ? 'text-amber-400/70' : 'text-amber-600/80'}`}>
-                        Tap the 👁 icon to resume GWA calculation.
-                    </Text>
+                        <Ionicons name="ellipsis-horizontal" size={16} color={theme.textSecondary} />
+                    </TouchableOpacity>
                 )}
-            </TouchableOpacity>
-        </Animated.View>
+            </View>
+        </Card>
     );
 }
-

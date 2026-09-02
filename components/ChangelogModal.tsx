@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { triggerHaptic } from './tasks/utils';
 import Constants from 'expo-constants';
+import { OnboardingService } from '../services/OnboardingService';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const CHANGELOG_KEY = '@changelog_last_seen_version';
@@ -17,9 +18,16 @@ export default function ChangelogModal() {
     const checkVersion = async () => {
       try {
         const lastSeenVersion = await AsyncStorage.getItem(CHANGELOG_KEY);
-        if (lastSeenVersion !== CURRENT_VERSION) {
-          setVisible(true);
+        if (lastSeenVersion === CURRENT_VERSION) return;
+
+        // Nothing is "new" on a fresh install — the intro already covered it.
+        // Record the version silently so the changelog starts from the next update.
+        if (await OnboardingService.isFirstRun()) {
+          await AsyncStorage.setItem(CHANGELOG_KEY, CURRENT_VERSION);
+          return;
         }
+
+        setVisible(true);
       } catch (e) {
         console.error('Error reading changelog version', e);
       }

@@ -29,6 +29,10 @@ import {
   sanitizeScore,
   triggerHaptic,
 } from '@/components/tasks';
+import SpotlightTarget from '@/components/spotlight/SpotlightTarget';
+import { useScreenTour } from '@/components/spotlight/useScreenTour';
+import { SPOTLIGHT_IDS, TOUR_KEYS, TASKS_TOUR } from '@/constants/tours';
+import { useTabBarHeight } from '@/components/CustomTabBar';
 
 /** Staggered fade-in wrapper for task cards */
 const FadeInTaskCard = ({ index, children }: { index: number; children: React.ReactNode }) => {
@@ -57,6 +61,7 @@ export default function RequirementsScreen() {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const theme = getTheme(isDark);
+  const tabBarHeight = useTabBarHeight();
 
   const [data, setData] = useState<any>(null);
   const [user, setUser] = useState<any>(null);
@@ -161,6 +166,9 @@ export default function RequirementsScreen() {
       setSelectedSubjectFilter('ALL');
     }
   }, [subjects, selectedSubjectFilter]);
+
+  // First visit only: point at the create-task button.
+  useScreenTour(TOUR_KEYS.tasks, TASKS_TOUR, data !== null);
 
   if (!data) {
     return (
@@ -546,26 +554,28 @@ export default function RequirementsScreen() {
           {syncStatus === 'saved' && <Ionicons name="cloud-done" size={22} color={theme.success} />}
           {(syncStatus === 'error' || syncStatus === 'offline') && <Ionicons name="cloud-offline" size={22} color={theme.textTertiary} />}
 
-          <TouchableOpacity
-            accessible={true}
-            accessibilityRole="button"
-            accessibilityLabel="Create new task"
-            onPress={() => {
-              triggerHaptic('light');
-              openAddModal();
-            }}
-            style={{
-              width: 38,
-              height: 38,
-              borderRadius: 12,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: theme.primary,
-              ...Shadows.md,
-            }}
-          >
-            <Ionicons name="add" size={24} color="#ffffff" />
-          </TouchableOpacity>
+          <SpotlightTarget id={SPOTLIGHT_IDS.tasksAdd}>
+            <TouchableOpacity
+              accessible={true}
+              accessibilityRole="button"
+              accessibilityLabel="Create new task"
+              onPress={() => {
+                triggerHaptic('light');
+                openAddModal();
+              }}
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 12,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: theme.primary,
+                ...Shadows.md,
+              }}
+            >
+              <Ionicons name="add" size={24} color="#ffffff" />
+            </TouchableOpacity>
+          </SpotlightTarget>
 
           <TouchableOpacity
             accessible={true}
@@ -594,7 +604,7 @@ export default function RequirementsScreen() {
       {/* Main Scroll Content */}
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 16, paddingBottom: 110 }}
+        contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 16, paddingBottom: tabBarHeight + 24 }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={theme.primary} />}
       >

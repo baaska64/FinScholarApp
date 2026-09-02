@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Alert, Modal, TextInput, Image, ImageBackground } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, ScrollView, TouchableOpacity, Alert, Modal, TextInput, Image, ImageBackground, Platform, Pressable, ActivityIndicator } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Defs, LinearGradient, Stop, Rect, Circle, Path } from 'react-native-svg';
 import { supabase } from '../../services/supabaseClient';
@@ -21,10 +21,28 @@ import * as MediaLibrary from 'expo-media-library';
 import { AlertService } from '@/components/CustomAlert';
 import { useSemesterContext } from '@/components/SemesterContext';
 import { ensureSubjectExists, refreshHasSchedule, getUnscheduledSubjects } from '@/utils/subjectRegistry';
-import { getTheme, Typography, Radius, Shadows } from '@/constants/Theme';
+import { normalizeScheduleDays, parseClassHour, parseClassDuration } from '@/utils/scheduleParsing';
+import { getTheme, Radius, Shadows } from '@/constants/Theme';
 import { ListSkeleton } from '@/components/ui/LoadingSkeleton';
+import SpotlightTarget from '@/components/spotlight/SpotlightTarget';
+import { useScreenTour } from '@/components/spotlight/useScreenTour';
+import { SPOTLIGHT_IDS, TOUR_KEYS, SCHEDULE_TOUR } from '@/constants/tours';
+import { useTabBarHeight } from '@/components/CustomTabBar';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
+
+/** Horizontal page padding. Kept tight so the timetable gets the width. */
+const GUTTER = 12;
+
+/** 14.5 -> "2:30PM". Used wherever a class time is shown as a compact label. */
+const formatHour = (h: number) => {
+    const hours = Math.floor(h);
+    const mins = Math.round((h - hours) * 60);
+    const ampm = hours >= 12 && hours < 24 ? 'PM' : 'AM';
+    let dh = hours > 12 ? hours - 12 : (hours === 0 ? 12 : hours);
+    if (dh > 12) dh -= 12;
+    return `${dh}${mins > 0 ? `:${mins.toString().padStart(2, '0')}` : ''}${ampm}`;
+};
 
 const parseLocalDate = (dateStr: string) => {
   if (typeof dateStr === 'string' && dateStr.includes('-')) {
@@ -48,7 +66,7 @@ export default function ScheduleScreen() {
 
     
     const params = useLocalSearchParams();
-    const [viewMode, setViewMode] = useState<'grid' | 'glass' | 'list' | 'attendance'>('grid');
+    const [viewMode, setViewMode] = useState<'grid' | 'list' | 'attendance'>('grid');
     const [zoomScale, setZoomScale] = useState(0.5);
     
     // Quick Edit Mode state
@@ -60,6 +78,22 @@ export default function ScheduleScreen() {
     const [isPremium, setIsPremium] = useState(false);
     const [quote, setQuote] = useState('');
     const [showAiWarning, setShowAiWarning] = useState(false);
+    // The hero, term stats and upcoming items moved off the main canvas so the
+    // timetable is the first thing on screen; this sheet is where they live now.
+    const [showOverview, setShowOverview] = useState(false);
+    /**
+     * Bumped when a scan writes classes in. The grid reads it as a cue to
+     * replay its staggered entrance, so the timetable visibly fills in
+     * chronologically instead of the blocks simply being there.
+     */
+    const [revealToken, setRevealToken] = useState(0);
+    const revealTimers = React.useRef<ReturnType<typeof setTimeout>[]>([]);
+    const clearRevealTimers = () => {
+        revealTimers.current.forEach(clearTimeout);
+        revealTimers.current = [];
+    };
+    useEffect(() => clearRevealTimers, []);
+    const insets = useSafeAreaInsets();
 
     useEffect(() => {
         setIsPremium(SyncService.getIsPremium());
@@ -72,6 +106,17 @@ export default function ScheduleScreen() {
         ];
         setQuote(quotes[Math.floor(Math.random() * quotes.length)]);
     }, []);
+
+    useEffect(() => {
+        if (params.viewMode && typeof params.viewMode === 'string') {
+            // 'glass' is the label the segmented control shows for the list view;
+            // accept it so older deep links keep landing on the right tab.
+            const vm = params.viewMode.toLowerCase() === 'glass' ? 'list' : params.viewMode.toLowerCase();
+            if (['grid', 'list', 'attendance'].includes(vm)) {
+                setViewMode(vm as any);
+            }
+        }
+    }, [params.viewMode, params.trigger]);
     const [upcomingMilestones, setUpcomingMilestones] = useState<any[]>([]);
     const [selectedClass, setSelectedClass] = useState<any>(null);
     const [editingClass, setEditingClass] = useState<any>(null);
@@ -85,37 +130,78 @@ export default function ScheduleScreen() {
     const [showPreviewModal, setShowPreviewModal] = useState(false);
     const [exportDark, setExportDark] = useState(true);
 
+    /**
+     * The export renders the timetable at 3084px wide — roughly a 2940x1920
+     * offscreen view tree per theme. Mounting those with the screen meant every
+     * zoom, quick-edit toggle and attendance tap re-laid them out, which is what
+     * made the whole app feel heavy. They now mount only for the capture, and
+     * only for the theme being captured.
+     */
+    const [exportRender, setExportRender] = useState(false);
+    const [isCapturing, setIsCapturing] = useState(false);
+
+    /** Lets the freshly mounted tree lay out and decode its bitmap. */
+    const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
     const handleExportSchedule = async () => {
-        let ref;
-        if (viewMode === 'list') {
-            ref = viewShotListRef;
-        } else {
-            ref = exportDark ? viewShotDarkRef : viewShotRef;
-        }
-        if (!ref?.current) return;
+        if (isCapturing) return;
+        setIsCapturing(true);
         try {
-            // Delay to ensure image assets are decoded before capture
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Glass view captures what is already on screen — nothing to mount.
+            if (viewMode === 'list') {
+                if (!viewShotListRef.current) return;
+                await settle(500);
+                const uri = await viewShotListRef.current.capture();
+                setPreviewUri(uri);
+                setShowPreviewModal(true);
+                return;
+            }
+
+            setExportRender(true);
+            // Longer than the old delay because this now also covers mounting
+            // and laying out the export tree, not just decoding its images.
+            await settle(650);
+            const ref = exportDark ? viewShotDarkRef : viewShotRef;
+            if (!ref.current) {
+                setExportRender(false);
+                return;
+            }
             const uri = await ref.current.capture();
             setPreviewUri(uri);
             setShowPreviewModal(true);
         } catch (e: any) {
+            setExportRender(false);
             AlertService.alert('Export Failed', e.message);
+        } finally {
+            setIsCapturing(false);
         }
     };
 
     const handleToggleExportTheme = async () => {
+        if (isCapturing) return;
         const newDark = !exportDark;
         setExportDark(newDark);
-        const ref = newDark ? viewShotDarkRef : viewShotRef;
-        if (!ref.current) return;
+        setIsCapturing(true);
         try {
-            await new Promise(resolve => setTimeout(resolve, 400));
+            // Swapping the theme swaps which tree is mounted, so this waits for
+            // the new one rather than an already-present sibling.
+            await settle(550);
+            const ref = newDark ? viewShotDarkRef : viewShotRef;
+            if (!ref.current) return;
             const uri = await ref.current.capture();
             setPreviewUri(uri);
         } catch (e: any) {
             // silent fail - keep current preview
+        } finally {
+            setIsCapturing(false);
         }
+    };
+
+    /** Closing the preview is what drops the export tree again. */
+    const closeExportPreview = () => {
+        setShowPreviewModal(false);
+        setExportRender(false);
+        setPreviewUri(null);
     };
 
     const handleSaveToGallery = async () => {
@@ -127,7 +213,7 @@ export default function ScheduleScreen() {
                 return;
             }
             await MediaLibrary.saveToLibraryAsync(previewUri);
-            setShowPreviewModal(false);
+            closeExportPreview();
             AlertService.alert('Success!', 'Your schedule has been saved to your photo gallery! 🎉');
         } catch (e: any) {
             AlertService.alert('Export Failed', e.message);
@@ -213,6 +299,9 @@ export default function ScheduleScreen() {
         await SyncService.pushLocalChanges(newData);
     };
 
+    // First visit only: point at the scan / add-class row.
+    useScreenTour(TOUR_KEYS.schedule, SCHEDULE_TOUR, data !== null);
+
     if (!data) return (
         <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
             <ListSkeleton count={3} cardHeight={100} />
@@ -256,24 +345,12 @@ export default function ScheduleScreen() {
         });
     };
 
-    const normalizeDay = (day: any) => {
-        if (typeof day === 'number') return Math.max(0, Math.min(6, day));
-        if (typeof day !== 'string') return 0;
-        const d = day.toLowerCase().trim();
-        if (d.startsWith('tu')) return 1;
-        if (d.startsWith('w')) return 2;
-        if (d.startsWith('th')) return 3;
-        if (d.startsWith('f')) return 4;
-        if (d.startsWith('sa')) return 5;
-        if (d.startsWith('su')) return 6;
-        return 0;
-    };
-
     const handleScannedClasses = (scannedClasses: any[]) => {
         let nd = { ...data };
         const sem = nd.years.find((y: any) => y.id === activeYearId)?.semesters.find((s: any) => s.id === activeSemId);
         if (!sem) return;
         
+
         const safeScanned = scannedClasses || [];
         safeScanned.forEach(sc => {
             const className = sc.name || sc.subject || sc.class || 'Unnamed Class';
@@ -289,77 +366,70 @@ export default function ScheduleScreen() {
             
             // Check if it's a flat format (has day and some time property)
             if (sc.day !== undefined && rawTime !== undefined) {
-                let parsedStartHour = 8;
-                if (typeof rawTime === 'number') {
-                    parsedStartHour = rawTime;
-                } else if (typeof rawTime === 'string') {
-                    const match = rawTime.match(/(\d+)/);
-                    if (match) {
-                        parsedStartHour = parseInt(match[1]);
-                        if (rawTime.toLowerCase().includes('pm') && parsedStartHour < 12) parsedStartHour += 12;
-                    }
-                }
+                const parsedStartHour = parseClassHour(rawTime);
+                const rawEndTime = sc.endHour !== undefined ? sc.endHour : (sc.endTime || sc.end_time);
+                const dur = parseClassDuration(sc.duration, parsedStartHour, rawEndTime);
+                // A study-load row names several days at once ("MWF"), so one
+                // row becomes one class per day.
+                const colorIdx = sc.colorIdx !== undefined && sc.colorIdx !== null ? Number(sc.colorIdx) : Math.floor(Math.random() * 6);
 
-                let dur = sc.duration || 1;
-                if (typeof dur === 'string') {
-                    const match = dur.match(/(\d+(\.\d+)?)/);
-                    if (match) dur = parseFloat(match[1]);
-                    else dur = 1;
-                }
-
-                nd.years.find((y: any) => y.id === activeYearId)?.semesters.find((s: any) => s.id === activeSemId)?.classes.push({
-                    id: generateId(),
-                    name: className,
-                    room: sc.room || sc.location || '',
-                    instructor: sc.instructor || sc.teacher || '',
-                    day: normalizeDay(sc.day),
-                    startHour: parsedStartHour,
-                    duration: dur,
-                    colorIdx: sc.colorIdx || Math.floor(Math.random() * 6),
-                    subjectId,
-                    absences: 0, lates: 0, cuts: 0
-                });
-            } else {
-                // Nested format
-                const safeSchedules = sc.schedules || [];
-                safeSchedules.forEach((sch: any) => {
-                    let parsedStartHour = 8;
-                    const schTime = sch.startHour !== undefined ? sch.startHour : (sch.time || sch.startTime || sch.start_time);
-                    if (typeof schTime === 'number') {
-                        parsedStartHour = schTime;
-                    } else if (typeof schTime === 'string') {
-                        const match = schTime.match(/(\d+)/);
-                        if (match) {
-                            parsedStartHour = parseInt(match[1]);
-                            if (schTime.toLowerCase().includes('pm') && parsedStartHour < 12) parsedStartHour += 12;
-                        }
-                    }
-
-                    let dur = sch.duration || 1;
-                    if (typeof dur === 'string') {
-                        const match = dur.match(/(\d+(\.\d+)?)/);
-                        if (match) dur = parseFloat(match[1]);
-                        else dur = 1;
-                    }
-
+                normalizeScheduleDays(sc.day).forEach((dayIdx) => {
                     nd.years.find((y: any) => y.id === activeYearId)?.semesters.find((s: any) => s.id === activeSemId)?.classes.push({
                         id: generateId(),
                         name: className,
-                        room: sc.room || sc.location || sch.room || '',
+                        room: sc.room || sc.location || '',
                         instructor: sc.instructor || sc.teacher || '',
-                        day: normalizeDay(sch.day),
+                        day: dayIdx,
                         startHour: parsedStartHour,
                         duration: dur,
-                        colorIdx: sc.colorIdx || Math.floor(Math.random() * 6),
+                        colorIdx,
                         subjectId,
                         absences: 0, lates: 0, cuts: 0
+                    });
+                });
+            } else if (Array.isArray(sc.schedules) && sc.schedules.length > 0) {
+                // Nested format
+                sc.schedules.forEach((sch: any) => {
+                    const schTime = sch.startHour !== undefined ? sch.startHour : (sch.time || sch.startTime || sch.start_time);
+                    const parsedStartHour = parseClassHour(schTime);
+                    const schEndTime = sch.endHour !== undefined ? sch.endHour : (sch.endTime || sch.end_time);
+                    const dur = parseClassDuration(sch.duration, parsedStartHour, schEndTime);
+                    const schColorIdx = sch.colorIdx !== undefined && sch.colorIdx !== null ? Number(sch.colorIdx) : (sc.colorIdx !== undefined && sc.colorIdx !== null ? Number(sc.colorIdx) : Math.floor(Math.random() * 6));
+
+                    normalizeScheduleDays(sch.day).forEach((dayIdx) => {
+                        nd.years.find((y: any) => y.id === activeYearId)?.semesters.find((s: any) => s.id === activeSemId)?.classes.push({
+                            id: generateId(),
+                            name: className,
+                            room: sch.room || sch.location || sc.room || sc.location || '',
+                            instructor: sch.instructor || sch.teacher || sc.instructor || sc.teacher || '',
+                            day: dayIdx,
+                            startHour: parsedStartHour,
+                            duration: dur,
+                            colorIdx: schColorIdx,
+                            subjectId,
+                            absences: 0, lates: 0, cuts: 0
+                        });
                     });
                 });
             }
         });
         saveData(nd);
         setShowScanner(false);
-        setShowAiWarning(true);
+
+        // Sequence the hand-off. Firing all three at once meant the scanner
+        // sheet was still sliding out while the "check my work" modal slid in
+        // over the grid — so the fill-in animation played entirely behind two
+        // modals and was never actually seen.
+        const revealSem = nd.years?.find((y: any) => y.id === activeYearId)
+            ?.semesters?.find((s: any) => s.id === activeSemId);
+        const blockCount = revealSem?.classes?.length || 0;
+        const revealMs = Math.min(blockCount * 55, 1600) + 320;
+
+        clearRevealTimers();
+        // Let the scanner sheet finish closing before the grid starts filling.
+        revealTimers.current.push(setTimeout(() => setRevealToken((n) => n + 1), 280));
+        // Then hold the prompt until the timetable has finished writing itself.
+        revealTimers.current.push(setTimeout(() => setShowAiWarning(true), 280 + revealMs + 400));
     };
 
     const handleDeleteClasses = (clsIds: string[]) => {
@@ -640,668 +710,690 @@ export default function ScheduleScreen() {
         { bg: isDark ? 'rgba(110, 220, 255, 0.2)' : 'rgba(100, 210, 255, 0.1)', border: isDark ? '#7dd3fc' : '#64d2ff', text: isDark ? '#a5e1fc' : '#00aae6' },
     ];
     
-    return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
-            {/* Top App Bar */}
-            <View style={{
-                flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-                paddingHorizontal: 20, paddingVertical: 14, zIndex: 10,
-                borderBottomWidth: 1, borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
-                backgroundColor: theme.surface,
-                ...(!isDark ? { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 4 } : {}),
-            }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <View style={{
-                        width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
-                        backgroundColor: isDark ? 'rgba(99,102,241,0.2)' : '#e0e7ff',
-                    }}>
-                        <Ionicons name="calendar" size={18} color={isDark ? '#818cf8' : '#4f46e5'} />
-                    </View>
-                    <View>
-                        <Text style={{ ...Typography.title, color: theme.text }}>My Schedule</Text>
-                    </View>
-                    {isPremium ? (
-                        <View style={{ backgroundColor: theme.success, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 4 }}>
-                            <Text style={{ fontSize: 10, fontWeight: '900', color: '#fff' }}>PRO</Text>
-                        </View>
-                    ) : (
-                        <TouchableOpacity 
-                            onPress={() => setShowPaywall(true)}
-                            style={{ backgroundColor: theme.primary, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 4 }}
-                        >
-                            <Ionicons name="diamond" size={10} color="#fff" />
-                            <Text style={{ fontSize: 10, fontWeight: '800', color: '#fff' }}>GET PRO</Text>
-                        </TouchableOpacity>
-                    )}
-                </View>
-                
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={20} color={theme.textTertiary} />}
-                    {syncStatus === 'saved' && <Ionicons name="cloud-done" size={20} color={theme.success} />}
-                    {syncStatus === 'offline' && <Ionicons name="cloud-offline" size={20} color={theme.textTertiary} />}
-                    
-                    <TouchableOpacity 
-                        onPress={() => router.push('/(tabs)/profile')} 
-                        style={{
-                            width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9'
-                        }}
-                    >
-                        <Ionicons name="settings-outline" size={20} color={isDark ? '#cbd5e1' : '#475569'} />
-                    </TouchableOpacity>
-                </View>
-            </View>
+    // ── Derived view state ────────────────────────────────────────────────────
+    const todayIdx = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
+    const todayClasses = currentSemClasses
+        .filter((c: any) => c.day === todayIdx)
+        .sort((a: any, b: any) => a.startHour - b.startHour);
+    const unscheduledSubjects = currentSem ? getUnscheduledSubjects(currentSem) : [];
+    const hasClasses = !!currentSem && currentSem.classes.length > 0;
+    const todayLabel = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
-            {/* View Mode Segmented Control Pills */}
+    // The tab bar floats over the screen, so whatever sits at the bottom of the
+    // page pads itself by the bar's height rather than ending above it.
+    const tabBarHeight = useTabBarHeight();
+
+    const chipSurface = isDark ? theme.surfaceSecondary : '#ffffff';
+    const iconButton = {
+        width: 34, height: 34, borderRadius: 17,
+        alignItems: 'center' as const, justifyContent: 'center' as const,
+        backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
+    };
+    const toolPill = {
+        height: 34, borderRadius: Radius.full,
+        overflow: 'hidden' as const,
+        flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const,
+        backgroundColor: chipSurface,
+        borderWidth: 1, borderColor: theme.cardBorder,
+    };
+
+    const summaryStatus = isOngoing
+        ? { icon: 'radio' as const, tint: isDark ? '#4ade80' : '#16a34a', bg: isDark ? 'rgba(74,222,128,0.15)' : '#dcfce7' }
+        : nextClassInfo
+            ? { icon: 'time' as const, tint: isDark ? '#fbbf24' : '#d97706', bg: isDark ? 'rgba(251,191,36,0.15)' : '#fef3c7' }
+            : { icon: 'calendar-outline' as const, tint: isDark ? '#818cf8' : '#4f46e5', bg: isDark ? 'rgba(99,102,241,0.18)' : '#e0e7ff' };
+
+    const summarySubtitle = isOngoing
+        ? `In progress · ${nextClassInfo.name}`
+        : nextClassInfo
+            ? `Next: ${nextClassInfo.name} in ${nextClassWaitStr}`
+            : 'Nothing coming up';
+
+    const viewModes: { key: 'grid' | 'list' | 'attendance'; label: string; icon: any }[] = [
+        { key: 'grid', label: 'Grid', icon: 'grid' },
+        { key: 'list', label: 'Glass', icon: 'albums' },
+        { key: 'attendance', label: 'Attendance', icon: 'checkbox-outline' },
+    ];
+
+    return (
+        <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+            {/* ── App bar: identity, term switcher, global actions ──────────── */}
             <View style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                paddingHorizontal: 16,
-                paddingVertical: 10,
+                flexDirection: 'row', alignItems: 'center',
+                paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 8,
                 backgroundColor: theme.surface,
-                borderBottomWidth: 1,
-                borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
+                borderBottomWidth: 1, borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
+                zIndex: 20,
             }}>
                 <View style={{
-                    flexDirection: 'row',
-                    flex: 1,
-                    borderRadius: Radius.full,
-                    padding: 4,
-                    backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
-                    borderWidth: 1,
-                    borderColor: theme.cardBorder,
+                    width: 34, height: 34, borderRadius: 17, marginRight: 10,
+                    alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: isDark ? 'rgba(99,102,241,0.2)' : '#e0e7ff',
                 }}>
-                    <TouchableOpacity 
-                        onPress={() => setViewMode('grid')}
-                        style={{
-                            flex: 1, paddingVertical: 8, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: viewMode === 'grid' ? (isDark ? '#4f46e5' : '#4f46e5') : 'transparent',
-                            ...(viewMode === 'grid' ? Shadows.sm : {}),
-                        }}
-                    >
-                        <Ionicons name="grid" size={14} color={viewMode === 'grid' ? '#ffffff' : theme.textSecondary} />
-                        <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'grid' ? '#ffffff' : theme.textSecondary }}>Grid</Text>
-                    </TouchableOpacity>
+                    <Ionicons name="calendar" size={17} color={isDark ? '#818cf8' : '#4f46e5'} />
+                </View>
 
-                    <TouchableOpacity 
-                        onPress={() => setViewMode('list')}
-                        style={{
-                            flex: 1, paddingVertical: 8, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: viewMode === 'list' ? (isDark ? '#4f46e5' : '#4f46e5') : 'transparent',
-                            ...(viewMode === 'list' ? Shadows.sm : {}),
-                        }}
-                    >
-                        <Ionicons name="albums" size={14} color={viewMode === 'list' ? '#ffffff' : theme.textSecondary} />
-                        <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'list' ? '#ffffff' : theme.textSecondary }}>Glass</Text>
-                    </TouchableOpacity>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 17, color: theme.text }}>My Schedule</Text>
+                        {isPremium ? (
+                            <View style={{ backgroundColor: theme.success, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 5 }}>
+                                <Text style={{ fontSize: 9, fontFamily: 'Nunito_800ExtraBold', color: '#fff' }}>PRO</Text>
+                            </View>
+                        ) : (
+                            <TouchableOpacity
+                                onPress={() => setShowPaywall(true)}
+                                accessibilityRole="button"
+                                accessibilityLabel="Upgrade to FinScholar Pro"
+                                style={{ backgroundColor: theme.primary, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 10, flexDirection: 'row', alignItems: 'center', gap: 3 }}
+                            >
+                                <Ionicons name="diamond" size={9} color="#fff" />
+                                <Text style={{ fontSize: 9, fontFamily: 'Nunito_800ExtraBold', color: '#fff' }}>GET PRO</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                    {/* Term switcher, reduced to a subtitle chip so it costs no vertical row */}
+                    <Tabs
+                        years={data.years}
+                        activeYearId={activeYearId}
+                        activeSemId={activeSemId}
+                        compact
+                    />
+                </View>
 
-                    <TouchableOpacity 
-                        onPress={() => setViewMode('attendance')}
-                        style={{
-                            flex: 1, paddingVertical: 8, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: viewMode === 'attendance' ? (isDark ? '#4f46e5' : '#4f46e5') : 'transparent',
-                            ...(viewMode === 'attendance' ? Shadows.sm : {}),
-                        }}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={18} color={theme.textTertiary} />}
+                    {syncStatus === 'saved' && <Ionicons name="cloud-done" size={18} color={theme.success} />}
+                    {syncStatus === 'offline' && <Ionicons name="cloud-offline" size={18} color={theme.textTertiary} />}
+
+                    <TouchableOpacity
+                        onPress={() => router.push('/(tabs)/profile')}
+                        accessibilityRole="button"
+                        accessibilityLabel="Settings"
+                        style={iconButton}
                     >
-                        <Ionicons name="checkbox-outline" size={14} color={viewMode === 'attendance' ? '#ffffff' : theme.textSecondary} />
-                        <Text style={{ marginLeft: 6, fontSize: 12, fontFamily: 'Nunito_700Bold', color: viewMode === 'attendance' ? '#ffffff' : theme.textSecondary }}>Attendance</Text>
+                        <Ionicons name="settings-outline" size={18} color={isDark ? '#cbd5e1' : '#475569'} />
                     </TouchableOpacity>
                 </View>
             </View>
-            
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 120, paddingTop: 16, paddingHorizontal: 16 }} removeClippedSubviews={true}>
-              <View style={{ width: '100%', maxWidth: 800, alignSelf: 'center' }}>
-                {/* Hero Banner with Overlapping Stats Card */}
-                <View style={{ marginBottom: 20 }}>
-                    <View style={{
-                        borderRadius: Radius['4xl'],
-                        overflow: 'hidden',
-                        borderWidth: isDark ? 1 : 0,
-                        borderColor: isDark ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
-                        backgroundColor: theme.surface,
-                        ...(!isDark ? Shadows.lg : {}),
-                    }}>
-                        {/* Layer 1: Top Banner */}
-                        <View style={{ 
-                            paddingLeft: 20, 
-                            paddingRight: 20,
-                            paddingTop: 24, 
-                            paddingBottom: 50,
-                            backgroundColor: isDark ? '#312e81' : '#6b63ff',
-                            overflow: 'hidden',
-                        }}>
-                            {/* Background Svg Gradient & Waves */}
-                            <Svg style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-                                <Defs>
-                                    <LinearGradient id="schedHeroGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                        <Stop offset="0%" stopColor={isDark ? '#312e81' : '#7b6eff'} />
-                                        <Stop offset="100%" stopColor={isDark ? '#1e1b4b' : '#5b54fa'} />
-                                    </LinearGradient>
-                                </Defs>
-                                <Rect width="100%" height="100%" fill="url(#schedHeroGrad)" />
-                                <Circle cx="0%" cy="0%" r="150" fill="rgba(255, 255, 255, 0.04)" />
-                                <Circle cx="100%" cy="100%" r="200" fill="rgba(255, 255, 255, 0.08)" />
-                            </Svg>
 
-                            {/* Dark bottom wave band */}
-                            <View style={{
-                                position: 'absolute', left: 0, right: 0, bottom: 0, height: '40%',
-                                backgroundColor: isDark ? 'rgba(15, 10, 40, 0.45)' : 'rgba(30, 20, 80, 0.25)',
-                                borderTopLeftRadius: 80,
-                                borderTopRightRadius: 40,
-                            }} />
-
-                            {/* Sparkle decorations */}
-                            <Text style={{ position: 'absolute', right: 120, top: 22, color: 'rgba(255,255,255,0.7)', fontSize: 18 }}>✦</Text>
-                            <Text style={{ position: 'absolute', right: 15, top: 55, color: 'rgba(255,255,255,0.5)', fontSize: 14 }}>✦</Text>
-                            <Text style={{ position: 'absolute', right: 165, top: 80, color: 'rgba(255,255,255,0.35)', fontSize: 11 }}>✦</Text>
-
-                            {/* Mascot with Shadow */}
-                            <View style={{ 
-                                position: 'absolute', 
-                                right: 5, 
-                                top: 30, 
-                                width: 155, 
-                                height: 170, 
-                            }}>
-                                {/* Large Display Stand Shadow centered under the entire tail */}
-                                <View style={{
-                                    position: 'absolute',
-                                    bottom: -27,
-                                    left: 50,
-                                    width: 80,
-                                    height: 80,
-                                    backgroundColor: 'rgba(30, 20, 80, 0.4)',
-                                    borderRadius: 40,
-                                    transform: [{ scaleY: 0.25 }]
-                                }} />
-                                <Image 
-                                    source={require('../../assets/images/finscheduleherocard.png')} 
-                                    style={{ width: 155, height: 170 }} 
-                                    resizeMode="contain" 
-                                />
-                            </View>
-
-                            {/* Text content - stays on the left side, never overlaps Fin */}
-                            <View style={{ maxWidth: '55%', zIndex: 10 }}>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                                    <Ionicons name="sparkles" size={14} color="#e0e7ff" />
-                                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: 'rgba(255, 255, 255, 0.9)', textTransform: 'uppercase', letterSpacing: 0.8 }}>
-                                        Schedule Hub
-                                    </Text>
-                                </View>
-                                
-                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: '#ffffff', marginBottom: 10, letterSpacing: -0.3 }}>
-                                    {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+            {/* ── View mode switch ─────────────────────────────────────────── */}
+            <View style={{
+                paddingHorizontal: GUTTER, paddingVertical: 7,
+                backgroundColor: theme.surface,
+                borderBottomWidth: 1, borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
+            }}>
+                <View style={{
+                    flexDirection: 'row', borderRadius: Radius.full, padding: 3,
+                    backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
+                    borderWidth: 1, borderColor: theme.cardBorder,
+                }}>
+                    {viewModes.map((mode) => {
+                        const active = viewMode === mode.key;
+                        return (
+                            <TouchableOpacity
+                                key={mode.key}
+                                onPress={() => setViewMode(mode.key)}
+                                accessibilityRole="tab"
+                                accessibilityState={{ selected: active }}
+                                style={{
+                                    flex: 1, paddingVertical: 6, borderRadius: Radius.full,
+                                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                                    backgroundColor: active ? '#4f46e5' : 'transparent',
+                                    ...(active ? Shadows.sm : {}),
+                                }}
+                            >
+                                <Ionicons name={mode.icon} size={13} color={active ? '#ffffff' : theme.textSecondary} />
+                                <Text style={{ marginLeft: 5, fontSize: 12, fontFamily: 'Nunito_700Bold', color: active ? '#ffffff' : theme.textSecondary }}>
+                                    {mode.label}
                                 </Text>
-
-                                {/* Speech Bubble Quote */}
-                                <View style={{
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    backgroundColor: isDark ? 'rgba(15, 23, 42, 0.6)' : 'rgba(255, 255, 255, 0.15)',
-                                    borderWidth: 1,
-                                    borderColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.25)',
-                                    paddingHorizontal: 12,
-                                    paddingVertical: 10,
-                                    borderRadius: 16,
-                                }}>
-                                    <Ionicons name="chatbubble-ellipses" size={14} color="#e0e7ff" style={{ marginRight: 8, alignSelf: 'flex-start', marginTop: 2 }} />
-                                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: '#ffffff', flexShrink: 1, lineHeight: 16 }}>
-                                        {quote || "Every class brings you closer to your graduation goals!"}
-                                    </Text>
-                                </View>
-                            </View>
-                        </View>
-
-                        {/* Layer 2: Overlapping Stats Card */}
-                        <View style={{
-                            marginTop: -28,
-                            marginHorizontal: 12,
-                            marginBottom: 12,
-                            borderRadius: Radius['3xl'],
-                            backgroundColor: theme.surface,
-                            borderWidth: 1,
-                            borderColor: theme.cardBorder,
-                            padding: 14,
-                            ...(!isDark ? Shadows.md : {}),
-                        }}>
-                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                                {/* Metric 1: Today's Classes */}
-                                <View style={{
-                                    flex: 1, minWidth: '45%',
-                                    backgroundColor: theme.surfaceSecondary,
-                                    paddingHorizontal: 10, paddingVertical: 8,
-                                    borderRadius: Radius['2xl'],
-                                    borderWidth: 1, borderColor: theme.cardBorder,
-                                }}>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#e0e7ff', alignItems: 'center', justifyContent: 'center' }}>
-                                            <Ionicons name="time" size={11} color={isDark ? '#818cf8' : '#4f46e5'} />
-                                        </View>
-                                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>Today's Classes</Text>
-                                    </View>
-                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text }}>
-                                        {currentSemClasses.filter((c: any) => c.day === (new Date().getDay() === 0 ? 6 : new Date().getDay() - 1)).length} Classes
-                                    </Text>
-                                </View>
-
-                                {/* Metric 2: Weekly Total */}
-                                <View style={{
-                                    flex: 1, minWidth: '45%',
-                                    backgroundColor: theme.surfaceSecondary,
-                                    paddingHorizontal: 10, paddingVertical: 8,
-                                    borderRadius: Radius['2xl'],
-                                    borderWidth: 1, borderColor: theme.cardBorder,
-                                }}>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: isDark ? 'rgba(14, 165, 233, 0.2)' : '#e0f2fe', alignItems: 'center', justifyContent: 'center' }}>
-                                            <Ionicons name="calendar" size={11} color={isDark ? '#38bdf8' : '#0ea5e9'} />
-                                        </View>
-                                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>Weekly Total</Text>
-                                    </View>
-                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text }}>
-                                        {currentSemClasses.length} Blocks
-                                    </Text>
-                                </View>
-
-                                {/* Metric 3: Attendance Rate */}
-                                <View style={{
-                                    flex: 1, minWidth: '45%',
-                                    backgroundColor: theme.surfaceSecondary,
-                                    paddingHorizontal: 10, paddingVertical: 8,
-                                    borderRadius: Radius['2xl'],
-                                    borderWidth: 1, borderColor: theme.cardBorder,
-                                }}>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: isDark ? 'rgba(16, 185, 129, 0.2)' : '#d1fae5', alignItems: 'center', justifyContent: 'center' }}>
-                                            <Ionicons name="checkmark-circle" size={11} color={isDark ? '#34d399' : '#10b981'} />
-                                        </View>
-                                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>Attendance</Text>
-                                    </View>
-                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text }}>
-                                        {overallAttendance === null ? 'N/A' : `${overallAttendance}%`}
-                                    </Text>
-                                </View>
-
-                                {/* Metric 4: Active Term */}
-                                <View style={{
-                                    flex: 1, minWidth: '45%',
-                                    backgroundColor: theme.surfaceSecondary,
-                                    paddingHorizontal: 10, paddingVertical: 8,
-                                    borderRadius: Radius['2xl'],
-                                    borderWidth: 1, borderColor: theme.cardBorder,
-                                }}>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                                        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: isDark ? 'rgba(245, 158, 11, 0.2)' : '#fef3c7', alignItems: 'center', justifyContent: 'center' }}>
-                                            <Ionicons name="school" size={11} color={isDark ? '#fbbf24' : '#f59e0b'} />
-                                        </View>
-                                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>Active Term</Text>
-                                    </View>
-                                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: theme.text }} numberOfLines={1}>
-                                        {currentSem ? `${currentYear?.name || ''} • ${currentSem.name}` : 'No Term'}
-                                    </Text>
-                                </View>
-                            </View>
-                        </View>
-
-                    </View>
+                            </TouchableOpacity>
+                        );
+                    })}
                 </View>
-                {/* Year / Semester Navigation */}
-                <Tabs 
-                    years={data.years} 
-                    activeYearId={activeYearId} 
-                    activeSemId={activeSemId}
-                />
+            </View>
 
+            {/* ── Body ─────────────────────────────────────────────────────── */}
+            <View style={{ flex: 1 }}>
                 {!currentSem ? (
-                    <View className={`mt-10 items-center justify-center p-8 rounded-[32px] ${isDark ? 'bg-slate-800' : 'bg-white shadow-sm'}`}>
-                        <Ionicons name="calendar-outline" size={48} color={isDark ? "#475569" : "#94a3b8"} style={{marginBottom: 16}} />
-                        {data?.years?.length === 0 ? (
-                            <>
-                                <Text className={`text-center font-medium mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>No years added yet. {'\n'}Setup your academic terms to get started!</Text>
-                                <TouchableOpacity 
-                                    onPress={() => router.push('/academic-manager')}
-                                    className={`px-6 py-3 rounded-full flex-row items-center ${isDark ? 'bg-indigo-500' : 'bg-indigo-600'}`}
-                                >
-                                    <Ionicons name="add" size={20} color="white" />
-                                    <Text className="font-nunito-bold text-white ml-2">Setup Academic Term</Text>
-                                </TouchableOpacity>
-                            </>
-                        ) : (
-                            <Text className={`text-center font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>No semester selected. {'\n'}Select a semester above to view your schedule!</Text>
-                        )}
-                    </View>
-                ) : (
-                    <View className="mt-4">
-                        {/* Scan + Add Actions (prominent, at top) */}
-                        <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
-                            <TouchableOpacity 
-                                onPress={() => {
-                                    if (SyncService.getIsPremium()) {
-                                        setShowScanner(true);
-                                    } else {
-                                        setShowPaywall(true);
-                                    }
-                                }} 
-                                style={{
-                                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: Radius['2xl'],
-                                    backgroundColor: isDark ? '#4f46e5' : '#4f46e5',
-                                    ...(!isDark ? Shadows.md : {}),
-                                }}
-                            >
-                                <Ionicons name="sparkles" size={18} color="#fff" />
-                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: '#fff', marginLeft: 8 }}>Scan Image</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity 
-                                onPress={() => { setEditingClass(null); setShowEditModal(true); }} 
-                                style={{
-                                    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: Radius['2xl'],
-                                    borderWidth: 1.5, borderColor: theme.cardBorder,
-                                    backgroundColor: theme.surface,
-                                    ...(!isDark ? Shadows.sm : {}),
-                                }}
-                            >
-                                <Ionicons name="add-circle-outline" size={18} color={theme.text} />
-                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: theme.text, marginLeft: 8 }}>Add Class</Text>
-                            </TouchableOpacity>
+                    <ScrollView contentContainerStyle={{ padding: 24, paddingTop: 40, paddingBottom: tabBarHeight + 24 }}>
+                        <View style={{
+                            alignItems: 'center', padding: 28, borderRadius: Radius['4xl'],
+                            backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder,
+                            ...(!isDark ? Shadows.sm : {}),
+                        }}>
+                            <Ionicons name="calendar-outline" size={44} color={isDark ? '#475569' : '#94a3b8'} style={{ marginBottom: 14 }} />
+                            {data?.years?.length === 0 ? (
+                                <>
+                                    <Text style={{ textAlign: 'center', marginBottom: 18, fontFamily: 'Nunito_700Bold', color: theme.textSecondary }}>
+                                        No years added yet.{'\n'}Set up your academic terms to get started!
+                                    </Text>
+                                    <TouchableOpacity
+                                        onPress={() => router.push('/academic-manager')}
+                                        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 22, paddingVertical: 12, borderRadius: Radius.full, backgroundColor: '#4f46e5' }}
+                                    >
+                                        <Ionicons name="add" size={19} color="#fff" />
+                                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', color: '#fff', marginLeft: 7 }}>Setup Academic Term</Text>
+                                    </TouchableOpacity>
+                                </>
+                            ) : (
+                                <Text style={{ textAlign: 'center', fontFamily: 'Nunito_700Bold', color: theme.textSecondary }}>
+                                    No semester selected.{'\n'}Pick a term from the header to view your schedule!
+                                </Text>
+                            )}
                         </View>
-                        {currentSem.classes.length === 0 ? (
-                            <View className={`flex-row items-center p-4 rounded-2xl mb-4 border shadow-sm ${isDark ? 'bg-indigo-950 border-indigo-900' : 'bg-indigo-50 border-indigo-200'}`}>
-                                <View className="w-10 h-10 rounded-full bg-white items-center justify-center mr-3 overflow-hidden shadow-sm border border-indigo-100">
-                                    <Image source={require('../../assets/images/confused.png')} className="w-12 h-12" style={{ transform: [{translateY: 4}] }} resizeMode="cover" />
-                                </View>
-                                <View className="flex-1">
-                                    <Text className={`text-sm font-bold ${isDark ? 'text-indigo-300' : 'text-indigo-800'}`}>Fin is confused! 🤔</Text>
-                                    <Text className={`text-xs ${isDark ? 'text-indigo-200' : 'text-indigo-700'}`}>Where is everyone? There are no classes here! Scan an image or add classes manually so Fin knows where to go!</Text>
-                                </View>
-                            </View>
-                        ) : null}
-
-                        {/* ── Subjects without schedule alert ──────────────────── */}
-                        {(() => {
-                            const unscheduled = getUnscheduledSubjects(currentSem);
-                            if (unscheduled.length === 0) return null;
-                            return (
+                    </ScrollView>
+                ) : (
+                    <View style={{ flex: 1 }}>
+                        {/* ── Primary actions + timetable tools, one slim row ─── */}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: GUTTER, marginTop: 10, marginBottom: 8, gap: 6 }}>
+                            <SpotlightTarget id={SPOTLIGHT_IDS.scheduleAddClass} style={{ flex: 1, flexDirection: 'row', gap: 6 }}>
                                 <TouchableOpacity
-                                    onPress={() => router.push('/(tabs)/grades')}
-                                    className={`mb-4 p-4 rounded-[24px] border flex-row items-center ${isDark ? 'bg-blue-950/40 border-blue-800/40' : 'bg-blue-50 border-blue-200'}`}
+                                    // Quick Scan runs on-device and costs nothing, so the
+                                    // sheet opens for everyone. The paywall now guards the
+                                    // AI mode inside it rather than the whole feature.
+                                    onPress={() => setShowScanner(true)}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Scan a schedule image"
+                                    style={{
+                                        flex: 1, height: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                                        borderRadius: Radius.full, backgroundColor: '#4f46e5',
+                                        ...(!isDark ? Shadows.sm : {}),
+                                    }}
                                 >
-                                    <Ionicons name="school-outline" size={18} color="#3b82f6" style={{ marginRight: 10 }} />
-                                    <View className="flex-1">
-                                        <Text className={`font-bold text-sm ${isDark ? 'text-blue-400' : 'text-blue-700'}`}>
-                                            {unscheduled.length} subject{unscheduled.length > 1 ? 's' : ''} without a schedule
-                                        </Text>
-                                        <Text className={`text-xs mt-0.5 ${isDark ? 'text-blue-500/70' : 'text-blue-600/80'}`} numberOfLines={1}>
-                                            {unscheduled.map((s: any) => s.name).join(', ')} · Add class times above →
-                                        </Text>
-                                    </View>
+                                    <Ionicons name="sparkles" size={14} color="#fff" />
+                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: '#fff', marginLeft: 5 }}>Scan</Text>
                                 </TouchableOpacity>
-                            );
-                        })()}
+                                <TouchableOpacity
+                                    onPress={() => { setEditingClass(null); setShowEditModal(true); }}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Add a class"
+                                    style={{
+                                        flex: 1, height: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                                        borderRadius: Radius.full, backgroundColor: chipSurface,
+                                        borderWidth: 1, borderColor: theme.cardBorder,
+                                    }}
+                                >
+                                    <Ionicons name="add" size={16} color={theme.text} />
+                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: theme.text, marginLeft: 3 }}>Add</Text>
+                                </TouchableOpacity>
+                            </SpotlightTarget>
 
-                        {upcomingMilestones.length > 0 && (
-                            <View className="mb-4">
-                                <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row">
-                                    <View className={`flex-row items-center px-3 py-1.5 rounded-full mr-2 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-200'}`}>
-                                        <Ionicons name="notifications" size={12} color={isDark ? "#94a3b8" : "#64748b"} />
-                                        <Text className={`text-[10px] font-bold ml-1 uppercase tracking-widest ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Upcoming</Text>
-                                    </View>
-                                    {upcomingMilestones.map((m: any, i: number) => {
-                                        const itemMidnight = parseLocalDate(m.date);
-                                        const todayMidnight = new Date().setHours(0,0,0,0);
-                                        const diffDays = Math.round((itemMidnight - todayMidnight) / (1000 * 60 * 60 * 24));
-                                        return (
-                                            <View key={i} className={`flex-row items-center px-3 py-1.5 rounded-full border mr-2 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
-                                                <Text className={`text-xs font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{m.name || m.title}</Text>
-                                                <Text className={`text-[10px] ml-2 ${isDark ? 'text-blue-400' : 'text-blue-500'}`}>
-                                                    • {diffDays === 0 ? 'Today' : diffDays === 1 ? 'Tomorrow' : `${diffDays} days`}
-                                                </Text>
-                                            </View>
-                                        );
-                                    })}
-                                </ScrollView>
-                            </View>
-                        )}
+                            {viewMode === 'grid' && (
+                                <>
+                                    <TouchableOpacity
+                                        onPress={() => setIsQuickEditMode(!isQuickEditMode)}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={isQuickEditMode ? 'Exit quick edit mode' : 'Enter quick edit mode'}
+                                        style={{
+                                            ...toolPill,
+                                            width: 34,
+                                            backgroundColor: isQuickEditMode ? '#4f46e5' : chipSurface,
+                                            borderColor: isQuickEditMode ? '#4f46e5' : theme.cardBorder,
+                                        }}
+                                    >
+                                        <Ionicons name={isQuickEditMode ? 'close' : 'flash'} size={16} color={isQuickEditMode ? '#ffffff' : (isDark ? '#94a3b8' : '#64748b')} />
+                                    </TouchableOpacity>
 
-                        <View className="mb-4">
-                            {/* Today's Classes Strip */}
-                            <View className={`p-4 rounded-[28px] border-2 flex-row items-center ${isDark ? 'bg-slate-900 border-indigo-500/10' : 'bg-indigo-50/30 border-indigo-100 shadow-sm shadow-indigo-100/30'}`}>
-                                <View className={`px-2 py-1 rounded-md mr-3 ${isDark ? 'bg-slate-700' : 'bg-slate-200'}`}>
-                                    <Text className={`text-[10px] font-bold uppercase tracking-wider ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>Today</Text>
-                                </View>
-                                <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-1 flex-row">
-                                    {currentSemClasses.filter((c: any) => c.day === (new Date().getDay() === 0 ? 6 : new Date().getDay() - 1)).length === 0 ? (
-                                        <Text className={`text-sm italic ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>No classes today 🎉</Text>
-                                    ) : (
-                                        currentSemClasses.filter((c: any) => c.day === (new Date().getDay() === 0 ? 6 : new Date().getDay() - 1)).map((cls: any, i: number) => {
-                                            const formatTime = (h: number) => {
-                                                const hours = Math.floor(h);
-                                                const mins = Math.round((h - hours) * 60);
-                                                const ampm = hours >= 12 && hours < 24 ? 'PM' : 'AM';
-                                                let dh = hours > 12 ? hours - 12 : (hours === 0 ? 12 : hours);
-                                                if (dh > 12) dh -= 12;
-                                                return `${dh}${mins > 0 ? `:${mins.toString().padStart(2, '0')}` : ''}${ampm}`;
-                                            };
-                                            return (
-                                                <View key={i} className="flex-row items-center mr-3 px-2 py-1 rounded-md border" style={{backgroundColor: palette[cls.colorIdx%palette.length].bg, borderColor: palette[cls.colorIdx%palette.length].border}}>
-                                                    <Text className="text-xs font-bold mr-1" style={{color: palette[cls.colorIdx%palette.length].text}}>{cls.name}</Text>
-                                                    <Text className="text-[10px]" style={{color: palette[cls.colorIdx%palette.length].text, opacity: 0.8}}>{formatTime(cls.startHour)}</Text>
-                                                </View>
-                                            );
-                                        })
-                                    )}
-                                </ScrollView>
-                            </View>
+                                    <View style={{ ...toolPill, paddingHorizontal: 2 }}>
+                                        <TouchableOpacity
+                                            onPress={() => setZoomScale(s => Math.max(0.25, s - 0.25))}
+                                            accessibilityRole="button"
+                                            accessibilityLabel="Zoom out"
+                                            style={{ width: 26, height: 30, alignItems: 'center', justifyContent: 'center' }}
+                                        >
+                                            <Ionicons name="remove" size={16} color={isDark ? '#e2e8f0' : '#475569'} />
+                                        </TouchableOpacity>
+                                        <Text style={{ width: 32, textAlign: 'center', fontFamily: 'Nunito_800ExtraBold', fontSize: 10.5, color: theme.textSecondary }}>
+                                            {Math.round(zoomScale * 100)}%
+                                        </Text>
+                                        <TouchableOpacity
+                                            onPress={() => setZoomScale(s => Math.min(1.0, s + 0.25))}
+                                            accessibilityRole="button"
+                                            accessibilityLabel="Zoom in"
+                                            style={{ width: 26, height: 30, alignItems: 'center', justifyContent: 'center' }}
+                                        >
+                                            <Ionicons name="add" size={16} color={isDark ? '#e2e8f0' : '#475569'} />
+                                        </TouchableOpacity>
+                                    </View>
+                                </>
+                            )}
 
-                            {/* Next Class Strip */}
-                            {nextClassInfo && (
-                                <View className={`mt-3 p-4 rounded-[28px] border-2 flex-row items-center ${isOngoing ? (isDark ? 'bg-slate-900 border-green-500/20' : 'bg-green-50/40 border-green-100') : (isDark ? 'bg-slate-900 border-yellow-500/20' : 'bg-yellow-50/40 border-yellow-100')}`}>
-                                    <View className={`px-2 py-1 rounded-md mr-3 ${isOngoing ? (isDark ? 'bg-green-900' : 'bg-green-200') : (isDark ? 'bg-yellow-900' : 'bg-yellow-200')}`}>
-                                        <Text className={`text-[10px] font-bold uppercase tracking-wider ${isOngoing ? 'text-green-600' : 'text-yellow-600'}`}>{isOngoing ? 'Ongoing' : 'Next'}</Text>
-                                    </View>
-                                    <View className="flex-1 flex-row items-center">
-                                        <Text className={`text-sm font-bold mr-1 ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{nextClassInfo.name}</Text>
-                                        {!isOngoing && <Text className={`text-sm ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>starts in </Text>}
-                                        {!isOngoing && <Text className="text-sm font-bold text-yellow-600">{nextClassWaitStr}</Text>}
-                                    </View>
-                                </View>
+                            {viewMode !== 'attendance' && (
+                                <TouchableOpacity
+                                    onPress={handleExportSchedule}
+                                    disabled={isCapturing}
+                                    accessibilityRole="button"
+                                    accessibilityState={{ disabled: isCapturing, busy: isCapturing }}
+                                    accessibilityLabel={isCapturing ? 'Preparing export' : 'Export schedule as image'}
+                                    style={{ ...toolPill, width: 34, opacity: isCapturing ? 0.55 : 1 }}
+                                >
+                                    {isCapturing
+                                        ? <ActivityIndicator size="small" color={isDark ? '#a5b4fc' : '#4f46e5'} />
+                                        : <Ionicons name="download-outline" size={16} color={isDark ? '#a5b4fc' : '#4f46e5'} />}
+                                </TouchableOpacity>
                             )}
                         </View>
 
-                        {viewMode === 'grid' && (
-                            <TouchableOpacity 
-                                key={isDark ? 'dark' : 'light'}
-                                onPress={() => setIsQuickEditMode(!isQuickEditMode)}
-                                className={`mb-4 flex-row items-center justify-center py-4 rounded-3xl border-2 ${isQuickEditMode ? 'bg-indigo-500 border-indigo-400 shadow-lg shadow-indigo-500/30' : (isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200 shadow-sm')}`}
-                            >
-                                <Ionicons name={isQuickEditMode ? "close-circle" : "flash"} size={20} color={isQuickEditMode ? "#ffffff" : (isDark ? "#94a3b8" : "#64748b")} />
-                                <Text className={`ml-2 text-base font-extrabold ${isQuickEditMode ? 'text-white' : (isDark ? 'text-slate-300' : 'text-slate-600')}`}>
-                                    {isQuickEditMode ? "Exit Quick Edit Mode" : "Quick Edit Schedule"}
+                        {/* Today / next class digest — opens the full overview sheet */}
+                        <TouchableOpacity
+                            onPress={() => setShowOverview(true)}
+                            activeOpacity={0.75}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${todayLabel}, ${todayClasses.length} classes today. ${summarySubtitle}. Open schedule overview.`}
+                            style={{
+                                flexDirection: 'row', alignItems: 'center',
+                                marginHorizontal: GUTTER, marginBottom: 8,
+                                paddingHorizontal: 10, paddingVertical: 6,
+                                borderRadius: Radius.lg,
+                                backgroundColor: theme.surface,
+                                borderWidth: 1, borderColor: theme.cardBorder,
+                            }}
+                        >
+                            <View style={{ width: 24, height: 24, borderRadius: 12, marginRight: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: summaryStatus.bg }}>
+                                <Ionicons name={summaryStatus.icon} size={13} color={summaryStatus.tint} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: theme.text }}>
+                                    {todayLabel} · {todayClasses.length === 0 ? 'No classes' : `${todayClasses.length} class${todayClasses.length > 1 ? 'es' : ''}`}
                                 </Text>
+                                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 10.5, color: theme.textSecondary }}>
+                                    {summarySubtitle}
+                                </Text>
+                            </View>
+                            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 10, color: theme.textTertiary, marginRight: 2 }}>Overview</Text>
+                            <Ionicons name="chevron-forward" size={14} color={theme.textTertiary} />
+                        </TouchableOpacity>
+
+                        {/* Subjects that still have no class times — one tappable line */}
+                        {unscheduledSubjects.length > 0 && (
+                            <TouchableOpacity
+                                onPress={() => router.push('/(tabs)/grades')}
+                                activeOpacity={0.75}
+                                style={{
+                                    flexDirection: 'row', alignItems: 'center',
+                                    marginHorizontal: GUTTER, marginBottom: 8,
+                                    paddingHorizontal: 10, paddingVertical: 6,
+                                    borderRadius: Radius.lg,
+                                    backgroundColor: isDark ? 'rgba(59,130,246,0.12)' : '#eff6ff',
+                                    borderWidth: 1, borderColor: isDark ? 'rgba(59,130,246,0.3)' : '#bfdbfe',
+                                }}
+                            >
+                                <Ionicons name="school-outline" size={14} color="#3b82f6" style={{ marginRight: 7 }} />
+                                <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 11, color: isDark ? '#93c5fd' : '#1d4ed8' }}>
+                                    {unscheduledSubjects.length} subject{unscheduledSubjects.length > 1 ? 's' : ''} without class times
+                                </Text>
+                                <Ionicons name="chevron-forward" size={13} color="#3b82f6" />
                             </TouchableOpacity>
                         )}
 
+                        {/* ── The schedule itself, filling everything that is left ─ */}
                         {viewMode === 'grid' ? (
-                            <View className="mb-8">
-                                <View className="flex-row items-center justify-between mb-4">
-                                    <TouchableOpacity 
-                                        onPress={handleExportSchedule}
-                                        className={`flex-1 mr-2 flex-row items-center justify-center py-4 rounded-3xl border-2 ${isDark ? 'bg-indigo-600 border-indigo-500' : 'bg-indigo-50 border-indigo-200'}`}
-                                    >
-                                        <Ionicons name="download" size={20} color={isDark ? "#ffffff" : "#4f46e5"} />
-                                        <Text className={`ml-2 text-base font-extrabold ${isDark ? 'text-white' : 'text-indigo-700'}`}>
-                                            Export
-                                        </Text>
-                                    </TouchableOpacity>
-
-                                    <View className={`flex-row items-center rounded-3xl border-2 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200 shadow-sm'} px-2 py-2`}>
-                                        <TouchableOpacity 
-                                            onPress={() => setZoomScale(s => Math.max(0.25, s - 0.25))}
-                                            className={`w-10 h-10 items-center justify-center rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-100'}`}
-                                        >
-                                            <Ionicons name="remove" size={22} color={isDark ? "#e2e8f0" : "#475569"} />
-                                        </TouchableOpacity>
-                                        
-                                        <View className="w-12 items-center justify-center">
-                                            <Text className={`font-bold text-xs ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{Math.round(zoomScale * 100)}%</Text>
-                                        </View>
-
-                                        <TouchableOpacity 
-                                            onPress={() => setZoomScale(s => Math.min(1.0, s + 0.25))}
-                                            className={`w-10 h-10 items-center justify-center rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-100'}`}
-                                        >
-                                            <Ionicons name="add" size={22} color={isDark ? "#e2e8f0" : "#475569"} />
-                                        </TouchableOpacity>
-                                    </View>
-                                </View>
-
-                                <TimetableGrid 
-                                    classes={currentSem.classes} 
-                                    isDark={isDark} 
-                                    isQuickEditMode={isQuickEditMode} 
-                                    zoomScale={zoomScale} 
-                                    onUpdateClass={onUpdateClass} 
-                                    onUpdateClasses={onUpdateClasses}
-                                    onDeleteClasses={handleDeleteClasses}
-                                    onPressClass={(cls: any) => {
-                                        if (!isQuickEditMode) setSelectedClass(cls);
-                                    }}
-                                />
-
-                                {/* Hidden views for screenshot export */}
-                                {/* Dark theme export */}
-                                <View style={{ position: 'absolute', top: 0, left: 0, zIndex: -1, opacity: 0 }}>
-                                    <ViewShot ref={viewShotDarkRef} options={{ format: 'jpg', quality: 1 }}>
-                                        <View style={{ width: 3084, backgroundColor: '#0f172a', borderRadius: 24, overflow: 'hidden' }}>
-                                            <ImageBackground
-                                                source={require('../../assets/images/ExportBg.png')}
-                                                style={{ width: 3084, height: 380 }}
-                                                imageStyle={{ resizeMode: 'cover', width: 3084, height: 380 }}
-                                            >
-                                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 80, paddingBottom: 40, backgroundColor: 'rgba(15,23,42,0.6)' }}>
-                                                    <View>
-                                                        <Text style={{ fontSize: 72, fontWeight: '900', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 4 }, textShadowRadius: 12 }}>FinScholar</Text>
-                                                        <Text style={{ fontSize: 36, fontWeight: '700', color: 'rgba(255,255,255,0.95)', marginTop: 8, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 }}>My Schedule • {currentSem.name}</Text>
-                                                    </View>
-                                                    <View style={{ backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)' }}>
-                                                        <Text style={{ fontSize: 28, fontWeight: '700', color: '#ffffff' }}>{currentYear?.name || ''}</Text>
-                                                    </View>
-                                                </View>
-                                            </ImageBackground>
-                                            <View style={{ padding: 16, paddingTop: 12 }}>
-                                                <View style={{ width: 3052, borderRadius: 20, overflow: 'hidden', borderWidth: 3, borderColor: '#3B82F6', backgroundColor: '#1e293b' }}>
-                                                    <TimetableGrid 
-                                                        classes={currentSem.classes} 
-                                                        isDark={true} 
-                                                        isQuickEditMode={false}
-                                                        isExportMode={true}
-                                                        onUpdateClass={() => {}} 
-                                                        onPressClass={() => {}}
-                                                    />
-                                                </View>
-                                            </View>
-                                            {/* Footer */}
-                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingBottom: 18, paddingTop: 0 }}>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                    <Ionicons name="school" size={14} color="#6366f1" style={{ marginRight: 6 }} />
-                                                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#6366f1' }}>FinScholar</Text>
-                                                </View>
-                                                <Text style={{ fontSize: 10, fontWeight: '600', color: '#475569' }}>Generated {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
-                                            </View>
-                                        </View>
-                                    </ViewShot>
-                                </View>
-                                {/* Light theme export */}
-                                <View style={{ position: 'absolute', top: 0, left: 0, zIndex: -1, opacity: 0 }}>
-                                    <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 1 }}>
-                                        <View style={{ width: 3084, backgroundColor: '#f1f5f9', borderRadius: 24, overflow: 'hidden' }}>
-                                            <ImageBackground
-                                                source={require('../../assets/images/ExportBg.png')}
-                                                style={{ width: 3084, height: 380 }}
-                                                imageStyle={{ resizeMode: 'cover', width: 3084, height: 380 }}
-                                            >
-                                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 80, paddingBottom: 40, backgroundColor: 'rgba(15,23,42,0.4)' }}>
-                                                    <View>
-                                                        <Text style={{ fontSize: 72, fontWeight: '900', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 4 }, textShadowRadius: 12 }}>FinScholar</Text>
-                                                        <Text style={{ fontSize: 36, fontWeight: '700', color: '#ffffff', marginTop: 8, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 }}>My Schedule • {currentSem.name}</Text>
-                                                    </View>
-                                                    <View style={{ backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)' }}>
-                                                        <Text style={{ fontSize: 28, fontWeight: '700', color: '#ffffff' }}>{currentYear?.name || ''}</Text>
-                                                    </View>
-                                                </View>
-                                            </ImageBackground>
-                                            <View style={{ padding: 16, paddingTop: 12 }}>
-                                                <View style={{ width: 3052, borderRadius: 20, overflow: 'hidden', borderWidth: 3, borderColor: '#60A5FA', backgroundColor: '#ffffff' }}>
-                                                    <TimetableGrid 
-                                                        classes={currentSem.classes} 
-                                                        isDark={false} 
-                                                        isQuickEditMode={false}
-                                                        isExportMode={true}
-                                                        onUpdateClass={() => {}} 
-                                                        onPressClass={() => {}}
-                                                    />
-                                                </View>
-                                            </View>
-                                            {/* Footer */}
-                                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingBottom: 18, paddingTop: 0 }}>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                    <Ionicons name="school" size={14} color="#4f46e5" style={{ marginRight: 6 }} />
-                                                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#4f46e5' }}>FinScholar</Text>
-                                                </View>
-                                                <Text style={{ fontSize: 10, fontWeight: '600', color: '#94a3b8' }}>Generated {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
-                                            </View>
-                                        </View>
-                                    </ViewShot>
-                                </View>
+                            <View style={{ flex: 1, paddingHorizontal: GUTTER, paddingBottom: tabBarHeight + 8 }}>
+                                {!hasClasses ? (
+                                    <EmptyScheduleCard isDark={isDark} theme={theme} />
+                                ) : (
+                                    <TimetableGrid
+                                        classes={currentSem.classes}
+                                        isDark={isDark}
+                                        isQuickEditMode={isQuickEditMode}
+                                        zoomScale={zoomScale}
+                                        fillHeight
+                                        revealToken={revealToken}
+                                        onUpdateClass={onUpdateClass}
+                                        onUpdateClasses={onUpdateClasses}
+                                        onDeleteClasses={handleDeleteClasses}
+                                        onPressClass={(cls: any) => {
+                                            if (!isQuickEditMode) setSelectedClass(cls);
+                                        }}
+                                    />
+                                )}
                             </View>
                         ) : viewMode === 'list' ? (
-                            <View className="mb-8">
-                                <TouchableOpacity 
-                                    onPress={handleExportSchedule}
-                                    className={`mb-4 flex-row items-center justify-center py-4 rounded-3xl border-2 ${isDark ? 'bg-indigo-600 border-indigo-500' : 'bg-indigo-50 border-indigo-200'}`}
-                                >
-                                    <Ionicons name="download" size={20} color={isDark ? "#ffffff" : "#4f46e5"} />
-                                    <Text className={`ml-2 text-base font-extrabold ${isDark ? 'text-white' : 'text-indigo-700'}`}>
-                                        Export as Image
-                                    </Text>
-                                </TouchableOpacity>
-                                
-                                <ViewShot ref={viewShotListRef} options={{ format: 'jpg', quality: 1 }}>
-                                    <ScheduleListView 
-                                        classes={currentSem.classes} 
-                                        isDark={isDark}
-                                        currentSem={currentSem}
-                                        currentYear={currentYear}
-                                    />
-                                </ViewShot>
-                            </View>
+                            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: GUTTER, paddingBottom: tabBarHeight + 16, flexGrow: 1 }}>
+                                {!hasClasses ? (
+                                    <EmptyScheduleCard isDark={isDark} theme={theme} />
+                                ) : (
+                                    <ViewShot ref={viewShotListRef} options={{ format: 'jpg', quality: 1 }}>
+                                        <ScheduleListView
+                                            classes={currentSem.classes}
+                                            isDark={isDark}
+                                            currentSem={currentSem}
+                                            currentYear={currentYear}
+                                        />
+                                    </ViewShot>
+                                )}
+                            </ScrollView>
                         ) : (
-                            <AttendanceTracker 
-                                data={data} 
-                                activeYearId={activeYearId} 
-                                activeSemId={activeSemId}
-                                saveData={saveData}
-                                targetDate={params.targetDate as string}
-                                trigger={params.trigger as string}
-                            />
+                            <View style={{ flex: 1, paddingBottom: tabBarHeight }}>
+                                <AttendanceTracker
+                                    data={data}
+                                    activeYearId={activeYearId}
+                                    activeSemId={activeSemId}
+                                    saveData={saveData}
+                                    targetDate={params.targetDate as string}
+                                    trigger={params.trigger as string}
+                                />
+                            </View>
                         )}
-
-                        <View className="mt-4 flex-row gap-3">
-                            <TouchableOpacity onPress={handleResetSchedule} className={`p-4 rounded-[24px] border-2 items-center justify-center ${isDark ? 'bg-red-950/40 border-red-900/50' : 'bg-red-50 border-red-100'}`}>
-                                <Ionicons name="trash" size={18} color="#ef4444" />
-                            </TouchableOpacity>
-                        </View>
                     </View>
                 )}
-              </View>
-            </ScrollView>
+            </View>
+
+            {/* Off-screen render target for the image export. Mounted ONLY for the
+                duration of a capture — see `exportRender` — and only for the theme
+                being captured, so the screen carries none of this while idle. */}
+            {currentSem && exportRender && (
+                <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, zIndex: -1, opacity: 0 }}>
+                    {exportDark ? (
+                    <ViewShot ref={viewShotDarkRef} options={{ format: 'jpg', quality: 1 }}>
+                        <View style={{ width: 3084, backgroundColor: '#0f172a', borderRadius: 24, overflow: 'hidden' }}>
+                            <ImageBackground
+                                source={require('../../assets/images/ExportBg.png')}
+                                style={{ width: 3084, height: 380 }}
+                                imageStyle={{ resizeMode: 'cover', width: 3084, height: 380 }}
+                            >
+                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 80, paddingBottom: 40, backgroundColor: 'rgba(15,23,42,0.6)' }}>
+                                    <View>
+                                        <Text style={{ fontSize: 72, fontWeight: '900', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 4 }, textShadowRadius: 12 }}>FinScholar</Text>
+                                        <Text style={{ fontSize: 36, fontWeight: '700', color: 'rgba(255,255,255,0.95)', marginTop: 8, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 }}>My Schedule • {currentSem.name}</Text>
+                                    </View>
+                                    <View style={{ backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)' }}>
+                                        <Text style={{ fontSize: 28, fontWeight: '700', color: '#ffffff' }}>{currentYear?.name || ''}</Text>
+                                    </View>
+                                </View>
+                            </ImageBackground>
+                            <View style={{ padding: 16, paddingTop: 12 }}>
+                                <View style={{ width: 3052, borderRadius: 20, overflow: 'hidden', borderWidth: 3, borderColor: '#3B82F6', backgroundColor: '#1e293b' }}>
+                                    <TimetableGrid
+                                        classes={currentSem.classes}
+                                        isDark={true}
+                                        isQuickEditMode={false}
+                                        isExportMode={true}
+                                        onUpdateClass={() => {}}
+                                        onPressClass={() => {}}
+                                    />
+                                </View>
+                            </View>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingBottom: 18, paddingTop: 0 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <Ionicons name="school" size={14} color="#6366f1" style={{ marginRight: 6 }} />
+                                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#6366f1' }}>FinScholar</Text>
+                                </View>
+                                <Text style={{ fontSize: 10, fontWeight: '600', color: '#475569' }}>Generated {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
+                            </View>
+                        </View>
+                    </ViewShot>
+                    ) : (
+                    <ViewShot ref={viewShotRef} options={{ format: 'jpg', quality: 1 }}>
+                        <View style={{ width: 3084, backgroundColor: '#f1f5f9', borderRadius: 24, overflow: 'hidden' }}>
+                            <ImageBackground
+                                source={require('../../assets/images/ExportBg.png')}
+                                style={{ width: 3084, height: 380 }}
+                                imageStyle={{ resizeMode: 'cover', width: 3084, height: 380 }}
+                            >
+                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 80, paddingBottom: 40, backgroundColor: 'rgba(15,23,42,0.4)' }}>
+                                    <View>
+                                        <Text style={{ fontSize: 72, fontWeight: '900', color: '#ffffff', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 4 }, textShadowRadius: 12 }}>FinScholar</Text>
+                                        <Text style={{ fontSize: 36, fontWeight: '700', color: '#ffffff', marginTop: 8, textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 }}>My Schedule • {currentSem.name}</Text>
+                                    </View>
+                                    <View style={{ backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)' }}>
+                                        <Text style={{ fontSize: 28, fontWeight: '700', color: '#ffffff' }}>{currentYear?.name || ''}</Text>
+                                    </View>
+                                </View>
+                            </ImageBackground>
+                            <View style={{ padding: 16, paddingTop: 12 }}>
+                                <View style={{ width: 3052, borderRadius: 20, overflow: 'hidden', borderWidth: 3, borderColor: '#60A5FA', backgroundColor: '#ffffff' }}>
+                                    <TimetableGrid
+                                        classes={currentSem.classes}
+                                        isDark={false}
+                                        isQuickEditMode={false}
+                                        isExportMode={true}
+                                        onUpdateClass={() => {}}
+                                        onPressClass={() => {}}
+                                    />
+                                </View>
+                            </View>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingBottom: 18, paddingTop: 0 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <Ionicons name="school" size={14} color="#4f46e5" style={{ marginRight: 6 }} />
+                                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#4f46e5' }}>FinScholar</Text>
+                                </View>
+                                <Text style={{ fontSize: 10, fontWeight: '600', color: '#94a3b8' }}>Generated {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</Text>
+                            </View>
+                        </View>
+                    </ViewShot>
+                    )}
+                </View>
+            )}
+
+            {/* ── Schedule overview sheet ──────────────────────────────────── */}
+            <Modal visible={showOverview} transparent animationType="slide" onRequestClose={() => setShowOverview(false)}>
+                <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.55)' }}>
+                    <Pressable style={{ flex: 1 }} onPress={() => setShowOverview(false)} />
+                    <View style={{
+                        maxHeight: '88%',
+                        borderTopLeftRadius: Radius['4xl'], borderTopRightRadius: Radius['4xl'],
+                        backgroundColor: isDark ? theme.surface : '#ffffff',
+                        paddingTop: 10,
+                    }}>
+                        <View style={{ alignItems: 'center', marginBottom: 10 }}>
+                            <View style={{ width: 44, height: 5, borderRadius: 3, backgroundColor: isDark ? '#334155' : '#cbd5e1' }} />
+                        </View>
+
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 12 }}>
+                            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 20, color: theme.text }}>Schedule Overview</Text>
+                            <TouchableOpacity
+                                onPress={() => setShowOverview(false)}
+                                accessibilityRole="button"
+                                accessibilityLabel="Close overview"
+                                style={iconButton}
+                            >
+                                <Ionicons name="close" size={19} color={isDark ? '#cbd5e1' : '#475569'} />
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
+                            {/* Hero: date + Fin's nudge */}
+                            <View style={{
+                                borderRadius: Radius['3xl'], overflow: 'hidden', marginBottom: 14,
+                                backgroundColor: isDark ? '#312e81' : '#6b63ff',
+                                paddingHorizontal: 18, paddingTop: 18, paddingBottom: 18,
+                            }}>
+                                <Svg style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+                                    <Defs>
+                                        <LinearGradient id="schedHeroGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                            <Stop offset="0%" stopColor={isDark ? '#312e81' : '#7b6eff'} />
+                                            <Stop offset="100%" stopColor={isDark ? '#1e1b4b' : '#5b54fa'} />
+                                        </LinearGradient>
+                                    </Defs>
+                                    <Rect width="100%" height="100%" fill="url(#schedHeroGrad)" />
+                                    <Circle cx="0%" cy="0%" r="150" fill="rgba(255, 255, 255, 0.04)" />
+                                    <Circle cx="100%" cy="100%" r="200" fill="rgba(255, 255, 255, 0.08)" />
+                                </Svg>
+
+                                <View style={{ position: 'absolute', right: 2, bottom: -6, width: 116, height: 128 }}>
+                                    <Image
+                                        source={require('../../assets/images/finscheduleherocard.png')}
+                                        style={{ width: 116, height: 128 }}
+                                        resizeMode="contain"
+                                    />
+                                </View>
+
+                                <View style={{ maxWidth: '64%', zIndex: 10 }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                                        <Ionicons name="sparkles" size={13} color="#e0e7ff" />
+                                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11, color: 'rgba(255,255,255,0.9)', textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                                            Schedule Hub
+                                        </Text>
+                                    </View>
+                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 19, color: '#ffffff', marginBottom: 9, letterSpacing: -0.3 }}>
+                                        {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                                    </Text>
+                                    <View style={{
+                                        flexDirection: 'row', alignItems: 'center',
+                                        backgroundColor: isDark ? 'rgba(15,23,42,0.6)' : 'rgba(255,255,255,0.15)',
+                                        borderWidth: 1, borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.25)',
+                                        paddingHorizontal: 11, paddingVertical: 9, borderRadius: 14,
+                                    }}>
+                                        <Ionicons name="chatbubble-ellipses" size={13} color="#e0e7ff" style={{ marginRight: 7, alignSelf: 'flex-start', marginTop: 2 }} />
+                                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: '#ffffff', flexShrink: 1, lineHeight: 16 }}>
+                                            {quote || 'Every class brings you closer to your graduation goals!'}
+                                        </Text>
+                                    </View>
+                                </View>
+                            </View>
+
+                            {/* Term metrics */}
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+                                <OverviewMetric
+                                    theme={theme} isDark={isDark}
+                                    icon="time" iconBg={isDark ? 'rgba(99,102,241,0.2)' : '#e0e7ff'} iconColor={isDark ? '#818cf8' : '#4f46e5'}
+                                    label="Today's Classes" value={`${todayClasses.length} Classes`}
+                                />
+                                <OverviewMetric
+                                    theme={theme} isDark={isDark}
+                                    icon="calendar" iconBg={isDark ? 'rgba(14,165,233,0.2)' : '#e0f2fe'} iconColor={isDark ? '#38bdf8' : '#0ea5e9'}
+                                    label="Weekly Total" value={`${currentSemClasses.length} Blocks`}
+                                />
+                                <OverviewMetric
+                                    theme={theme} isDark={isDark}
+                                    icon="checkmark-circle" iconBg={isDark ? 'rgba(16,185,129,0.2)' : '#d1fae5'} iconColor={isDark ? '#34d399' : '#10b981'}
+                                    label="Attendance" value={overallAttendance === null ? 'N/A' : `${overallAttendance}%`}
+                                />
+                                <OverviewMetric
+                                    theme={theme} isDark={isDark}
+                                    icon="school" iconBg={isDark ? 'rgba(245,158,11,0.2)' : '#fef3c7'} iconColor={isDark ? '#fbbf24' : '#f59e0b'}
+                                    label="Active Term" value={currentSem ? `${currentYear?.name || ''} • ${currentSem.name}` : 'No Term'} small
+                                />
+                            </View>
+
+                            {/* Next / ongoing class */}
+                            {nextClassInfo && (
+                                <View style={{
+                                    flexDirection: 'row', alignItems: 'center',
+                                    padding: 13, borderRadius: Radius['2xl'], marginBottom: 16,
+                                    backgroundColor: summaryStatus.bg,
+                                    borderWidth: 1, borderColor: summaryStatus.tint + '55',
+                                }}>
+                                    <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 7, marginRight: 10, backgroundColor: summaryStatus.tint }}>
+                                        <Text style={{ fontSize: 9.5, fontFamily: 'Nunito_800ExtraBold', color: '#fff', textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                                            {isOngoing ? 'Ongoing' : 'Next'}
+                                        </Text>
+                                    </View>
+                                    <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.text }} numberOfLines={1}>
+                                        {nextClassInfo.name}
+                                        {!isOngoing && nextClassWaitStr ? ` · in ${nextClassWaitStr}` : ''}
+                                    </Text>
+                                </View>
+                            )}
+
+                            {/* Today's classes */}
+                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 8 }}>
+                                Today
+                            </Text>
+                            {todayClasses.length === 0 ? (
+                                <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 13, fontStyle: 'italic', color: theme.textTertiary, marginBottom: 16 }}>
+                                    No classes today 🎉
+                                </Text>
+                            ) : (
+                                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 16 }}>
+                                    {todayClasses.map((cls: any, i: number) => (
+                                        <View
+                                            key={cls.id || i}
+                                            style={{
+                                                flexDirection: 'row', alignItems: 'center',
+                                                paddingHorizontal: 9, paddingVertical: 6, borderRadius: 9, borderWidth: 1,
+                                                backgroundColor: palette[cls.colorIdx % palette.length].bg,
+                                                borderColor: palette[cls.colorIdx % palette.length].border,
+                                            }}
+                                        >
+                                            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, marginRight: 5, color: palette[cls.colorIdx % palette.length].text }}>{cls.name}</Text>
+                                            <Text style={{ fontSize: 10, opacity: 0.85, color: palette[cls.colorIdx % palette.length].text }}>{formatHour(cls.startHour)}</Text>
+                                        </View>
+                                    ))}
+                                </View>
+                            )}
+
+                            {/* Upcoming deadlines */}
+                            {upcomingMilestones.length > 0 && (
+                                <>
+                                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 8 }}>
+                                        Upcoming
+                                    </Text>
+                                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 16 }}>
+                                        {upcomingMilestones.map((m: any, i: number) => {
+                                            const itemMidnight = parseLocalDate(m.date);
+                                            const todayMidnight = new Date().setHours(0, 0, 0, 0);
+                                            const diffDays = Math.round((itemMidnight - todayMidnight) / (1000 * 60 * 60 * 24));
+                                            return (
+                                                <View key={i} style={{
+                                                    flexDirection: 'row', alignItems: 'center',
+                                                    paddingHorizontal: 10, paddingVertical: 6, borderRadius: Radius.full, borderWidth: 1,
+                                                    backgroundColor: isDark ? theme.surfaceSecondary : '#ffffff',
+                                                    borderColor: theme.cardBorder,
+                                                }}>
+                                                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: theme.text }}>{m.name || m.title}</Text>
+                                                    <Text style={{ fontSize: 10, marginLeft: 6, color: isDark ? '#60a5fa' : '#3b82f6' }}>
+                                                        • {diffDays === 0 ? 'Today' : diffDays === 1 ? 'Tomorrow' : `${diffDays} days`}
+                                                    </Text>
+                                                </View>
+                                            );
+                                        })}
+                                    </View>
+                                </>
+                            )}
+
+                            {/* Subjects still missing class times */}
+                            {unscheduledSubjects.length > 0 && (
+                                <TouchableOpacity
+                                    onPress={() => { setShowOverview(false); router.push('/(tabs)/grades'); }}
+                                    style={{
+                                        flexDirection: 'row', alignItems: 'center',
+                                        padding: 13, borderRadius: Radius['2xl'], marginBottom: 16,
+                                        backgroundColor: isDark ? 'rgba(59,130,246,0.12)' : '#eff6ff',
+                                        borderWidth: 1, borderColor: isDark ? 'rgba(59,130,246,0.3)' : '#bfdbfe',
+                                    }}
+                                >
+                                    <Ionicons name="school-outline" size={17} color="#3b82f6" style={{ marginRight: 10 }} />
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: isDark ? '#93c5fd' : '#1d4ed8' }}>
+                                            {unscheduledSubjects.length} subject{unscheduledSubjects.length > 1 ? 's' : ''} without a schedule
+                                        </Text>
+                                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, marginTop: 2, color: isDark ? 'rgba(147,197,253,0.75)' : '#2563eb' }}>
+                                            {unscheduledSubjects.map((sub: any) => sub.name).join(', ')}
+                                        </Text>
+                                    </View>
+                                    <Ionicons name="chevron-forward" size={15} color="#3b82f6" />
+                                </TouchableOpacity>
+                            )}
+
+                            {/* Destructive action, deliberately last */}
+                            <TouchableOpacity
+                                onPress={() => { setShowOverview(false); setTimeout(handleResetSchedule, 300); }}
+                                accessibilityRole="button"
+                                accessibilityLabel="Delete all classes in this term"
+                                style={{
+                                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                                    paddingVertical: 13, borderRadius: Radius['2xl'],
+                                    backgroundColor: isDark ? 'rgba(127,29,29,0.3)' : '#fef2f2',
+                                    borderWidth: 1, borderColor: isDark ? 'rgba(153,27,27,0.5)' : '#fecaca',
+                                }}
+                            >
+                                <Ionicons name="trash" size={16} color="#ef4444" />
+                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: '#ef4444', marginLeft: 7 }}>Reset Schedule</Text>
+                            </TouchableOpacity>
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
             
             <ScheduleScannerModal 
                 visible={showScanner} 
                 onClose={() => setShowScanner(false)} 
                 onApply={handleScannedClasses} 
+                isPremium={isPremium}
+                onRequestPremium={() => { setShowScanner(false); setShowPaywall(true); }}
             />
 
             <PremiumPaywallModal 
@@ -1406,7 +1498,7 @@ export default function ScheduleScreen() {
                         <View className="flex-row justify-between" style={{ gap: 16 }}>
                             <TouchableOpacity 
                                 className="flex-1 py-4 bg-slate-200 rounded-2xl items-center"
-                                onPress={() => setShowPreviewModal(false)}
+                                onPress={closeExportPreview}
                             >
                                 <Text className="font-bold text-slate-700 text-lg">Cancel</Text>
                             </TouchableOpacity>
@@ -1422,5 +1514,80 @@ export default function ScheduleScreen() {
                 </View>
             </Modal>
         </SafeAreaView>
+    );
+}
+
+/**
+ * Shown in place of the timetable when the term has no classes yet. The grid
+ * would otherwise render as an empty week, which reads as a bug rather than an
+ * invitation to add something.
+ */
+function EmptyScheduleCard({ isDark, theme }: { isDark: boolean; theme: any }) {
+    return (
+        <View style={{
+            flex: 1, alignItems: 'center', justifyContent: 'center',
+            paddingHorizontal: 28, paddingVertical: 32,
+            borderRadius: Radius['3xl'],
+            backgroundColor: isDark ? 'rgba(49, 46, 129, 0.25)' : '#eef2ff',
+            borderWidth: 1, borderColor: isDark ? 'rgba(99, 102, 241, 0.3)' : '#c7d2fe',
+        }}>
+            <View style={{
+                width: 74, height: 74, borderRadius: 37, marginBottom: 14,
+                alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+                backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e0e7ff',
+            }}>
+                <Image
+                    source={require('../../assets/images/confused.png')}
+                    style={{ width: 84, height: 84, transform: [{ translateY: 6 }] }}
+                    resizeMode="cover"
+                />
+            </View>
+            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 17, marginBottom: 6, color: isDark ? '#a5b4fc' : '#3730a3' }}>
+                Fin is confused! 🤔
+            </Text>
+            <Text style={{ textAlign: 'center', fontFamily: 'Nunito_400Regular', fontSize: 13, lineHeight: 19, color: isDark ? 'rgba(199, 210, 254, 0.8)' : '#4338ca' }}>
+                There are no classes here yet. Scan a photo of your timetable or add classes by hand using the buttons below.
+            </Text>
+        </View>
+    );
+}
+
+interface OverviewMetricProps {
+    theme: any;
+    isDark: boolean;
+    icon: any;
+    iconBg: string;
+    iconColor: string;
+    label: string;
+    value: string;
+    /** Term names run long, so they get the smaller value type. */
+    small?: boolean;
+}
+
+/** One tile of the term stats grid inside the overview sheet. */
+function OverviewMetric({ theme, isDark, icon, iconBg, iconColor, label, value, small }: OverviewMetricProps) {
+    return (
+        <View style={{
+            flex: 1, minWidth: '45%',
+            paddingHorizontal: 11, paddingVertical: 9,
+            borderRadius: Radius['2xl'],
+            backgroundColor: isDark ? theme.surfaceSecondary : '#f8fafc',
+            borderWidth: 1, borderColor: theme.cardBorder,
+        }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                <View style={{ width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: iconBg }}>
+                    <Ionicons name={icon} size={11} color={iconColor} />
+                </View>
+                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>{label}</Text>
+            </View>
+            <Text
+                numberOfLines={1}
+                style={small
+                    ? { fontFamily: 'Nunito_700Bold', fontSize: 12, color: theme.text }
+                    : { fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text }}
+            >
+                {value}
+            </Text>
+        </View>
     );
 }

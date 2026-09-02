@@ -8,6 +8,7 @@ import 'react-native-reanimated';
 import './global.css';
 
 import { NotificationService } from '../services/NotificationService';
+import { OnboardingService } from '../services/OnboardingService';
 import { widgetTaskHandler } from '../widget/WidgetTaskHandler';
 import { LogBox, View, ActivityIndicator, Text, Appearance, Image, Platform } from 'react-native';
 import Purchases, { LOG_LEVEL } from 'react-native-purchases';
@@ -57,7 +58,15 @@ export default function RootLayout() {
   }, [error]);
 
   useEffect(() => {
-    NotificationService.initNotifications();
+    // On a fresh install we only create the Android channel and let onboarding
+    // ask for the permission in context. Everyone else keeps the old behaviour.
+    OnboardingService.isFirstRun().then((firstRun) => {
+      if (firstRun) {
+        NotificationService.ensureAndroidChannel();
+      } else {
+        NotificationService.initNotifications();
+      }
+    });
     // ScreenOrientation removed to prevent native module crash
   }, []);
 
@@ -91,9 +100,11 @@ export default function RootLayout() {
     setShowSplash(false);
   };
 
-  // Show animated splash while fonts load or splash animation is still playing
+  // The splash owns its own exit: it plays its intro, waits for `ready`, then
+  // animates out and calls back. Passing `loaded` here is what stops a slow
+  // font load from leaving a faded-out splash on screen.
   if (!loaded || showSplash) {
-    return <AnimatedSplash onFinish={handleSplashFinish} />;
+    return <AnimatedSplash onFinish={handleSplashFinish} ready={loaded} />;
   }
 
   return <RootLayoutNav />;
@@ -104,6 +115,7 @@ import { SemesterProvider } from '@/components/SemesterContext';
 import { SyncProvider } from '@/components/SyncProvider';
 import UpdateWarningModal from '@/components/UpdateWarningModal';
 import ChangelogModal from '@/components/ChangelogModal';
+import SpotlightProvider from '@/components/spotlight/SpotlightProvider';
 
 function RootLayoutNav() {
   const { colorScheme } = useColorScheme();
@@ -118,13 +130,16 @@ function RootLayoutNav() {
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <SyncProvider>
         <SemesterProvider>
+          <SpotlightProvider>
           <Stack screenOptions={{ animation: 'slide_from_right' }}>
             <Stack.Screen name="index" options={{ headerShown: false, animation: 'none' }} />
+            <Stack.Screen name="onboarding" options={{ headerShown: false, animation: 'fade' }} />
             <Stack.Screen name="welcome" options={{ headerShown: false, animation: 'fade' }} />
             <Stack.Screen name="login" options={{ headerShown: false, animation: 'slide_from_right' }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false, animation: 'fade' }} />
             <Stack.Screen name="modal" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           </Stack>
+          </SpotlightProvider>
           <CustomAlertProvider />
           <ChangelogModal />
         </SemesterProvider>

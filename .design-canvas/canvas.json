@@ -1,0 +1,96 @@
+{
+  "pages": [
+    {
+      "id": "page-1",
+      "name": "Dashboard"
+    },
+    {
+      "id": "page-2",
+      "name": "Components"
+    }
+  ],
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "page": "page-1",
+      "title": "Dashboard — light"
+    },
+    {
+      "file": "Dark.dc.html",
+      "x": 490,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "page": "page-1",
+      "title": "Dashboard — dark"
+    },
+    {
+      "file": "Scroll.dc.html",
+      "x": 980,
+      "y": 0,
+      "w": 390,
+      "h": 1600,
+      "page": "page-1",
+      "title": "Full scroll"
+    },
+    {
+      "file": "Components.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 880,
+      "h": 1560,
+      "page": "page-2",
+      "title": "Design system"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "note-first-screen",
+      "x": 0,
+      "y": -150,
+      "w": 390,
+      "page": "page-1",
+      "text": "FIRST SCREEN\n\nFin gets a habitat, not a chip: the water is drawn into the panel and the mascot sits in it, bleeding off the right edge. The copy column is capped at 58% so it can never collide with the art.\n\nGreeting, term, timeline and the three headline numbers are ONE panel divided by hairlines — not five floating cards."
+    },
+    {
+      "id": "note-dark",
+      "x": 490,
+      "y": -150,
+      "w": 390,
+      "page": "page-1",
+      "text": "DARK\n\nCanvas #12132b, surfaces #1b1d3a / #262a4d — the same indigo-navy family as the welcome screen's #1a1f3d card, so entering the app is not a change of world. The gap between layers is what stops it reading as a void."
+    },
+    {
+      "id": "note-scroll",
+      "x": 980,
+      "y": -150,
+      "w": 390,
+      "page": "page-1",
+      "text": "FULL SCROLL\n\nSections are colour-coded by domain: indigo schedule, amber tasks, emerald events, violet subjects. Task and event rows use sample data — this term currently has none."
+    },
+    {
+      "id": "note-risk",
+      "x": 0,
+      "y": 894,
+      "w": 390,
+      "page": "page-1",
+      "text": "Attendance reads 22% → \"At risk\" in red. That is the real number from the current term, not a styling choice: the tile picks its tint from the value (≥90 emerald, ≥75 amber, below red)."
+    },
+    {
+      "id": "note-system",
+      "x": 0,
+      "y": -110,
+      "w": 500,
+      "page": "page-2",
+      "text": "The rules the screens are built from. Three things to hold onto: the neutrals are COOL and faintly indigo, matching the login hero — no cast shadows anywhere, depth is a tonal step plus a 2px bottom lip — and saturated colour is reserved for state (active attendance, NOW, overdue, risk)."
+    }
+  ],
+  "launch": {
+    "view": "canvas",
+    "page": "page-1"
+  }
+}

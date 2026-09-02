@@ -84,17 +84,11 @@ export default function StudyModesStrip({ onSelectMode, activeMode }: StudyModes
                 styles.modeCard,
                 {
                   backgroundColor: isSelected
-                    ? isDark
-                      ? 'rgba(99, 102, 241, 0.2)'
-                      : '#eef2ff'
-                    : isDark
-                    ? '#1a1a1b'
-                    : '#ffffff',
-                  borderColor: isSelected
-                    ? mode.color
-                    : isDark
-                    ? theme.cardBorder
-                    : '#e2e8f0',
+                    ? (isDark ? 'rgba(99, 102, 241, 0.2)' : '#eef2ff')
+                    : theme.surface,
+                  borderColor: isSelected ? mode.color : theme.cardBorder,
+                  borderBottomWidth: 2,
+                  borderBottomColor: isSelected ? mode.color : theme.lip,
                 },
               ]}
             >

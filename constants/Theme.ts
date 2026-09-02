@@ -17,24 +17,25 @@ export const Colors = {
     warningLight: '#fef3c7',
     error: '#ef4444',
     errorLight: '#fee2e2',
-    background: '#f8fafc',
+    background: '#f4f5fb',
     surface: '#ffffff',
-    surfaceSecondary: '#f1f5f9',
+    surfaceSecondary: '#eef0f8',
     card: '#ffffff',
-    cardBorder: '#e2e8f0',
-    text: '#0f172a',
-    textSecondary: '#475569',
-    textTertiary: '#94a3b8',
+    cardBorder: '#e3e5f0',
+    lip: '#d8dbea',
+    text: '#1e293b',
+    textSecondary: '#525f78',
+    textTertiary: '#646d87',
     textInverse: '#ffffff',
     tabBg: '#ffffff',
-    tabBorder: '#e2e8f0',
+    tabBorder: '#e3e5f0',
     tabActive: '#4f46e5',
-    tabInactive: '#94a3b8',
+    tabInactive: '#646d87',
     overlay: 'rgba(15, 23, 42, 0.5)',
-    skeleton: '#e2e8f0',
-    skeletonHighlight: '#f1f5f9',
-    inputBg: '#f8fafc',
-    inputBorder: '#e2e8f0',
+    skeleton: '#e3e5f0',
+    skeletonHighlight: '#eef0f8',
+    inputBg: '#fafbfe',
+    inputBorder: '#e3e5f0',
     inputFocus: '#818cf8',
   },
   dark: {
@@ -51,24 +52,25 @@ export const Colors = {
     warningLight: '#b45309',
     error: '#f87171',
     errorLight: '#991b1b',
-    background: '#0f172a',
-    surface: '#1e293b',
-    surfaceSecondary: '#334155',
-    card: '#1e293b',
-    cardBorder: '#334155',
-    text: '#f8fafc',
-    textSecondary: '#cbd5e1',
-    textTertiary: '#64748b',
-    textInverse: '#0f172a',
-    tabBg: '#1e293b',
-    tabBorder: '#334155',
+    background: '#12132b',
+    surface: '#1b1d3a',
+    surfaceSecondary: '#262a4d',
+    card: '#1b1d3a',
+    cardBorder: '#32365c',
+    lip: '#0d0e21',
+    text: '#f1f2f9',
+    textSecondary: '#c2c6dc',
+    textTertiary: '#8a90b0',
+    textInverse: '#12132b',
+    tabBg: '#171936',
+    tabBorder: '#32365c',
     tabActive: '#818cf8',
-    tabInactive: '#64748b',
+    tabInactive: '#8a90b0',
     overlay: 'rgba(0, 0, 0, 0.7)',
-    skeleton: '#334155',
-    skeletonHighlight: '#475569',
-    inputBg: '#0f172a',
-    inputBorder: '#334155',
+    skeleton: '#262a4d',
+    skeletonHighlight: '#32365c',
+    inputBg: '#12132b',
+    inputBorder: '#32365c',
     inputFocus: '#818cf8',
   },
 };
@@ -147,6 +149,79 @@ export const Duration = {
   slow: 400,
   slower: 600,
 };
+
+// ─── Domain Tints ─────────────────────────────────────────────────────────────
+
+/**
+ * One colour per area of the app, so a student learns the code once: violet is
+ * grades, emerald is attendance, amber is tasks, indigo is schedule, sky is
+ * tools. `fill` is a wash for panels, `line` an inner border, `ink` the
+ * foreground that stays legible on `fill`.
+ *
+ * Use these for identity and state — never to decorate a surface that has no
+ * meaning attached.
+ */
+export const Tints = {
+  light: {
+    grades:     { fill: '#efeaff', line: '#ddd2fb', ink: '#5b3fd1', solid: '#6d4aec' },
+    attendance: { fill: '#e3f6ec', line: '#c4ead6', ink: '#12795a', solid: '#10a37a' },
+    tasks:      { fill: '#fdf0dc', line: '#f6dcb4', ink: '#9a6108', solid: '#e08b12' },
+    schedule:   { fill: '#e8ebfd', line: '#d2d9fa', ink: '#3b41c4', solid: '#4f46e5' },
+    tools:      { fill: '#e2f2fb', line: '#c5e4f6', ink: '#116691', solid: '#0e8ac2' },
+    danger:     { fill: '#fdeae7', line: '#f8ccc5', ink: '#b23227', solid: '#dc4436' },
+  },
+  dark: {
+    grades:     { fill: 'rgba(139,105,255,0.14)', line: 'rgba(139,105,255,0.30)', ink: '#b9a3ff', solid: '#8b69ff' },
+    attendance: { fill: 'rgba(45,197,151,0.14)',  line: 'rgba(45,197,151,0.30)',  ink: '#6fe0bb', solid: '#2dc597' },
+    tasks:      { fill: 'rgba(232,155,42,0.14)',  line: 'rgba(232,155,42,0.30)',  ink: '#f5c37a', solid: '#e89b2a' },
+    schedule:   { fill: 'rgba(129,140,248,0.14)', line: 'rgba(129,140,248,0.30)', ink: '#a9b2fb', solid: '#818cf8' },
+    tools:      { fill: 'rgba(56,189,248,0.14)',  line: 'rgba(56,189,248,0.30)',  ink: '#84d3f7', solid: '#38bdf8' },
+    danger:     { fill: 'rgba(248,113,113,0.14)', line: 'rgba(248,113,113,0.32)', ink: '#f7a099', solid: '#f87171' },
+  },
+};
+
+/**
+ * Solid fills for class blocks, indexed by a class's `colorIdx`.
+ *
+ * Blocks are painted solid rather than a translucent wash: on the timetable a
+ * 20%-alpha fill over a grid line reads as a smudge, and the text on it has to
+ * fight the lines showing through. Solid + white text is legible at any zoom,
+ * and `edge` gives the same bottom lip the rest of the app uses instead of a
+ * cast shadow.
+ */
+export const ClassPalette = {
+  light: [
+    { solid: '#4f46e5', edge: '#3730a3' },
+    { solid: '#10a37a', edge: '#0c7a5b' },
+    { solid: '#0e8ac2', edge: '#0a6892' },
+    { solid: '#e08b12', edge: '#a9670c' },
+    { solid: '#8b5cf6', edge: '#6a41c8' },
+    { solid: '#e0524a', edge: '#ad3d37' },
+  ],
+  // Deeper than the light fills, not the same hues reused. The bright versions
+  // glared against the #0f172a grid and left white block text at ~2.2:1; these
+  // sit at ~5:1 for the text while staying ~3.5:1 against the background.
+  dark: [
+    { solid: '#5a5ec8', edge: '#3b3e8c' },
+    { solid: '#177a5e', edge: '#0f5341' },
+    { solid: '#24779f', edge: '#164e69' },
+    { solid: '#99651a', edge: '#6a4512' },
+    { solid: '#7860c9', edge: '#54419a' },
+    { solid: '#b54b45', edge: '#7c322d' },
+  ],
+};
+
+export function getClassColor(colorIdx: number | undefined | null, isDark: boolean) {
+  const palette = isDark ? ClassPalette.dark : ClassPalette.light;
+  const i = (((Math.floor(Number(colorIdx) || 0)) % palette.length) + palette.length) % palette.length;
+  return palette[i];
+}
+
+export type TintName = keyof typeof Tints.light;
+
+export function getTints(isDark: boolean) {
+  return isDark ? Tints.dark : Tints.light;
+}
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 

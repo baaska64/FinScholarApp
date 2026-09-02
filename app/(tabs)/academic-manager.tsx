@@ -9,8 +9,10 @@ import { supabase } from '@/services/supabaseClient';
 import { SyncService } from '@/services/SyncService';
 import { AlertService } from '@/components/CustomAlert';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { useTabBarHeight } from '@/components/CustomTabBar';
 
 export default function AcademicManagerScreen() {
+    const tabBarHeight = useTabBarHeight();
     const { colorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
 
@@ -205,7 +207,11 @@ export default function AcademicManagerScreen() {
                 </TouchableOpacity>
             </View>
 
-            <ScrollView className="flex-1 px-4 py-6" showsVerticalScrollIndicator={false}>
+            <ScrollView
+                className="flex-1 px-4 py-6"
+                contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}
+                showsVerticalScrollIndicator={false}
+            >
                 {(!data.years || data.years.length === 0) ? (
                     <View className="items-center justify-center py-12 px-6">
                         <Image 

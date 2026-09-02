@@ -12,15 +12,28 @@ Notifications.setNotificationHandler({
 });
 
 export const NotificationService = {
-  async initNotifications() {
+  /**
+   * Creates the Android notification channel without prompting for permission.
+   * Used on first run so the OS permission dialog can be deferred to the
+   * onboarding step where we can explain why we need it.
+   */
+  async ensureAndroidChannel() {
     if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('default', {
-        name: 'default',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#FF231F7C',
-      });
+      try {
+        await Notifications.setNotificationChannelAsync('default', {
+          name: 'default',
+          importance: Notifications.AndroidImportance.MAX,
+          vibrationPattern: [0, 250, 250, 250],
+          lightColor: '#FF231F7C',
+        });
+      } catch (e) {
+        console.log('Failed to create notification channel', e);
+      }
     }
+  },
+
+  async initNotifications() {
+    await this.ensureAndroidChannel();
 
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;

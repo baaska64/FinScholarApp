@@ -2,8 +2,24 @@ import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://rkoeciiwqolgcjduhdqz.supabase.co';
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_mB9EQATPU3C641O0_XbC2w_oWzrn8Pb';
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+// Deliberately fatal. These used to fall back to the production project's
+// hardcoded values, which meant a build with missing or wrong env config kept
+// working and silently wrote to production. Failing at startup makes a
+// misconfiguration impossible to miss. Set both in `.env` for local runs (see
+// `.env.example`); EAS builds get them from the `env` block in `eas.json`.
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  const missing = [
+    !SUPABASE_URL && 'EXPO_PUBLIC_SUPABASE_URL',
+    !SUPABASE_ANON_KEY && 'EXPO_PUBLIC_SUPABASE_ANON_KEY',
+  ].filter(Boolean).join(', ');
+  throw new Error(
+    `Supabase is not configured: missing ${missing}. ` +
+    `Copy .env.example to .env and fill it in, then restart the bundler with a cache clear (npx expo start -c).`
+  );
+}
 
 // Provide a safe storage adapter that won't crash Node.js (Expo bundler) and returns Promises for all operations
 const SafeStorage = {

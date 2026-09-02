@@ -172,3 +172,240 @@ export function calculateDashboardHeroStats(data, yearId, semId, currentDate = n
     pendingTasks
   };
 }
+
+export function getLocalDateString(d = new Date()) {
+  const yr = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const da = String(d.getDate()).padStart(2, '0');
+  return `${yr}-${mo}-${da}`;
+}
+
+export function parseLocalDate(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return 0;
+  const trimmed = dateStr.trim();
+  if (!trimmed) return 0;
+  if (trimmed.includes('-') && !trimmed.includes('T')) {
+    const parts = trimmed.split('-');
+    if (parts.length === 3) {
+      const yr = parseInt(parts[0], 10);
+      const mo = parseInt(parts[1], 10) - 1;
+      const da = parseInt(parts[2], 10);
+      if (!isNaN(yr) && !isNaN(mo) && !isNaN(da)) {
+        return new Date(yr, mo, da).getTime();
+      }
+    }
+  }
+  const d = new Date(trimmed);
+  if (isNaN(d.getTime())) return 0;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+export function parseSemDate(s) {
+  if (!s || typeof s !== 'string') return NaN;
+  const trimmed = s.trim();
+  if (!trimmed) return NaN;
+  if (trimmed.includes('T')) return new Date(trimmed).getTime();
+  const parts = trimmed.split('-');
+  if (parts.length === 3) {
+    const yr = parseInt(parts[0], 10);
+    const mo = parseInt(parts[1], 10) - 1;
+    const da = parseInt(parts[2], 10);
+    if (!isNaN(yr) && !isNaN(mo) && !isNaN(da)) {
+      return new Date(yr, mo, da).getTime();
+    }
+  }
+  return new Date(trimmed).getTime();
+}
+
+export function getTimeLeftText(dueDateIso, nowMs) {
+  if (!dueDateIso || typeof dueDateIso !== 'string') return 'No date';
+  const trimmed = dueDateIso.trim();
+  if (!trimmed) return 'No date';
+
+  const isOldFormat = !trimmed.includes('T');
+  let dueTime = 0;
+  if (isOldFormat) {
+    const parts = trimmed.split('-');
+    if (parts.length === 3) {
+      const yr = parseInt(parts[0], 10);
+      const mo = parseInt(parts[1], 10) - 1;
+      const da = parseInt(parts[2], 10);
+      if (!isNaN(yr) && !isNaN(mo) && !isNaN(da)) {
+        dueTime = new Date(yr, mo, da, 23, 59, 59).getTime();
+      }
+    }
+  } else {
+    dueTime = new Date(trimmed).getTime();
+  }
+
+  if (isNaN(dueTime) || dueTime === 0) {
+    const fallback = new Date(trimmed).getTime();
+    if (isNaN(fallback)) return 'Invalid date';
+    dueTime = fallback;
+  }
+
+  const diff = dueTime - nowMs;
+  if (diff <= 0) return 'Overdue';
+
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days >= 1) return `In ${days} day${days > 1 ? 's' : ''}`;
+  if (hours >= 1) return `In ${hours} hr${hours > 1 ? 's' : ''} ${minutes % 60} min${minutes % 60 !== 1 ? 's' : ''}`;
+  if (minutes >= 1) return `In ${minutes}m ${seconds % 60}s`;
+  return `In ${seconds}s`;
+}
+
+export function parseScheduleTime(rawTime) {
+  if (typeof rawTime === 'number') return rawTime;
+  if (typeof rawTime !== 'string') return 8;
+  const match = rawTime.match(/(\d+)(?::(\d+))?/);
+  if (match) {
+    let h = parseInt(match[1], 10);
+    const m = match[2] ? parseInt(match[2], 10) / 60 : 0;
+    if (rawTime.toLowerCase().includes('pm') && h < 12) h += 12;
+    if (rawTime.toLowerCase().includes('am') && h === 12) h = 0;
+    return h + m;
+  }
+  return 8;
+}
+
+export function normalizeScheduleDay(day) {
+  if (typeof day === 'number') return Math.max(0, Math.min(6, Math.floor(day)));
+  if (typeof day !== 'string') return 0;
+  const d = day.toLowerCase().trim();
+  if (d.startsWith('tu') || d === 't') return 1;
+  if (d.startsWith('w')) return 2;
+  if (d.startsWith('th') || d === 'r' || d === 'h') return 3;
+  if (d.startsWith('f')) return 4;
+  if (d.startsWith('sa')) return 5;
+  if (d.startsWith('su')) return 6;
+  return 0;
+}
+
+export function normalizeScheduleDays(day) {
+  if (typeof day === 'number') return [Math.max(0, Math.min(6, Math.floor(day)))];
+  if (typeof day !== 'string') return [0];
+  const d = day.toLowerCase().trim();
+  if (!d) return [0];
+  
+  if (d === 'mwf') return [0, 2, 4];
+  if (d === 'tth' || d === 'tr') return [1, 3];
+  if (d === 'mtwtf' || d === 'm-f' || d === 'mon-fri') return [0, 1, 2, 3, 4];
+  if (d === 'ss' || d === 'sat-sun' || d === 'sa-su') return [5, 6];
+
+  if (d.includes(',') || d.includes('/') || d.includes('&') || d.includes('-') || (d.includes(' ') && (d.includes('mon') || d.includes('tue') || d.includes('wed') || d.includes('thu') || d.includes('fri') || d.includes('sat') || d.includes('sun')))) {
+    const tokens = d.split(/[,/&\s-]+/).map(t => t.trim()).filter(Boolean);
+    const mapped = [];
+    tokens.forEach(t => {
+      if (t.startsWith('tu') || t === 't') mapped.push(1);
+      else if (t.startsWith('w')) mapped.push(2);
+      else if (t.startsWith('th') || t === 'r' || t === 'h') mapped.push(3);
+      else if (t.startsWith('f')) mapped.push(4);
+      else if (t.startsWith('sa')) mapped.push(5);
+      else if (t.startsWith('su')) mapped.push(6);
+      else if (t.startsWith('m')) mapped.push(0);
+    });
+    if (mapped.length > 0) {
+      return Array.from(new Set(mapped));
+    }
+  }
+
+  if (d.startsWith('tu') || d === 't') return [1];
+  if (d.startsWith('w')) return [2];
+  if (d.startsWith('th') || d === 'r' || d === 'h') return [3];
+  if (d.startsWith('f')) return [4];
+  if (d.startsWith('sa')) return [5];
+  if (d.startsWith('su')) return [6];
+  return [0];
+}
+
+export function parseScheduleDuration(dur, startH = 8, endRaw = undefined) {
+  if (typeof dur === 'number') return dur;
+  if (typeof dur === 'string') {
+    const match = dur.match(/(\d+(\.\d+)?)/);
+    if (match) return parseFloat(match[1]);
+  }
+  if (endRaw !== undefined) {
+    const endH = parseScheduleTime(endRaw);
+    if (endH > startH) return endH - startH;
+  }
+  return 1;
+}
+
+export function importScannedClassesToLedger(data, activeYearId, activeSemId, scannedClasses, ensureSubjectFn) {
+  let nd = JSON.parse(JSON.stringify(data));
+  const sem = nd.years?.find(y => y.id === activeYearId)?.semesters?.find(s => s.id === activeSemId);
+  if (!sem) return nd;
+
+  const safeScanned = scannedClasses || [];
+  safeScanned.forEach(sc => {
+    const className = sc.name || sc.subject || sc.class || 'Unnamed Class';
+    let subjectId = '';
+    if (ensureSubjectFn) {
+      const regResult = ensureSubjectFn(nd, activeYearId, activeSemId, className, { fromSchedule: true });
+      nd = regResult.data;
+      subjectId = regResult.subjectId;
+      const subjectEntry = nd.years?.find(y => y.id === activeYearId)?.semesters?.find(s => s.id === activeSemId)?.subjects?.find(s => s.id === subjectId);
+      if (subjectEntry) subjectEntry.hasSchedule = true;
+    }
+
+    const curSem = nd.years?.find(y => y.id === activeYearId)?.semesters?.find(s => s.id === activeSemId);
+    if (!curSem) return;
+    if (!curSem.classes) curSem.classes = [];
+
+    const rawTime = sc.startHour !== undefined ? sc.startHour : (sc.time || sc.startTime || sc.start_time);
+
+    if (sc.day !== undefined && rawTime !== undefined) {
+      const parsedStartHour = parseScheduleTime(rawTime);
+      const rawEndTime = sc.endHour !== undefined ? sc.endHour : (sc.endTime || sc.end_time);
+      const dur = parseScheduleDuration(sc.duration, parsedStartHour, rawEndTime);
+      const colorVal = sc.colorIdx !== undefined && sc.colorIdx !== null ? Number(sc.colorIdx) : 0;
+      const dayIndices = normalizeScheduleDays(sc.day);
+
+      dayIndices.forEach(dayIdx => {
+        curSem.classes.push({
+          id: 'cls_' + Math.random().toString(36).substr(2, 8),
+          name: className,
+          room: sc.room || sc.location || '',
+          instructor: sc.instructor || sc.teacher || '',
+          day: dayIdx,
+          startHour: parsedStartHour,
+          duration: dur,
+          colorIdx: colorVal,
+          subjectId,
+          absences: 0, lates: 0, cuts: 0
+        });
+      });
+    } else if (Array.isArray(sc.schedules) && sc.schedules.length > 0) {
+      sc.schedules.forEach(sch => {
+        const schTime = sch.startHour !== undefined ? sch.startHour : (sch.time || sch.startTime || sch.start_time);
+        const parsedStartHour = parseScheduleTime(schTime);
+        const schEndTime = sch.endHour !== undefined ? sch.endHour : (sch.endTime || sch.end_time);
+        const dur = parseScheduleDuration(sch.duration, parsedStartHour, schEndTime);
+        const colorVal = sch.colorIdx !== undefined && sch.colorIdx !== null ? Number(sch.colorIdx) : (sc.colorIdx !== undefined && sc.colorIdx !== null ? Number(sc.colorIdx) : 0);
+        const dayIndices = normalizeScheduleDays(sch.day);
+
+        dayIndices.forEach(dayIdx => {
+          curSem.classes.push({
+            id: 'cls_' + Math.random().toString(36).substr(2, 8),
+            name: className,
+            room: sch.room || sch.location || sc.room || sc.location || '',
+            instructor: sch.instructor || sch.teacher || sc.instructor || sch.teacher || '',
+            day: dayIdx,
+            startHour: parsedStartHour,
+            duration: dur,
+            colorIdx: colorVal,
+            subjectId,
+            absences: 0, lates: 0, cuts: 0
+          });
+        });
+      });
+    }
+  });
+
+  return nd;
+}
+

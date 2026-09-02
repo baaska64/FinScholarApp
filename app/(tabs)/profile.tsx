@@ -11,6 +11,10 @@ import { AlertService } from '@/components/CustomAlert';
 import { WidgetPreview } from 'react-native-android-widget';
 import { FinScholarWidget } from '../../widget/FinScholarWidget';
 import { getTheme, Typography, Radius, Shadows } from '@/constants/Theme';
+import { OnboardingService } from '@/services/OnboardingService';
+import { useSpotlight } from '@/components/spotlight/SpotlightProvider';
+import { ALL_TOUR_KEYS, MAIN_TOUR, TOUR_KEYS } from '@/constants/tours';
+import { useTabBarHeight } from '@/components/CustomTabBar';
 
 /** A single settings row */
 const SettingsRow = ({ icon, iconColor, label, onPress, chevron = true, isDark, theme }: any) => {
@@ -53,10 +57,12 @@ export default function ProfileScreen() {
     const { colorScheme, toggleColorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
     const theme = getTheme(isDark);
+    const tabBarHeight = useTabBarHeight();
     const [showWidgetPreview, setShowWidgetPreview] = useState(false);
     const [showThresholdSettings, setShowThresholdSettings] = useState(false);
     const [thresholds, setThresholds] = useState({ high: 21, medium: 10, low: 5 });
     const [data, setData] = useState<any>(null);
+    const { startTour } = useSpotlight();
 
     const handleToggleTheme = () => {
         // Wrap in setTimeout to avoid 'React state update on unmounted component' warnings 
@@ -122,12 +128,34 @@ export default function ProfileScreen() {
         }
     }
 
+    const handleReplayIntro = async () => {
+        await OnboardingService.reset();
+        router.push({ pathname: '/onboarding', params: { replay: '1' } });
+    };
+
+    const handleGuidedTour = async () => {
+        // Clear the per-screen nudges too, so the whole walkthrough replays.
+        await OnboardingService.resetTours(ALL_TOUR_KEYS);
+        router.navigate('/(tabs)');
+        // Let the dashboard land before the spotlight starts measuring it.
+        setTimeout(() => startTour(MAIN_TOUR, { key: TOUR_KEYS.main }), 400);
+    };
+
+    const handleRestoreChecklist = async () => {
+        await OnboardingService.restoreChecklist();
+        AlertService.alert(
+            'Checklist restored',
+            'The Getting Started checklist is back on your dashboard. It hides itself once every step is done.',
+            [{ text: 'Got it' }]
+        );
+    };
+
     const isGuest = email === 'Guest User';
     const initials = isGuest ? '?' : email.charAt(0).toUpperCase();
 
     return (
         <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
-            <ScrollView contentContainerStyle={{ paddingBottom: 60 }} showsVerticalScrollIndicator={false}>
+            <ScrollView contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }} showsVerticalScrollIndicator={false}>
               <View style={{ width: '100%', maxWidth: 800, alignSelf: 'center' }}>
                 <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
                     {/* Profile Header */}
@@ -203,6 +231,41 @@ export default function ProfileScreen() {
                                 iconColor={isDark ? '#a78bfa' : '#8b5cf6'}
                                 label="Dashboard Priority Settings"
                                 onPress={() => setShowThresholdSettings(true)}
+                                isDark={isDark}
+                                theme={theme}
+                            />
+                        </View>
+
+                        {/* Help */}
+                        <SectionLabel title="Help" theme={theme} />
+                        <View style={{
+                            backgroundColor: theme.card, borderRadius: 20, borderWidth: 1, borderColor: theme.cardBorder,
+                            overflow: 'hidden',
+                            ...(!isDark ? { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 8 } : {}),
+                        }}>
+                            <SettingsRow
+                                icon="navigate"
+                                iconColor={isDark ? '#818cf8' : '#4f46e5'}
+                                label="Take the Guided Tour"
+                                onPress={handleGuidedTour}
+                                isDark={isDark}
+                                theme={theme}
+                            />
+                            <View style={{ height: 1, backgroundColor: theme.cardBorder, marginHorizontal: 16 }} />
+                            <SettingsRow
+                                icon="sparkles"
+                                iconColor={isDark ? '#38bdf8' : '#0284c7'}
+                                label="Replay Intro Slides"
+                                onPress={handleReplayIntro}
+                                isDark={isDark}
+                                theme={theme}
+                            />
+                            <View style={{ height: 1, backgroundColor: theme.cardBorder, marginHorizontal: 16 }} />
+                            <SettingsRow
+                                icon="rocket-outline"
+                                iconColor={isDark ? '#34d399' : '#10b981'}
+                                label="Show Getting Started Checklist"
+                                onPress={handleRestoreChecklist}
                                 isDark={isDark}
                                 theme={theme}
                             />

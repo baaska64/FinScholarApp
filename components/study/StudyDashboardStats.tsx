@@ -53,7 +53,7 @@ export default function StudyDashboardStats({
       style={[
         styles.container,
         {
-          backgroundColor: isDark ? '#1a1a1b' : '#ffffff',
+          backgroundColor: theme.surface,
           borderColor: isDark ? theme.cardBorder : '#e2e8f0',
           ...Shadows.md,
         },

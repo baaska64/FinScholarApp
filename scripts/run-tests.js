@@ -2,6 +2,15 @@ import { register } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 
+// `services/supabaseClient.js` refuses to construct a client without real
+// config, so that a misconfigured build fails instead of quietly reaching
+// production. Node has no .env, and the auth suite imports the real module to
+// assert its shape — never to make a request — so give it inert placeholders.
+// This has to live on the main thread: module hooks run on their own thread,
+// and process.env set inside the loader does not propagate back here.
+process.env.EXPO_PUBLIC_SUPABASE_URL ||= 'http://localhost/supabase-test';
+process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||= 'test-anon-key';
+
 // Register test-loader for ES module aliases (@/*) and react-native mock
 register('./test-loader.js', import.meta.url);
 
@@ -129,6 +138,27 @@ async function run() {
 
     const { runGoogleAuthProductionTests } = await import('../__tests__/google-auth-production.test.js');
     runGoogleAuthProductionTests(harness.describe, harness.test);
+
+    const { runBentoDashboardTests } = await import('../__tests__/bento-dashboard-redesign.test.js');
+    runBentoDashboardTests(harness.describe, harness.test);
+
+    const { runOnboardingTests } = await import('../__tests__/onboarding.test.js');
+    runOnboardingTests(harness.describe, harness.test);
+
+    const { runSpotlightTests } = await import('../__tests__/spotlight.test.js');
+    runSpotlightTests(harness.describe, harness.test);
+
+    const { runScannerErrorTests } = await import('../__tests__/scanner-errors.test.js');
+    runScannerErrorTests(harness.describe, harness.test);
+
+    const { runScheduleParsingTests } = await import('../__tests__/schedule-parsing.test.js');
+    runScheduleParsingTests(harness.describe, harness.test);
+
+    const { runOcrScheduleTests } = await import('../__tests__/ocr-schedule.test.js');
+    runOcrScheduleTests(harness.describe, harness.test);
+
+    const { runGradeTierTests } = await import('../__tests__/grade-tiers.test.js');
+    runGradeTierTests(harness.describe, harness.test);
 
   } catch (err) {
     console.error(`\n${RED}Fatal runner error:${RESET}`, err);

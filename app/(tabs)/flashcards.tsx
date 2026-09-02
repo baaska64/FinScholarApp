@@ -12,8 +12,9 @@ import {
   ActivityIndicator,
   Image,
   Share,
+  Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
 import { useFocusEffect, router } from 'expo-router';
@@ -22,9 +23,16 @@ import * as DocumentPicker from 'expo-document-picker';
 import { SyncService } from '@/services/SyncService';
 import { AlertService } from '@/components/CustomAlert';
 import { useSemesterContext } from '@/components/SemesterContext';
-import { getTheme, Typography, Radius, Shadows } from '@/constants/Theme';
+import { getTheme, getTints, Radius } from '@/constants/Theme';
 import { ListSkeleton } from '@/components/ui/LoadingSkeleton';
+import ProgressBar from '@/components/ui/ProgressBar';
+import Card from '@/components/ui/Card';
+import AnimatedPressable from '@/components/ui/AnimatedPressable';
+import KeyboardSheet from '@/components/ui/KeyboardSheet';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import SpotlightTarget from '@/components/spotlight/SpotlightTarget';
+import { useScreenTour } from '@/components/spotlight/useScreenTour';
+import { SPOTLIGHT_IDS, TOUR_KEYS, STUDY_TOUR } from '@/constants/tours';
 
 import {
   Flashcard,
@@ -62,12 +70,16 @@ import {
 import StudyDashboardStats from '@/components/study/StudyDashboardStats';
 import StudyModesStrip from '@/components/study/StudyModesStrip';
 import DeckTreeItem from '@/components/study/DeckTreeItem';
+import { useTabBarHeight } from '@/components/CustomTabBar';
 
 export { Flashcard, FlashcardDeck, SessionCard, DeckNode, NodeStats, SRSettings, FlashcardStats };
 export { buildDeckTree, getNodeStats, collectCards, DEFAULT_SR_SETTINGS };
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CARD_HEIGHT = 260;
+
+/** Page gutter, matched to the dashboard and schedule tabs. */
+const GUTTER = 14;
 
 // ─── FlipCard Component ───────────────────────────────────────────────────────
 
@@ -92,6 +104,7 @@ function FlipCard({
   frontLabel = 'QUESTION',
   backLabel = 'ANSWER',
 }: FlipCardProps) {
+  const theme = getTheme(isDark);
   const flipAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -113,6 +126,10 @@ function FlipCard({
     height: CARD_HEIGHT,
     borderRadius: Radius['3xl'],
     borderWidth: 1.5,
+    // The deck colour doubles as the bottom lip, so the card reads as a solid
+    // object on the page rather than a sheet floating over it.
+    borderBottomWidth: 4,
+    borderBottomColor: color,
     position: 'absolute' as const,
     overflow: 'hidden' as const,
   };
@@ -125,11 +142,6 @@ function FlipCard({
         width: SCREEN_WIDTH - 48,
         height: CARD_HEIGHT,
         alignSelf: 'center',
-        shadowColor: color,
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.2,
-        shadowRadius: 16,
-        elevation: 8,
         backgroundColor: 'transparent',
       }}
     >
@@ -139,7 +151,7 @@ function FlipCard({
           {
             transform: [{ perspective: 1200 }, { rotateY: frontRotate }],
             opacity: frontOpacity,
-            backgroundColor: isDark ? '#1e293b' : '#ffffff',
+            backgroundColor: theme.surface,
             borderColor: color + '50',
           },
         ]}
@@ -164,7 +176,7 @@ function FlipCard({
               fontFamily: 'Nunito_700Bold',
               textAlign: 'center',
               lineHeight: 28,
-              color: isDark ? '#f1f5f9' : '#1e293b',
+              color: theme.text,
             }}
           >
             {front}
@@ -173,7 +185,7 @@ function FlipCard({
         <View style={{ alignItems: 'center', paddingBottom: 18 }}>
           <Text
             style={{
-              color: isDark ? '#64748b' : '#94a3b8',
+              color: theme.textTertiary,
               fontSize: 11,
               fontFamily: 'Nunito_400Regular',
             }}
@@ -214,7 +226,7 @@ function FlipCard({
               fontFamily: 'Nunito_700Bold',
               textAlign: 'center',
               lineHeight: 28,
-              color: isDark ? '#f1f5f9' : '#1e293b',
+              color: theme.text,
             }}
           >
             {back}
@@ -231,6 +243,10 @@ export default function FlashcardsScreen() {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const theme = getTheme(isDark);
+  const tints = getTints(isDark);
+  const insets = useSafeAreaInsets();
+  // The tab bar floats over the screen, so every view here reserves its height.
+  const tabBarHeight = useTabBarHeight();
   const { selectedYear, selectedSemester } = useSemesterContext();
   const [currentSubjects, setCurrentSubjects] = useState<any[]>([]);
 
@@ -242,6 +258,9 @@ export default function FlashcardsScreen() {
   const [view, setView] = useState<StudyViewMode>('decks');
   const [activeDeck, setActiveDeck] = useState<FlashcardDeck | null>(null);
   const [activeNode, setActiveNode] = useState<DeckNode | null>(null);
+
+  // First visit only: point at the create-deck button, once the deck list is up.
+  useScreenTour(TOUR_KEYS.study, STUDY_TOUR, !loading && view === 'decks');
 
   // ── Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -255,6 +274,18 @@ export default function FlashcardsScreen() {
   const [sessionStats, setSessionStats] = useState({ again: 0, hard: 0, good: 0, easy: 0, mastered: 0 });
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [studyReversed, setStudyReversed] = useState(false);
+  /**
+   * One-step undo for the last rating. A mis-tap on "Again" used to be
+   * unrecoverable — it rewrote the card's interval, ease and due date with no
+   * way back. The snapshot holds everything the rating touched.
+   */
+  const [undoState, setUndoState] = useState<null | {
+    card: SessionCard;
+    cardIndex: number;
+    sessionCards: SessionCard[];
+    sessionStats: { again: number; hard: number; good: number; easy: number; mastered: number };
+    stats: FlashcardStats;
+  }>(null);
 
   // ── Multi-select management
   const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -303,6 +334,11 @@ export default function FlashcardsScreen() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showCreateSheet, setShowCreateSheet] = useState(false);
 
+  // Deck actions. This replaced an eleven-button AlertService.alert — the
+  // CustomAlert stacks >2 buttons vertically with no scroll, so on a normal
+  // phone Export / Reset / Delete rendered below the bottom of the screen.
+  const [actionNode, setActionNode] = useState<DeckNode | null>(null);
+
   // ── Form state
   const [editingDeck, setEditingDeck] = useState<FlashcardDeck | null>(null);
   const [editingCard, setEditingCard] = useState<Flashcard | null>(null);
@@ -322,16 +358,10 @@ export default function FlashcardsScreen() {
   const [importSeparator, setImportSeparator] = useState<'comma' | 'semicolon' | 'pipe' | 'tab'>('comma');
   const isRatingRef = useRef(false);
 
-  // ── Settings state
+  // ── Settings state. The in-screen settings sheet was removed: it was never
+  //    rendered (nothing set its visible flag) and `app/study-options.tsx` is
+  //    the real editor, which both header entry points already opened.
   const [srSettings, setSrSettings] = useState<SRSettings>(DEFAULT_SR_SETTINGS);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [settingsForm, setSettingsForm] = useState({
-    learningSteps: '1 10',
-    graduatingInterval: '1',
-    easyInterval: '4',
-    studyTimeHour: '8',
-    studyTimeMinute: '0',
-  });
 
   // ── Stats state
   const [flashcardStats, setFlashcardStats] = useState<FlashcardStats>({
@@ -421,20 +451,6 @@ export default function FlashcardsScreen() {
       await SyncService.pushLocalChanges(ledger);
     } catch (e) {
       console.error('Failed to save flashcards:', e);
-    }
-  };
-
-  const saveSrSettings = async (newSettings: SRSettings) => {
-    setSrSettings(newSettings);
-    try {
-      const raw = await AsyncStorage.getItem('grade_ledger_v2_data');
-      const ledger = raw ? JSON.parse(raw) : { settings: {}, years: [] };
-      const currentStats = statsRef.current || flashcardStats;
-      if (!ledger.flashcards) ledger.flashcards = { decks: decks, stats: currentStats };
-      ledger.flashcards.settings = newSettings;
-      await SyncService.pushLocalChanges(ledger);
-    } catch (e) {
-      console.error('Failed to save SR settings:', e);
     }
   };
 
@@ -746,40 +762,7 @@ export default function FlashcardsScreen() {
   };
 
   const showDeckActions = (node: DeckNode) => {
-    const deck = node.deck ? decks.find((d) => d.id === node.deck!.id) || node.deck : null;
-    const actions: any[] = [
-      { text: 'Cancel', style: 'cancel' as const },
-      { text: 'Study Now', onPress: () => startStudy(node) },
-      { text: 'Study Ahead', onPress: () => startStudy(node, true) },
-      {
-        text: 'Exam Prep',
-        onPress: () => {
-          setActiveNode(node);
-          setActiveDeck(deck);
-          setExamPlan(null);
-          setExamReviewsPerDay(0);
-          setShowExamModal(true);
-        },
-      },
-      { text: 'Add Sub-deck', onPress: () => openAddSubNode(node) },
-      {
-        text: 'Manage Cards',
-        onPress: () => {
-          setActiveNode(node);
-          setActiveDeck(deck);
-          setView('manage');
-        },
-      },
-    ];
-    if (deck) {
-      actions.push({ text: 'Edit Deck', onPress: () => openEditDeck(deck) });
-      actions.push({ text: 'Duplicate Deck', onPress: () => handleDuplicateDeck(deck) });
-      actions.push({ text: 'Move Deck', onPress: () => handleMoveDeck(node) });
-    }
-    actions.push({ text: 'Export Deck', onPress: () => handleExportDeck(node) });
-    actions.push({ text: 'Reset Progress', onPress: () => handleResetProgress(node) });
-    actions.push({ text: 'Delete', style: 'destructive' as const, onPress: () => handleDeleteNode(node) });
-    AlertService.alert(node.name, 'Choose an action:', actions);
+    setActionNode(node);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -828,7 +811,7 @@ export default function FlashcardsScreen() {
     setShowAddCardModal(true);
   };
 
-  const handleSaveCard = async () => {
+  const handleSaveCard = async (keepOpen = false) => {
     if (!cardForm.front.trim() || !cardForm.back.trim()) {
       AlertService.alert('Missing Fields', 'Please fill in both the question and answer.');
       return;
@@ -848,7 +831,18 @@ export default function FlashcardsScreen() {
     }
     await saveDecks(nd);
     if (activeDeck?.id === targetDeck.id) setActiveDeck(nd[di]);
-    setShowAddCardModal(false);
+    // A card edited from inside a session has to change in the live queue as
+    // well, or the session keeps showing the text you just fixed.
+    if (editingCard) {
+      setSessionCards((prev) =>
+        prev.map((sc) =>
+          sc.id === editingCard.id ? { ...sc, front: cardForm.front.trim(), back: cardForm.back.trim() } : sc
+        )
+      );
+    }
+    // "Save & add another" keeps the sheet up so a study set can be typed in
+    // one sitting instead of reopening the sheet per card.
+    if (!keepOpen || editingCard) setShowAddCardModal(false);
     setEditingCard(null);
     setCardForm({ front: '', back: '' });
   };
@@ -958,6 +952,7 @@ export default function FlashcardsScreen() {
     setActiveNode(node);
     setActiveDeck(node.deck || decks[0] || null);
     isRatingRef.current = false;
+    setUndoState(null);
     setView('study');
   };
 
@@ -983,7 +978,34 @@ export default function FlashcardsScreen() {
     setActiveNode(null);
     setActiveDeck(decks[0] || null);
     isRatingRef.current = false;
+    setUndoState(null);
     setView('study');
+  };
+
+  /** Puts the card, the queue, the session tally and the XP back as they were. */
+  const handleUndoRating = async () => {
+    if (!undoState) return;
+    const snap = undoState;
+    setUndoState(null);
+
+    const { deckId, ...restored } = snap.card;
+    const nd = decks.map((d) =>
+      d.id === deckId
+        ? { ...d, cards: Array.isArray(d.cards) ? d.cards.map((c) => (c.id === restored.id ? { ...restored } : c)) : [] }
+        : d
+    );
+    await saveDecks(nd);
+    if (activeDeck?.id === deckId) {
+      const updated = nd.find((d) => d.id === deckId);
+      if (updated) setActiveDeck(updated);
+    }
+
+    setSessionCards(snap.sessionCards);
+    setSessionStats(snap.sessionStats);
+    setCardIndex(snap.cardIndex);
+    setSessionDone(false);
+    setIsFlipped(true);
+    await saveStats(snap.stats);
   };
 
   const handleRate = async (rating: 1 | 2 | 3 | 4) => {
@@ -996,6 +1018,14 @@ export default function FlashcardsScreen() {
       isRatingRef.current = false;
       return;
     }
+    setUndoState({
+      card,
+      cardIndex,
+      sessionCards: [...sessionCards],
+      sessionStats: { ...sessionStats },
+      stats: statsRef.current || flashcardStats,
+    });
+
     const updatedCard = applyRating(card, rating, srSettings);
     const nd = [...decks];
     const di = nd.findIndex((d) => d.id === card.deckId);
@@ -1335,164 +1365,128 @@ export default function FlashcardsScreen() {
     const filteredTree = buildDeckTree(filteredDecks);
 
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
-        {/* Modern Header */}
+      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+        {/* ══ App bar — flush with the page, matching the other tabs ═══════ */}
         <View
           style={{
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            paddingHorizontal: 20,
-            paddingVertical: 16,
-            zIndex: 10,
-            borderBottomWidth: 1,
-            borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
-            backgroundColor: theme.surface,
-            ...(!isDark
-              ? {
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 1 },
-                  shadowOpacity: 0.03,
-                  shadowRadius: 4,
-                }
-              : {}),
+            flexDirection: 'row', alignItems: 'center',
+            paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10, zIndex: 10,
+            backgroundColor: theme.background,
           }}
         >
-          <View>
-            <Text style={{ ...Typography.title, color: theme.text }}>Flash Study</Text>
-            <Text
-              style={{
-                fontFamily: 'Nunito_700Bold',
-                fontSize: 12,
-                marginTop: 2,
-                color: theme.textSecondary,
-              }}
-            >
-              {decks.length} Deck{decks.length !== 1 ? 's' : ''} · {totalCards} Card{totalCards !== 1 ? 's' : ''}
-            </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9, flex: 1, marginRight: 10 }}>
+            <View style={{
+              width: 32, height: 32, borderRadius: 10,
+              backgroundColor: tints.grades.fill,
+              borderWidth: 1, borderColor: tints.grades.line,
+              alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Ionicons name="layers" size={17} color={tints.grades.ink} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text
+                accessibilityRole="header"
+                numberOfLines={1}
+                style={{ fontFamily: 'Nunito_900Black', fontSize: 19, color: theme.text, letterSpacing: -0.4 }}
+              >
+                Flash Study
+              </Text>
+              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary }}>
+                {decks.length} deck{decks.length !== 1 ? 's' : ''} · {totalCards} card{totalCards !== 1 ? 's' : ''}
+                {totalDueNow > 0 ? ` · ${totalDueNow} due` : ''}
+              </Text>
+            </View>
           </View>
 
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            {/* Quick Add Button */}
-            <TouchableOpacity
-              onPress={() => setShowCreateSheet(true)}
-              activeOpacity={0.8}
-              style={{
-                width: 42,
-                height: 42,
-                borderRadius: Radius.xl,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: theme.primary,
-                ...(!isDark
-                  ? {
-                      shadowColor: theme.primary,
-                      shadowOffset: { width: 0, height: 2 },
-                      shadowOpacity: 0.3,
-                      shadowRadius: 4,
-                      elevation: 4,
-                    }
-                  : {}),
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Create deck or folder"
-            >
-              <Ionicons name="add" size={24} color="#ffffff" />
-            </TouchableOpacity>
-
-            {/* Settings Button */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <TouchableOpacity
               onPress={() => router.push('/study-options')}
-              activeOpacity={0.8}
-              style={{
-                width: 42,
-                height: 42,
-                borderRadius: Radius.xl,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
-                borderWidth: 1,
-                borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-              }}
+              activeOpacity={0.7}
               accessibilityRole="button"
-              accessibilityLabel="Spaced repetition settings"
+              accessibilityLabel="Study options — spaced repetition settings"
+              style={{
+                width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+                backgroundColor: theme.surface,
+                borderWidth: 1, borderColor: theme.cardBorder,
+                borderBottomWidth: 2, borderBottomColor: theme.lip,
+              }}
             >
-              <Ionicons name="settings-sharp" size={19} color={isDark ? '#94a3b8' : '#64748b'} />
+              <Ionicons name="options-outline" size={18} color={theme.textSecondary} />
             </TouchableOpacity>
+
+            <SpotlightTarget id={SPOTLIGHT_IDS.studyCreateDeck}>
+              <AnimatedPressable
+                onPress={() => setShowCreateSheet(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Create deck or folder"
+                style={{
+                  width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+                  backgroundColor: theme.primary,
+                  borderBottomWidth: 2, borderBottomColor: theme.primaryDark,
+                }}
+              >
+                <Ionicons name="add" size={21} color="#ffffff" />
+              </AnimatedPressable>
+            </SpotlightTarget>
           </View>
         </View>
 
         {loading ? (
           <ListSkeleton count={4} cardHeight={80} />
         ) : decks.length === 0 ? (
-          <View className="flex-1 items-center justify-center px-8 pb-20">
-            <View
-              style={{
-                width: 100,
-                height: 100,
-                borderRadius: 50,
-                backgroundColor: isDark ? 'rgba(99, 102, 241, 0.15)' : '#e0e7ff',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginBottom: 20,
-              }}
-            >
-              <Ionicons name="albums-outline" size={48} color={theme.primary} />
-            </View>
-            <Text
-              style={{
-                ...Typography.heading,
-                color: theme.text,
-                textAlign: 'center',
-                marginBottom: 8,
-              }}
-            >
-              Your Study Space
-            </Text>
-            <Text
-              style={{
-                ...Typography.body,
-                color: theme.textSecondary,
-                textAlign: 'center',
-                marginBottom: 28,
-                lineHeight: 22,
-              }}
-            >
-              Create your first flashcard deck or import notes to master your subjects with SM-2 spaced repetition.
-            </Text>
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <TouchableOpacity
-                onPress={() => openAddDeck()}
-                activeOpacity={0.88}
-                style={{
-                  backgroundColor: theme.primary,
-                  paddingHorizontal: 24,
-                  paddingVertical: 14,
-                  borderRadius: Radius.full,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 8,
-                  ...(!isDark
-                    ? {
-                        shadowColor: theme.primary,
-                        shadowOffset: { width: 0, height: 4 },
-                        shadowOpacity: 0.3,
-                        shadowRadius: 8,
-                        elevation: 4,
-                      }
-                    : {}),
-                }}
-              >
-                <Ionicons name="add-circle" size={20} color="#ffffff" />
-                <Text style={{ ...Typography.bodyBold, color: '#ffffff' }}>Create Deck</Text>
-              </TouchableOpacity>
-            </View>
+          <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: GUTTER, paddingBottom: tabBarHeight }}>
+            <Card padding={0} radius={Radius['2xl']} style={{ overflow: 'hidden' }}>
+              <View style={{
+                alignItems: 'center', paddingTop: 26, paddingBottom: 22,
+                backgroundColor: tints.grades.fill,
+                borderBottomWidth: 1, borderBottomColor: tints.grades.line,
+              }}>
+                <View style={{
+                  width: 68, height: 68, borderRadius: 22,
+                  alignItems: 'center', justifyContent: 'center',
+                  backgroundColor: theme.surface,
+                  borderWidth: 2, borderColor: tints.grades.line,
+                }}>
+                  <Ionicons name="albums-outline" size={31} color={tints.grades.ink} />
+                </View>
+              </View>
+
+              <View style={{ padding: 22, alignItems: 'center' }}>
+                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 20, color: theme.text, textAlign: 'center', letterSpacing: -0.4 }}>
+                  Your study space
+                </Text>
+                <Text style={{
+                  fontFamily: 'Nunito_400Regular', fontSize: 13.5, color: theme.textSecondary,
+                  textAlign: 'center', lineHeight: 20, marginTop: 7, marginBottom: 20,
+                }}>
+                  Make a deck of flashcards, or paste a list you already have. FinScholar schedules the reviews for you with SM-2 spaced repetition.
+                </Text>
+
+                <AnimatedPressable
+                  onPress={() => openAddDeck()}
+                  accessibilityRole="button"
+                  accessibilityLabel="Create your first deck"
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+                    width: '100%', paddingVertical: 13, borderRadius: Radius.lg,
+                    backgroundColor: theme.primary,
+                    borderBottomWidth: 3, borderBottomColor: theme.primaryDark,
+                  }}
+                >
+                  <Ionicons name="add-circle" size={18} color="#ffffff" />
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: '#ffffff' }}>
+                    Create your first deck
+                  </Text>
+                </AnimatedPressable>
+              </View>
+            </Card>
           </View>
         ) : (
           <ScrollView
-            className="flex-1 px-5 pt-4"
-            contentContainerStyle={{ paddingBottom: 110 }}
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingHorizontal: GUTTER, paddingTop: 2, paddingBottom: tabBarHeight + 24 }}
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
           >
             {/* Gamification & Statistics Island (R2) */}
             <StudyDashboardStats
@@ -1507,186 +1501,130 @@ export default function FlashcardsScreen() {
             {/* Quick Study Modes Launcher (R1) */}
             <StudyModesStrip onSelectMode={handleSelectDashboardStudyMode} />
 
-            {/* Study Options Button */}
-            <TouchableOpacity 
-              onPress={() => router.push('/study-options')}
-              activeOpacity={0.8}
-              style={{
-                flexDirection: 'row', alignItems: 'center', padding: 16, marginBottom: 16, borderRadius: Radius['2xl'],
-                backgroundColor: isDark ? theme.surfaceSecondary : theme.card,
-                borderWidth: 1, borderColor: theme.cardBorder,
-                ...(!isDark ? { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 8 } : {})
-              }}
-            >
+            {/* ══ Deck list ═════════════════════════════════════════════════
+                 Search and the filter chips sit directly above the list they
+                 act on. The "Study Options" row that used to live here was a
+                 third route to the same screen as the header gear. */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+              <View style={{ width: 4, height: 20, borderRadius: 2, backgroundColor: tints.grades.solid, marginRight: 9 }} />
+              <Text accessibilityRole="header" style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, letterSpacing: -0.2 }}>
+                Your decks
+              </Text>
               <View style={{
-                width: 40, height: 40, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', marginRight: 12,
-                backgroundColor: isDark ? 'rgba(99,102,241,0.15)' : '#eef2ff'
+                marginLeft: 8, minWidth: 22, paddingHorizontal: 7, paddingVertical: 2,
+                borderRadius: Radius.full, alignItems: 'center', backgroundColor: theme.surfaceSecondary,
               }}>
-                <Ionicons name="options-outline" size={20} color={theme.primary} />
+                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>
+                  {filteredTree.length}
+                </Text>
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 15, color: theme.text }}>Study Options</Text>
-                <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textSecondary, marginTop: 2 }}>Configure SM-2 spaced repetition settings</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={theme.textTertiary} />
-            </TouchableOpacity>
 
-            {/* Search & Filter Bar */}
-            <View style={{ marginBottom: 16 }}>
-              {/* Search input */}
-              <View
+              <View style={{ flex: 1 }} />
+
+              <AnimatedPressable
+                onPress={() => openAddDeck()}
+                accessibilityRole="button"
+                accessibilityLabel="Add deck"
                 style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  borderRadius: Radius['2xl'],
-                  paddingHorizontal: 14,
-                  paddingVertical: 4,
-                  backgroundColor: isDark ? '#1a1a1b' : '#ffffff',
-                  borderWidth: 1,
-                  borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-                  marginBottom: 10,
+                  flexDirection: 'row', alignItems: 'center', gap: 4,
+                  paddingHorizontal: 12, height: 32, borderRadius: Radius.full,
+                  backgroundColor: theme.primary,
+                  borderBottomWidth: 2, borderBottomColor: theme.primaryDark,
                 }}
               >
-                <Ionicons name="search" size={18} color={isDark ? '#64748b' : '#94a3b8'} />
-                <TextInput
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholder="Search decks or subjects..."
-                  placeholderTextColor={isDark ? '#475569' : '#94a3b8'}
-                  style={{
-                    flex: 1,
-                    paddingVertical: 8,
-                    marginLeft: 8,
-                    fontFamily: 'Nunito_700Bold',
-                    fontSize: 14,
-                    color: isDark ? '#ffffff' : '#0f172a',
-                  }}
-                />
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQuery('')}>
-                    <Ionicons name="close-circle" size={18} color={isDark ? '#64748b' : '#94a3b8'} />
-                  </TouchableOpacity>
-                )}
+                <Ionicons name="add" size={16} color="#ffffff" />
+                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: '#ffffff' }}>Deck</Text>
+              </AnimatedPressable>
+            </View>
+
+            {/* Search */}
+            <View style={{
+              flexDirection: 'row', alignItems: 'center',
+              paddingHorizontal: 12, height: 42, borderRadius: Radius.lg, marginBottom: 10,
+              backgroundColor: theme.inputBg, borderWidth: 1, borderColor: theme.inputBorder,
+            }}>
+              <Ionicons name="search" size={16} color={theme.textTertiary} />
+              <TextInput
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search decks or subjects…"
+                placeholderTextColor={theme.textTertiary}
+                accessibilityLabel="Search decks"
+                style={{ flex: 1, marginLeft: 8, fontFamily: 'Nunito_600SemiBold', fontSize: 13.5, color: theme.text, padding: 0 }}
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchQuery('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Ionicons name="close-circle" size={16} color={theme.textTertiary} />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Filter chips */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', gap: 7 }}>
+                {[
+                  { key: 'all', label: 'All decks', count: decks.length, tint: null as any },
+                  ...(totalDueNow > 0 ? [{ key: 'due', label: 'Due now', count: totalDueNow, tint: tints.schedule }] : []),
+                  ...uniqueSubjects.map((sub) => ({ key: sub, label: sub, count: null as any, tint: null as any })),
+                ].map((chip) => {
+                  const active = selectedSubjectFilter === chip.key;
+                  const activeFill = chip.tint ? chip.tint.fill : tints.grades.fill;
+                  const activeLine = chip.tint ? chip.tint.line : tints.grades.line;
+                  const activeInk = chip.tint ? chip.tint.ink : tints.grades.ink;
+                  return (
+                    <TouchableOpacity
+                      key={chip.key}
+                      onPress={() => setSelectedSubjectFilter(chip.key)}
+                      activeOpacity={0.75}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={chip.count !== null ? `${chip.label}, ${chip.count}` : chip.label}
+                      style={{
+                        flexDirection: 'row', alignItems: 'center', gap: 5,
+                        paddingHorizontal: 12, height: 30, borderRadius: Radius.full,
+                        backgroundColor: active ? activeFill : theme.surfaceSecondary,
+                        borderWidth: 1, borderColor: active ? activeLine : theme.cardBorder,
+                      }}
+                    >
+                      {chip.key === 'due' && (
+                        <Ionicons name="flash" size={12} color={active ? activeInk : theme.textTertiary} />
+                      )}
+                      <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: active ? activeInk : theme.textSecondary }}>
+                        {chip.label}
+                      </Text>
+                      {chip.count !== null && (
+                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: active ? activeInk : theme.textTertiary }}>
+                          {chip.count}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
-
-              {/* Filter chips */}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <TouchableOpacity
-                    onPress={() => setSelectedSubjectFilter('all')}
-                    style={{
-                      paddingHorizontal: 14,
-                      paddingVertical: 6,
-                      borderRadius: Radius.full,
-                      backgroundColor:
-                        selectedSubjectFilter === 'all'
-                          ? theme.primary
-                          : isDark
-                          ? theme.surfaceSecondary
-                          : '#f1f5f9',
-                    }}
-                  >
-                    <Text
-                      style={{
-                        fontFamily: 'Nunito_800ExtraBold',
-                        fontSize: 12,
-                        color: selectedSubjectFilter === 'all' ? '#ffffff' : theme.textSecondary,
-                      }}
-                    >
-                      All Decks ({decks.length})
-                    </Text>
-                  </TouchableOpacity>
-
-                  {totalDueNow > 0 && (
-                    <TouchableOpacity
-                      onPress={() => setSelectedSubjectFilter('due')}
-                      style={{
-                        paddingHorizontal: 14,
-                        paddingVertical: 6,
-                        borderRadius: Radius.full,
-                        backgroundColor:
-                          selectedSubjectFilter === 'due'
-                            ? '#3b82f6'
-                            : isDark
-                            ? 'rgba(59, 130, 246, 0.15)'
-                            : '#eff6ff',
-                        borderWidth: 1,
-                        borderColor: selectedSubjectFilter === 'due' ? '#3b82f6' : '#bfdbfe',
-                      }}
-                    >
-                      <Text
-                        style={{
-                          fontFamily: 'Nunito_800ExtraBold',
-                          fontSize: 12,
-                          color: selectedSubjectFilter === 'due' ? '#ffffff' : '#3b82f6',
-                        }}
-                      >
-                        ⚡ Due ({totalDueNow})
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-
-                  {uniqueSubjects.map((sub) => (
-                    <TouchableOpacity
-                      key={sub}
-                      onPress={() => setSelectedSubjectFilter(sub)}
-                      style={{
-                        paddingHorizontal: 14,
-                        paddingVertical: 6,
-                        borderRadius: Radius.full,
-                        backgroundColor:
-                          selectedSubjectFilter === sub
-                            ? theme.primary
-                            : isDark
-                            ? theme.surfaceSecondary
-                            : '#f1f5f9',
-                      }}
-                    >
-                      <Text
-                        style={{
-                          fontFamily: 'Nunito_800ExtraBold',
-                          fontSize: 12,
-                          color: selectedSubjectFilter === sub ? '#ffffff' : theme.textSecondary,
-                        }}
-                      >
-                        {sub}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </ScrollView>
-            </View>
-
-            {/* Deck List Header */}
-            <View
-              style={{
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: 12,
-              }}
-            >
-              <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text }}>
-                Your Decks ({filteredTree.length})
-              </Text>
-              <TouchableOpacity
-                onPress={() => openAddDeck()}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
-              >
-                <Ionicons name="add" size={16} color={theme.primary} />
-                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: theme.primary }}>
-                  Add Deck
-                </Text>
-              </TouchableOpacity>
-            </View>
+            </ScrollView>
 
             {/* Deck Tree & Cards List (R3) */}
             {filteredTree.length === 0 ? (
-              <View style={{ paddingVertical: 32, alignItems: 'center' }}>
-                <Ionicons name="search-outline" size={36} color={theme.textTertiary} />
-                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, color: theme.textSecondary, marginTop: 8 }}>
-                  No matching decks found
-                </Text>
+              <View style={{
+                flexDirection: 'row', alignItems: 'center',
+                padding: 12, borderRadius: Radius.lg,
+                backgroundColor: tints.grades.fill, borderWidth: 1, borderColor: tints.grades.line,
+              }}>
+                <View style={{
+                  width: 34, height: 34, borderRadius: 11, marginRight: 11,
+                  alignItems: 'center', justifyContent: 'center',
+                  backgroundColor: isDark ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.7)',
+                }}>
+                  <Ionicons name="search-outline" size={17} color={tints.grades.ink} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>
+                    No decks match
+                  </Text>
+                  <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 1 }}>
+                    Try a different search, or clear the filter above.
+                  </Text>
+                </View>
               </View>
             ) : (
               filteredTree.map((node) => (
@@ -1719,14 +1657,25 @@ export default function FlashcardsScreen() {
   // Render: Deck Detail (Redesigned R1, R3)
   // ─────────────────────────────────────────────────────────────────────────
 
+  /**
+   * The deck screen.
+   *
+   * This absorbed the old separate `manage` view. The two were ~90% the same
+   * screen — both listed the cards with edit and delete, both had their own
+   * study CTA, import and add-card buttons — but search and status filters
+   * existed only here while bulk select, bulk reverse and the per-card due date
+   * existed only there, so which half of the features you got depended on
+   * which button you happened to press. Everything from both lives here now.
+   */
   const renderDetail = () => {
     if (!activeNode) return null;
     const stats = getNodeStats(activeNode);
     const allCards = collectCards(activeNode);
     const deck = activeNode.deck ? decks.find((d) => d.id === activeNode.deck!.id) || activeNode.deck : null;
-    const color = deck?.color || '#4f46e5';
+    const color = deck?.color || theme.primary;
     const masteredPct = stats.total > 0 ? Math.round((stats.mastered / stats.total) * 100) : 0;
     const nextReviewText = getNextDueText(activeNode);
+    const readyNow = stats.due + stats.learning;
 
     let filteredCards = allCards;
     if (detailSearch.trim()) {
@@ -1739,491 +1688,556 @@ export default function FlashcardsScreen() {
       filteredCards = filteredCards.filter((c) => getCardStatus(c) === detailFilter);
     }
 
+    const visibleIds = filteredCards.map((c) => c.id);
+    const isAllSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedCardIds.has(id));
+    const handleToggleSelectAll = () => {
+      if (isAllSelected) setSelectedCardIds(new Set());
+      else setSelectedCardIds(new Set(visibleIds));
+    };
+
     const studyModes = [
-      { id: 'flashcards', icon: 'albums-outline' as const, title: 'Flashcards', desc: 'Flip & rate recall', color: '#6366f1' },
-      { id: 'spaced', icon: 'refresh-outline' as const, title: 'Spaced Rep.', desc: 'Review due cards', color: '#3b82f6' },
-      { id: 'match', icon: 'grid-outline' as const, title: 'Speed Match', desc: 'Pair terms to defs', color: '#f97316' },
-      { id: 'quiz', icon: 'document-text-outline' as const, title: 'Practice Test', desc: 'Multiple choice quiz', color: '#10b981' },
-      { id: 'exam', icon: 'calendar-outline' as const, title: 'Exam Prep', desc: 'Optimal countdown', color: '#ec4899' },
+      { id: 'flashcards', icon: 'albums-outline' as const, title: 'Flashcards', desc: 'Flip and rate recall', tint: tints.grades },
+      { id: 'spaced', icon: 'refresh-outline' as const, title: 'Spaced rep.', desc: 'Only what is due', tint: tints.schedule },
+      { id: 'match', icon: 'grid-outline' as const, title: 'Speed match', desc: 'Pair terms to answers', tint: tints.tasks },
+      { id: 'quiz', icon: 'document-text-outline' as const, title: 'Practice test', desc: 'Multiple choice', tint: tints.attendance },
+      { id: 'exam', icon: 'calendar-outline' as const, title: 'Exam prep', desc: 'Plan up to a date', tint: tints.danger },
+    ];
+
+    const statusRows = [
+      { key: 'new', label: 'New', count: stats.new, color: STATUS_CONFIG.new.color },
+      { key: 'learning', label: 'Learning', count: stats.learning, color: STATUS_CONFIG.learning.color },
+      { key: 'due', label: 'Review', count: stats.due, color: STATUS_CONFIG.due.color },
+      { key: 'mastered', label: 'Mastered', count: stats.mastered, color: STATUS_CONFIG.mastered.color },
     ];
 
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
-        {/* Header */}
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingHorizontal: 20,
-            paddingVertical: 14,
-            borderBottomWidth: 1,
-            borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
-            backgroundColor: theme.surface,
-          }}
-        >
+      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+        {/* ══ App bar ═══════════════════════════════════════════════════════ */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10 }}>
           <TouchableOpacity
-            onPress={() => setView('decks')}
+            onPress={() => { setView('decks'); setIsSelectionMode(false); setSelectedCardIds(new Set()); }}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Back to all decks"
             style={{
-              width: 40,
-              height: 40,
-              borderRadius: 20,
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: 12,
-              backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
+              width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+              backgroundColor: theme.surface,
+              borderWidth: 1, borderColor: theme.cardBorder,
+              borderBottomWidth: 2, borderBottomColor: theme.lip,
             }}
           >
-            <Ionicons name="arrow-back" size={20} color={isDark ? '#94a3b8' : '#64748b'} />
+            <Ionicons name="chevron-back" size={18} color={theme.textSecondary} />
           </TouchableOpacity>
+
           <View style={{ flex: 1 }}>
-            <Text
-              style={{ ...Typography.title, fontSize: 18, color: theme.text }}
-              numberOfLines={1}
-            >
+            <Text numberOfLines={1} accessibilityRole="header" style={{ fontFamily: 'Nunito_900Black', fontSize: 18, color: theme.text, letterSpacing: -0.4 }}>
               {activeNode.name}
             </Text>
-            <Text
-              style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textTertiary }}
-              numberOfLines={1}
-            >
-              {activeNode.fullPath}
-            </Text>
+            {activeNode.fullPath !== activeNode.name && (
+              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary }}>
+                {activeNode.fullPath}
+              </Text>
+            )}
           </View>
+
           <TouchableOpacity
             onPress={() => showDeckActions(activeNode)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Deck options"
             style={{
-              width: 38,
-              height: 38,
-              borderRadius: 19,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
+              width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+              backgroundColor: theme.surface,
+              borderWidth: 1, borderColor: theme.cardBorder,
+              borderBottomWidth: 2, borderBottomColor: theme.lip,
             }}
           >
-            <Ionicons name="ellipsis-horizontal" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
+            <Ionicons name="ellipsis-horizontal" size={18} color={theme.textSecondary} />
           </TouchableOpacity>
         </View>
 
         <ScrollView
-          className="flex-1"
-          contentContainerStyle={{ paddingBottom: 130 }}
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingHorizontal: GUTTER, paddingBottom: tabBarHeight + 92 }}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
-          {/* Deck Progress Card */}
-          <View
-            style={{
-              marginHorizontal: 20,
-              marginTop: 16,
-              padding: 20,
-              borderRadius: Radius['3xl'],
-              backgroundColor: isDark ? '#1a1a1b' : '#ffffff',
-              borderWidth: 1,
-              borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-              ...Shadows.sm,
-            }}
-          >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text }}>
-                Deck Mastery & Progress
-              </Text>
-              <View
-                style={{
-                  paddingHorizontal: 10,
-                  paddingVertical: 4,
-                  borderRadius: Radius.full,
-                  backgroundColor: color + '20',
-                }}
-              >
-                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 12, color }}>
-                  {masteredPct}% Mastered
+          {/* ══ Progress ════════════════════════════════════════════════════ */}
+          <Card padding={0} radius={Radius['2xl']} style={{ overflow: 'hidden', marginBottom: 18 }}>
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', padding: 14,
+              backgroundColor: color + (isDark ? '20' : '14'),
+              borderBottomWidth: 1, borderBottomColor: color + (isDark ? '35' : '28'),
+            }}>
+              <View style={{
+                width: 42, height: 42, borderRadius: 14, marginRight: 12,
+                alignItems: 'center', justifyContent: 'center',
+                backgroundColor: theme.surface, borderWidth: 1, borderColor: color + '55',
+              }}>
+                <Ionicons name={(deck?.icon as any) || getDeckThematicIcon(deck?.subject, deck?.name)} size={20} color={color} />
+              </View>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={microLabel}>Mastery</Text>
+                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: theme.text, letterSpacing: -0.6, marginTop: 1 }}>
+                  {masteredPct}%
                 </Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 18, color: theme.text }}>{stats.total}</Text>
+                <Text style={microLabel}>cards</Text>
               </View>
             </View>
 
-            {/* Due alert banner */}
-            {stats.due + stats.learning > 0 ? (
-              <View
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  marginBottom: 14,
-                  paddingHorizontal: 12,
-                  paddingVertical: 8,
-                  borderRadius: Radius.lg,
-                  backgroundColor: isDark ? 'rgba(59, 130, 246, 0.15)' : '#eff6ff',
-                }}
-              >
-                <Ionicons name="flash" size={14} color="#3b82f6" style={{ marginRight: 6 }} />
-                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: '#3b82f6' }}>
-                  {stats.due + stats.learning} card{stats.due + stats.learning !== 1 ? 's' : ''} ready to review now
+            {readyNow > 0 ? (
+              <View style={{
+                flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10,
+                backgroundColor: tints.schedule.fill, borderBottomWidth: 1, borderBottomColor: tints.schedule.line,
+              }}>
+                <Ionicons name="flash" size={14} color={tints.schedule.ink} style={{ marginRight: 7 }} />
+                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: tints.schedule.ink }}>
+                  {readyNow} card{readyNow !== 1 ? 's' : ''} ready to review now
                 </Text>
               </View>
             ) : nextReviewText ? (
-              <View
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  marginBottom: 14,
-                  paddingHorizontal: 12,
-                  paddingVertical: 8,
-                  borderRadius: Radius.lg,
-                  backgroundColor: isDark ? theme.surfaceSecondary : '#f8fafc',
-                }}
-              >
-                <Ionicons name="time-outline" size={14} color={theme.textTertiary} style={{ marginRight: 6 }} />
-                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: theme.textSecondary }}>
+              <View style={{
+                flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10,
+                borderBottomWidth: 1, borderBottomColor: theme.cardBorder,
+              }}>
+                <Ionicons name="time-outline" size={14} color={theme.textTertiary} style={{ marginRight: 7 }} />
+                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary }}>
                   Next review in <Text style={{ fontFamily: 'Nunito_900Black', color: theme.primary }}>{nextReviewText}</Text>
                 </Text>
               </View>
             ) : null}
 
-            {/* Progress Bars */}
-            {[
-              { key: 'new', label: 'New', count: stats.new, color: '#8b5cf6' },
-              { key: 'learning', label: 'Learning', count: stats.learning, color: '#f97316' },
-              { key: 'due', label: 'Review', count: stats.due, color: '#3b82f6' },
-              { key: 'mastered', label: 'Mastered', count: stats.mastered, color: '#10b981' },
-            ].map((item) => (
-              <View key={item.key} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: item.color, marginRight: 10 }} />
-                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, width: 75, color: theme.textSecondary }}>
-                  {item.label}
-                </Text>
-                <View style={{ flex: 1, height: 8, borderRadius: 999, marginHorizontal: 8, backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9', overflow: 'hidden' }}>
-                  <View
-                    style={{
-                      width: stats.total > 0 ? `${(item.count / stats.total) * 100}%` : '0%',
-                      backgroundColor: item.color,
-                      height: '100%',
-                      borderRadius: 999,
-                    }}
+            <View style={{ padding: 14, gap: 9 }}>
+              {statusRows.map((row) => (
+                <View key={row.key} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: row.color, marginRight: 9 }} />
+                  <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, width: 70, color: theme.textSecondary }}>
+                    {row.label}
+                  </Text>
+                  <ProgressBar
+                    progress={stats.total > 0 ? row.count / stats.total : 0}
+                    height={7}
+                    color={row.color}
+                    animate={false}
+                    style={{ flex: 1, marginHorizontal: 8 }}
+                    accessibilityLabel={`${row.label}: ${row.count} of ${stats.total}`}
                   />
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, width: 30, textAlign: 'right', color: theme.text }}>
+                    {row.count}
+                  </Text>
                 </View>
-                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, width: 32, textAlign: 'right', color: theme.text }}>
-                  {item.count}
+              ))}
+            </View>
+          </Card>
+
+          {/* ══ Study modes ═════════════════════════════════════════════════ */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+            <View style={{ width: 4, height: 20, borderRadius: 2, backgroundColor: tints.grades.solid, marginRight: 9 }} />
+            <Text accessibilityRole="header" style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, letterSpacing: -0.2 }}>
+              Study modes
+            </Text>
+          </View>
+
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 22 }}>
+            {studyModes.map((mode) => (
+              <Card
+                key={mode.id}
+                padding={12}
+                radius={Radius.lg}
+                onPress={() => {
+                  if (mode.id === 'flashcards') startStudy(activeNode, true);
+                  else if (mode.id === 'spaced') startStudy(activeNode, false);
+                  else if (mode.id === 'match') startMatch(activeNode);
+                  else if (mode.id === 'quiz') generateQuiz(activeNode);
+                  else if (mode.id === 'exam') {
+                    setExamPlan(null);
+                    setExamReviewsPerDay(0);
+                    setShowExamModal(true);
+                  }
+                }}
+                accessibilityLabel={`${mode.title}. ${mode.desc}`}
+                style={{ width: (SCREEN_WIDTH - GUTTER * 2 - 10) / 2 }}
+              >
+                <View style={{
+                  width: 36, height: 36, borderRadius: 12, marginBottom: 9,
+                  alignItems: 'center', justifyContent: 'center',
+                  backgroundColor: mode.tint.fill, borderWidth: 1, borderColor: mode.tint.line,
+                }}>
+                  <Ionicons name={mode.icon} size={18} color={mode.tint.ink} />
+                </View>
+                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: theme.text }}>
+                  {mode.title}
                 </Text>
-              </View>
+                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, marginTop: 1 }}>
+                  {mode.desc}
+                </Text>
+              </Card>
             ))}
           </View>
 
-          {/* Study Modes Grid */}
-          <View style={{ marginHorizontal: 20, marginTop: 20 }}>
-            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text, marginBottom: 12 }}>
-              Study Modes
+          {/* ══ Cards ═══════════════════════════════════════════════════════ */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+            <View style={{ width: 4, height: 20, borderRadius: 2, backgroundColor: tints.tools.solid, marginRight: 9 }} />
+            <Text accessibilityRole="header" style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, letterSpacing: -0.2 }}>
+              Cards
             </Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-              {studyModes.map((mode) => (
+            <View style={{
+              marginLeft: 8, minWidth: 22, paddingHorizontal: 7, paddingVertical: 2,
+              borderRadius: Radius.full, alignItems: 'center', backgroundColor: theme.surfaceSecondary,
+            }}>
+              <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>
+                {allCards.length}
+              </Text>
+            </View>
+
+            <View style={{ flex: 1 }} />
+
+            {deck && (
+              <>
                 <TouchableOpacity
-                  key={mode.id}
-                  activeOpacity={0.85}
-                  onPress={() => {
-                    if (mode.id === 'flashcards') startStudy(activeNode, true);
-                    else if (mode.id === 'spaced') startStudy(activeNode, false);
-                    else if (mode.id === 'match') startMatch(activeNode);
-                    else if (mode.id === 'quiz') generateQuiz(activeNode);
-                    else if (mode.id === 'exam') {
-                      setExamPlan(null);
-                      setExamReviewsPerDay(0);
-                      setShowExamModal(true);
-                    }
-                  }}
+                  onPress={() => { setActiveDeck(deck); setShowImportModal(true); }}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel="Import cards"
                   style={{
-                    width: (SCREEN_WIDTH - 50) / 2,
-                    padding: 14,
-                    borderRadius: Radius['2xl'],
-                    backgroundColor: isDark ? '#1a1a1b' : '#ffffff',
-                    borderWidth: 1,
-                    borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-                    ...Shadows.sm,
+                    width: 32, height: 32, borderRadius: 11, marginRight: 8,
+                    alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: theme.surfaceSecondary,
                   }}
                 >
-                  <View
-                    style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: Radius.lg,
-                      backgroundColor: mode.color + (isDark ? '25' : '15'),
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginBottom: 10,
-                    }}
-                  >
-                    <Ionicons name={mode.icon} size={20} color={mode.color} />
-                  </View>
-                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: isDark ? '#f8fafc' : '#1e293b' }}>
-                    {mode.title}
-                  </Text>
-                  <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, marginTop: 2, color: theme.textTertiary }}>
-                    {mode.desc}
-                  </Text>
+                  <Ionicons name="cloud-upload-outline" size={16} color={theme.textSecondary} />
                 </TouchableOpacity>
-              ))}
-            </View>
+                <AnimatedPressable
+                  onPress={openAddCard}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add card"
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 4,
+                    paddingHorizontal: 12, height: 32, borderRadius: Radius.full,
+                    backgroundColor: theme.primary,
+                    borderBottomWidth: 2, borderBottomColor: theme.primaryDark,
+                  }}
+                >
+                  <Ionicons name="add" size={16} color="#ffffff" />
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: '#ffffff' }}>Add</Text>
+                </AnimatedPressable>
+              </>
+            )}
           </View>
 
-          {/* Cards & Terms Section */}
-          <View style={{ marginHorizontal: 20, marginTop: 24 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text }}>
-                Cards ({allCards.length})
-              </Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                {deck && (
-                  <TouchableOpacity
-                    onPress={() => {
-                      setActiveDeck(deck);
-                      setShowImportModal(true);
-                    }}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      paddingHorizontal: 12,
-                      height: 32,
-                      borderRadius: Radius.full,
-                      backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
-                    }}
-                  >
-                    <Ionicons name="cloud-upload-outline" size={14} color={isDark ? '#94a3b8' : '#64748b'} />
-                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11, marginLeft: 4, color: theme.textSecondary }}>
-                      Import
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                {deck && (
-                  <TouchableOpacity
-                    onPress={openAddCard}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      paddingHorizontal: 12,
-                      height: 32,
-                      borderRadius: Radius.full,
-                      backgroundColor: color,
-                    }}
-                  >
-                    <Ionicons name="add" size={16} color="#ffffff" />
-                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11, marginLeft: 2, color: '#ffffff' }}>
-                      Add Card
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
+          {/* Search */}
+          <View style={{
+            flexDirection: 'row', alignItems: 'center',
+            paddingHorizontal: 12, height: 42, borderRadius: Radius.lg, marginBottom: 10,
+            backgroundColor: theme.inputBg, borderWidth: 1, borderColor: theme.inputBorder,
+          }}>
+            <Ionicons name="search" size={16} color={theme.textTertiary} />
+            <TextInput
+              value={detailSearch}
+              onChangeText={setDetailSearch}
+              placeholder="Search cards in this deck…"
+              placeholderTextColor={theme.textTertiary}
+              accessibilityLabel="Search cards"
+              style={{ flex: 1, marginLeft: 8, fontFamily: 'Nunito_600SemiBold', fontSize: 13.5, color: theme.text, padding: 0 }}
+            />
+            {detailSearch.length > 0 && (
+              <TouchableOpacity onPress={() => setDetailSearch('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close-circle" size={16} color={theme.textTertiary} />
+              </TouchableOpacity>
+            )}
+          </View>
 
-            {/* Terms Search */}
-            <View
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                borderRadius: Radius.xl,
-                paddingHorizontal: 12,
-                backgroundColor: isDark ? '#1a1a1b' : '#ffffff',
-                borderWidth: 1,
-                borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-                marginBottom: 10,
-              }}
-            >
-              <Ionicons name="search" size={16} color={isDark ? '#64748b' : '#94a3b8'} />
-              <TextInput
-                value={detailSearch}
-                onChangeText={setDetailSearch}
-                placeholder="Search cards in deck..."
-                placeholderTextColor={isDark ? '#475569' : '#94a3b8'}
-                style={{
-                  flex: 1,
-                  paddingVertical: 8,
-                  marginLeft: 8,
-                  fontFamily: 'Nunito_700Bold',
-                  fontSize: 13,
-                  color: isDark ? '#ffffff' : '#0f172a',
-                }}
-              />
-              {detailSearch.length > 0 && (
-                <TouchableOpacity onPress={() => setDetailSearch('')}>
-                  <Ionicons name="close-circle" size={16} color={isDark ? '#64748b' : '#94a3b8'} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Filter Tabs */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                {[
-                  { key: 'all', label: `All (${allCards.length})` },
-                  { key: 'new', label: `New (${stats.new})` },
-                  { key: 'learning', label: `Learning (${stats.learning})` },
-                  { key: 'due', label: `Due (${stats.due})` },
-                ].map((tab) => (
+          {/* Status filter */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
+            <View style={{ flexDirection: 'row', gap: 7 }}>
+              {[
+                { key: 'all', label: 'All', count: allCards.length, color: theme.primary },
+                { key: 'new', label: 'New', count: stats.new, color: STATUS_CONFIG.new.color },
+                { key: 'learning', label: 'Learning', count: stats.learning, color: STATUS_CONFIG.learning.color },
+                { key: 'due', label: 'Review', count: stats.due, color: STATUS_CONFIG.due.color },
+              ].map((tab) => {
+                const active = detailFilter === tab.key;
+                return (
                   <TouchableOpacity
                     key={tab.key}
                     onPress={() => setDetailFilter(tab.key as any)}
+                    activeOpacity={0.75}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`${tab.label}, ${tab.count} cards`}
                     style={{
-                      paddingHorizontal: 12,
-                      paddingVertical: 5,
-                      borderRadius: Radius.full,
-                      backgroundColor:
-                        detailFilter === tab.key
-                          ? theme.primary
-                          : isDark
-                          ? theme.surfaceSecondary
-                          : '#f1f5f9',
+                      flexDirection: 'row', alignItems: 'center', gap: 5,
+                      paddingHorizontal: 12, height: 30, borderRadius: Radius.full,
+                      backgroundColor: active ? tab.color + (isDark ? '28' : '18') : theme.surfaceSecondary,
+                      borderWidth: 1, borderColor: active ? tab.color + '66' : theme.cardBorder,
                     }}
                   >
-                    <Text
-                      style={{
-                        fontFamily: 'Nunito_800ExtraBold',
-                        fontSize: 11,
-                        color: detailFilter === tab.key ? '#ffffff' : theme.textSecondary,
-                      }}
-                    >
+                    <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: tab.color }} />
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: active ? theme.text : theme.textSecondary }}>
                       {tab.label}
                     </Text>
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textTertiary }}>
+                      {tab.count}
+                    </Text>
                   </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
+                );
+              })}
+            </View>
+          </ScrollView>
 
-            {/* Cards List */}
-            {filteredCards.length === 0 ? (
-              <View style={{ paddingVertical: 24, alignItems: 'center' }}>
-                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textTertiary }}>
-                  No cards found
+          {/* Selection toolbar — carried over from the old Manage view */}
+          {allCards.length > 0 && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              {isSelectionMode ? (
+                <>
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text, marginRight: 2 }}>
+                    {selectedCardIds.size} selected
+                  </Text>
+                  <TouchableOpacity
+                    onPress={handleToggleSelectAll}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                    style={{ paddingHorizontal: 4 }}
+                  >
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.primary }}>
+                      {isAllSelected ? 'None' : 'All'}
+                    </Text>
+                  </TouchableOpacity>
+                  {selectedCardIds.size > 0 && (
+                    <>
+                      <TouchableOpacity
+                        onPress={() => handleBulkReverse(true)}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel="Swap front and back on the selected cards"
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        style={{ paddingHorizontal: 4 }}
+                      >
+                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.primary }}>Reverse</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={handleBulkDelete}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel="Delete the selected cards"
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        style={{ paddingHorizontal: 4 }}
+                      >
+                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: tints.danger.ink }}>Delete</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                  <View style={{ flex: 1 }} />
+                  <TouchableOpacity
+                    onPress={() => { setIsSelectionMode(false); setSelectedCardIds(new Set()); }}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    style={{ paddingHorizontal: 14, height: 30, borderRadius: Radius.full, justifyContent: 'center', backgroundColor: theme.primary }}
+                  >
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: '#ffffff' }}>Done</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    onPress={() => setIsSelectionMode(true)}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel="Select cards"
+                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                  >
+                    <Ionicons name="checkbox-outline" size={15} color={theme.textSecondary} />
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary }}>Select</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleBulkReverse(false)}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel="Swap front and back on every card here"
+                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 14 }}
+                  >
+                    <Ionicons name="swap-vertical" size={15} color={theme.textSecondary} />
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary }}>Reverse all</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          )}
+
+          {/* Card rows */}
+          {filteredCards.length === 0 ? (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center',
+              padding: 12, borderRadius: Radius.lg,
+              backgroundColor: tints.grades.fill, borderWidth: 1, borderColor: tints.grades.line,
+            }}>
+              <View style={{
+                width: 34, height: 34, borderRadius: 11, marginRight: 11,
+                alignItems: 'center', justifyContent: 'center',
+                backgroundColor: isDark ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.7)',
+              }}>
+                <Ionicons name={allCards.length === 0 ? 'documents-outline' : 'search-outline'} size={17} color={tints.grades.ink} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>
+                  {allCards.length === 0 ? 'No cards yet' : 'Nothing matches'}
+                </Text>
+                <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 1, lineHeight: 16 }}>
+                  {allCards.length === 0
+                    ? 'Add cards one at a time, or import a list you already have.'
+                    : 'Try a different search or filter.'}
                 </Text>
               </View>
-            ) : (
-              filteredCards.map((card, idx) => {
-                const status = getCardStatus(card);
-                const cfg = STATUS_CONFIG[status];
-                return (
-                  <View
-                    key={card.id}
-                    style={{
-                      marginBottom: 10,
-                      padding: 14,
-                      borderRadius: Radius['2xl'],
-                      backgroundColor: isDark ? '#1a1a1b' : '#ffffff',
-                      borderWidth: 1,
-                      borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-                      ...Shadows.sm,
-                    }}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-                      <View
-                        style={{
-                          width: 24,
-                          height: 24,
-                          borderRadius: 12,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          marginRight: 10,
-                          marginTop: 2,
-                          backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
-                        }}
-                      >
-                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 10, color: theme.textSecondary }}>
+            </View>
+          ) : (
+            filteredCards.map((card, idx) => {
+              const status = getCardStatus(card);
+              const cfg = STATUS_CONFIG[status];
+              const isSelected = selectedCardIds.has(card.id);
+              const cardDue = card.nextDue <= Date.now();
+              const dueText = cardDue
+                ? 'Due now'
+                : new Date(card.nextDue).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+              const owningDeck =
+                deck ||
+                decks.find((d) => Array.isArray(d.cards) && d.cards.some((c) => c.id === card.id));
+
+              return (
+                <Card
+                  key={card.id}
+                  padding={12}
+                  radius={Radius.lg}
+                  onPress={
+                    isSelectionMode
+                      ? () => {
+                          const next = new Set(selectedCardIds);
+                          if (next.has(card.id)) next.delete(card.id);
+                          else next.add(card.id);
+                          setSelectedCardIds(next);
+                        }
+                      : owningDeck
+                      ? () => {
+                          setActiveDeck(owningDeck);
+                          setEditingCard(card);
+                          setCardForm({ front: card.front, back: card.back });
+                          setShowAddCardModal(true);
+                        }
+                      : undefined
+                  }
+                  accessibilityLabel={`${card.front}. ${card.back}. ${cfg.label}, ${dueText}`}
+                  accessibilityHint={isSelectionMode ? 'Toggles selection' : 'Opens this card for editing'}
+                  style={{ marginBottom: 8, borderColor: isSelected ? theme.primary : theme.cardBorder }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                    {isSelectionMode ? (
+                      <View style={{
+                        width: 22, height: 22, borderRadius: 7, marginRight: 11, marginTop: 1,
+                        alignItems: 'center', justifyContent: 'center',
+                        borderWidth: 2,
+                        borderColor: isSelected ? theme.primary : (isDark ? '#464d75' : '#cbd5e1'),
+                        backgroundColor: isSelected ? theme.primary : 'transparent',
+                      }}>
+                        {isSelected && <Ionicons name="checkmark" size={14} color="#ffffff" />}
+                      </View>
+                    ) : (
+                      <View style={{
+                        width: 22, height: 22, borderRadius: 7, marginRight: 11, marginTop: 1,
+                        alignItems: 'center', justifyContent: 'center',
+                        backgroundColor: theme.surfaceSecondary,
+                      }}>
+                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 10, color: theme.textTertiary }}>
                           {idx + 1}
                         </Text>
                       </View>
+                    )}
 
-                      <View style={{ flex: 1 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                          <View
-                            style={{
-                              backgroundColor: cfg.bg,
-                              paddingHorizontal: 7,
-                              paddingVertical: 2,
-                              borderRadius: Radius.full,
-                            }}
-                          >
-                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 10, color: cfg.color }}>
-                              {cfg.label}
-                            </Text>
-                          </View>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5, gap: 6 }}>
+                        <View style={{
+                          paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6,
+                          backgroundColor: cfg.color + (isDark ? '28' : '18'),
+                        }}>
+                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 9.5, color: cfg.color, letterSpacing: 0.2 }}>
+                            {cfg.label.toUpperCase()}
+                          </Text>
                         </View>
-
-                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: theme.text }}>
-                          {card.front}
+                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: cardDue ? tints.tasks.ink : theme.textTertiary }}>
+                          {dueText}
                         </Text>
-                        <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, marginTop: 3, color: theme.textSecondary }}>
-                          {card.back}
-                        </Text>
+                        {card.reviewCount > 0 && (
+                          <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 10.5, color: theme.textTertiary }}>
+                            · {card.reviewCount} review{card.reviewCount !== 1 ? 's' : ''}
+                          </Text>
+                        )}
                       </View>
 
-                      {(() => {
-                        const owningDeck =
-                          deck ||
-                          decks.find((d) => d.id === card.deckId) ||
-                          decks.find((d) => Array.isArray(d.cards) && d.cards.some((c) => c.id === card.id));
-                        if (!owningDeck) return null;
-                        return (
-                          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 8, gap: 10 }}>
-                            <TouchableOpacity
-                              onPress={() => {
-                                setActiveDeck(owningDeck);
-                                setEditingCard(card);
-                                setCardForm({ front: card.front, back: card.back });
-                                setShowAddCardModal(true);
-                              }}
-                            >
-                              <Ionicons name="pencil-outline" size={16} color={isDark ? '#94a3b8' : '#64748b'} />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              onPress={() => {
-                                setActiveDeck(owningDeck);
-                                handleDeleteCard(card);
-                              }}
-                            >
-                              <Ionicons name="trash-outline" size={16} color="#ef4444" />
-                            </TouchableOpacity>
-                          </View>
-                        );
-                      })()}
+                      <Text numberOfLines={2} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text, lineHeight: 18 }}>
+                        {card.front}
+                      </Text>
+                      <Text numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textSecondary, marginTop: 2, lineHeight: 17 }}>
+                        {card.back}
+                      </Text>
                     </View>
+
+                    {!isSelectionMode && owningDeck && (
+                      <TouchableOpacity
+                        onPress={() => { setActiveDeck(owningDeck); handleDeleteCard(card); }}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Delete card ${card.front}`}
+                        hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+                        style={{
+                          width: 28, height: 28, borderRadius: 9, marginLeft: 8,
+                          alignItems: 'center', justifyContent: 'center',
+                          backgroundColor: tints.danger.fill,
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={14} color={tints.danger.ink} />
+                      </TouchableOpacity>
+                    )}
                   </View>
-                );
-              })
-            )}
-          </View>
+                </Card>
+              );
+            })
+          )}
         </ScrollView>
 
-        {/* Bottom CTA */}
+        {/* ══ Study CTA ═════════════════════════════════════════════════════ */}
         <View
           style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            paddingHorizontal: 20,
-            paddingBottom: 24,
-            paddingTop: 12,
-            backgroundColor: isDark ? 'rgba(15,23,42,0.95)' : 'rgba(248,250,252,0.95)',
-            borderTopWidth: 1,
-            borderTopColor: isDark ? '#1e293b' : '#e2e8f0',
+            position: 'absolute', bottom: 0, left: 0, right: 0,
+            paddingHorizontal: GUTTER, paddingTop: 12, paddingBottom: tabBarHeight + 12,
+            backgroundColor: theme.background,
+            borderTopWidth: 1, borderTopColor: theme.cardBorder,
           }}
         >
-          <TouchableOpacity
-            onPress={() => startStudy(activeNode, true)}
-            activeOpacity={0.88}
+          <AnimatedPressable
+            onPress={() => startStudy(activeNode, readyNow === 0)}
+            accessibilityRole="button"
+            accessibilityLabel={readyNow > 0 ? `Study ${readyNow} due cards` : `Study ahead, ${allCards.length} cards`}
             style={{
-              backgroundColor: color,
-              paddingVertical: 14,
-              borderRadius: Radius.xl,
-              alignItems: 'center',
-              ...(!isDark
-                ? {
-                    shadowColor: color,
-                    shadowOffset: { width: 0, height: 4 },
-                    shadowOpacity: 0.3,
-                    shadowRadius: 8,
-                    elevation: 4,
-                  }
-                : {}),
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+              paddingVertical: 14, borderRadius: Radius.lg,
+              backgroundColor: allCards.length === 0 ? theme.surfaceSecondary : color,
+              borderBottomWidth: 3,
+              borderBottomColor: allCards.length === 0 ? theme.cardBorder : 'rgba(0,0,0,0.28)',
             }}
           >
-            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15, color: '#ffffff' }}>
-              Study Deck ({allCards.length} Cards)
+            <Ionicons name="play" size={17} color={allCards.length === 0 ? theme.textTertiary : '#ffffff'} />
+            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15.5, color: allCards.length === 0 ? theme.textTertiary : '#ffffff' }}>
+              {allCards.length === 0
+                ? 'Add cards to start'
+                : readyNow > 0
+                ? `Study ${readyNow} due card${readyNow !== 1 ? 's' : ''}`
+                : `Study ahead · ${allCards.length} card${allCards.length !== 1 ? 's' : ''}`}
             </Text>
-          </TouchableOpacity>
+          </AnimatedPressable>
         </View>
       </SafeAreaView>
     );
@@ -2262,8 +2276,19 @@ export default function FlashcardsScreen() {
           : 0;
 
       return (
-        <SafeAreaView className={`flex-1 px-6 ${isDark ? 'bg-slate-950' : 'bg-slate-50'}`}>
-          <View className="flex-1 items-center justify-center">
+        <SafeAreaView edges={['top', 'left', 'right']} className="flex-1" style={{ backgroundColor: theme.background }}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              flexGrow: 1,
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingHorizontal: 24,
+              paddingTop: 16,
+              paddingBottom: tabBarHeight + 24,
+            }}
+            showsVerticalScrollIndicator={false}
+          >
             <Image
               source={require('../../assets/images/happy.png')}
               style={{ width: 110, height: 110, marginBottom: 16 }}
@@ -2277,9 +2302,8 @@ export default function FlashcardsScreen() {
             </Text>
 
             <View
-              className={`w-full p-6 rounded-3xl mb-4 border ${
-                isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'
-              }`}
+              className="w-full p-6 rounded-3xl mb-4 border"
+              style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
             >
               <Text className={`font-nunito-bold text-xs text-center tracking-widest mb-6 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
                 SESSION ANALYTICS & XP
@@ -2321,9 +2345,8 @@ export default function FlashcardsScreen() {
               </View>
             ) : nextDueLabel ? (
               <View
-                className={`w-full p-4 rounded-2xl mb-6 flex-row items-center justify-center ${
-                  isDark ? 'bg-slate-900 border border-slate-800' : 'bg-slate-100'
-                }`}
+                className="w-full p-4 rounded-2xl mb-6 flex-row items-center justify-center border"
+                style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder }}
               >
                 <Ionicons name="time-outline" size={16} color={isDark ? '#94a3b8' : '#64748b'} />
                 <Text className={`font-nunito text-sm ml-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
@@ -2335,7 +2358,8 @@ export default function FlashcardsScreen() {
             <View className="flex-row w-full" style={{ gap: 12 }}>
               <TouchableOpacity
                 onPress={() => setView(activeNode ? 'detail' : 'decks')}
-                className={`flex-1 py-4 rounded-2xl items-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
+                className="flex-1 py-4 rounded-2xl items-center border"
+                style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
               >
                 <Text className={`font-nunito-bold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
                   {activeNode ? 'Back to Deck' : 'All Decks'}
@@ -2358,100 +2382,123 @@ export default function FlashcardsScreen() {
                 </TouchableOpacity>
               ) : null}
             </View>
-          </View>
+          </ScrollView>
         </SafeAreaView>
       );
     }
 
     const card = sessionCards[cardIndex];
-    const progress = cardIndex / sessionCards.length;
+    const progress = sessionCards.length > 0 ? cardIndex / sessionCards.length : 0;
+    const cardColor = decks.find((d) => d.id === card.deckId)?.color || activeDeck?.color || theme.primary;
+    const owningDeck = decks.find((d) => d.id === card.deckId) || activeDeck || null;
+
+    const exitSession = () => {
+      setUndoState(null);
+      setView(activeNode ? 'detail' : 'decks');
+    };
+
+    const headerButton = (
+      iconName: keyof typeof Ionicons.glyphMap,
+      label: string,
+      onPress: () => void,
+      opts?: { active?: boolean; disabled?: boolean }
+    ) => (
+      <TouchableOpacity
+        onPress={onPress}
+        disabled={opts?.disabled}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityState={{ disabled: Boolean(opts?.disabled), selected: Boolean(opts?.active) }}
+        style={{
+          width: 36, height: 36, borderRadius: 12,
+          alignItems: 'center', justifyContent: 'center',
+          backgroundColor: opts?.active ? tints.grades.fill : theme.surface,
+          borderWidth: 1, borderColor: opts?.active ? tints.grades.line : theme.cardBorder,
+          borderBottomWidth: 2, borderBottomColor: opts?.active ? tints.grades.line : theme.lip,
+          opacity: opts?.disabled ? 0.4 : 1,
+        }}
+      >
+        <Ionicons
+          name={iconName}
+          size={17}
+          color={opts?.active ? tints.grades.ink : theme.textSecondary}
+        />
+      </TouchableOpacity>
+    );
 
     return (
-      <SafeAreaView className={`flex-1 ${isDark ? 'bg-slate-950' : 'bg-slate-50'}`}>
-        <View className="flex-row justify-between items-center px-6 py-4">
-          <TouchableOpacity
-            onPress={() => setView(activeNode ? 'detail' : 'decks')}
-            className={`w-10 h-10 rounded-full items-center justify-center ${
-              isDark ? 'bg-slate-800' : 'bg-white shadow-sm shadow-slate-200'
-            }`}
-          >
-            <Ionicons name="close" size={20} color={isDark ? '#94a3b8' : '#64748b'} />
-          </TouchableOpacity>
-          <View className="items-center">
-            <Text className={`font-nunito-bold text-sm ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
-              {activeNode ? activeNode.deck?.name || activeNode.name : 'All Decks'}
+      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+        {/* ══ Session bar ═══════════════════════════════════════════════════ */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10 }}>
+          {headerButton('close', 'End session', exitSession)}
+
+          <View style={{ flex: 1, alignItems: 'center' }}>
+            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>
+              {activeNode ? activeNode.deck?.name || activeNode.name : 'All decks'}
             </Text>
-            <Text className={`font-nunito text-xs ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-              {cardIndex + 1} / {sessionCards.length}
+            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary }}>
+              Card {cardIndex + 1} of {sessionCards.length}
             </Text>
           </View>
-          <View className="flex-row items-center" style={{ gap: 8 }}>
-            <TouchableOpacity
-              onPress={() => {
-                setStudyReversed((r) => !r);
-                setIsFlipped(false);
-              }}
-              className={`w-10 h-10 rounded-full items-center justify-center ${
-                studyReversed
-                  ? 'bg-indigo-500/20 border border-indigo-500/40'
-                  : isDark
-                  ? 'bg-slate-800'
-                  : 'bg-white shadow-sm shadow-slate-200'
-              }`}
-            >
-              <Ionicons
-                name="swap-vertical"
-                size={18}
-                color={studyReversed ? '#6366f1' : isDark ? '#94a3b8' : '#64748b'}
-              />
-            </TouchableOpacity>
-            {activeNode && (
-              <TouchableOpacity
-                onPress={() => setView('manage')}
-                className={`w-10 h-10 rounded-full items-center justify-center ${
-                  isDark ? 'bg-slate-800' : 'bg-white shadow-sm shadow-slate-200'
-                }`}
-              >
-                <Ionicons name="list" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-              </TouchableOpacity>
-            )}
-          </View>
+
+          {/* Undo the last rating — a mis-tap is otherwise permanent. */}
+          {headerButton('arrow-undo-outline', 'Undo last rating', handleUndoRating, { disabled: !undoState })}
+
+          {owningDeck &&
+            headerButton('create-outline', 'Edit this card', () => {
+              setActiveDeck(owningDeck);
+              setEditingCard(card);
+              setCardForm({ front: card.front, back: card.back });
+              setShowAddCardModal(true);
+            })}
+
+          {headerButton(
+            'swap-vertical',
+            studyReversed ? 'Show the term first' : 'Show the answer first',
+            () => {
+              setStudyReversed((r) => !r);
+              setIsFlipped(false);
+            },
+            { active: studyReversed }
+          )}
         </View>
 
-        <View className={`mx-6 h-2 rounded-full mb-8 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`}>
-          <View
-            style={{
-              width: `${progress * 100}%`,
-              backgroundColor: activeDeck?.color || '#4f46e5',
-              height: '100%',
-              borderRadius: 999,
-            }}
+        <View style={{ paddingHorizontal: GUTTER, marginBottom: 22 }}>
+          <ProgressBar
+            progress={progress}
+            height={7}
+            color={cardColor}
+            accessibilityLabel={`Session progress, card ${cardIndex + 1} of ${sessionCards.length}`}
           />
         </View>
 
-        <View className="flex-1 items-center justify-center px-6">
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: GUTTER }}>
           <FlipCard
             front={studyReversed ? card.back : card.front}
             back={studyReversed ? card.front : card.back}
             isFlipped={isFlipped}
             onFlip={() => setIsFlipped((f) => !f)}
-            color={decks.find((d) => d.id === card.deckId)?.color || activeDeck?.color || '#4f46e5'}
+            color={cardColor}
             isDark={isDark}
             frontLabel={studyReversed ? 'DEFINITION' : 'TERM'}
             backLabel={studyReversed ? 'TERM' : 'DEFINITION'}
           />
           {!isFlipped && (
-            <Text className={`font-nunito text-xs mt-8 ${isDark ? 'text-slate-600' : 'text-slate-400'}`}>
+            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12.5, color: theme.textTertiary, marginTop: 28 }}>
               Tap the card to reveal the {studyReversed ? 'term' : 'definition'}
             </Text>
           )}
         </View>
 
-        <View className={`px-6 pb-24 ${isFlipped ? '' : 'opacity-0 pointer-events-none'}`}>
-          <Text className={`font-nunito-bold text-xs text-center mb-4 tracking-wider ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-            HOW WELL DID YOU KNOW THIS?
+        <View
+          pointerEvents={isFlipped ? 'auto' : 'none'}
+          style={{ paddingHorizontal: GUTTER, paddingBottom: tabBarHeight + 12, opacity: isFlipped ? 1 : 0 }}
+        >
+          <Text style={{ ...microLabel, textAlign: 'center', marginBottom: 12 }}>
+            How well did you know this?
           </Text>
-          <View className="flex-row" style={{ gap: 10 }}>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
             {(() => {
               const isNew = card.interval === 0;
               const formatMin = (m: number) =>
@@ -2481,28 +2528,35 @@ export default function FlashcardsScreen() {
                 ? formatDay(srSettings.easyInterval || 4)
                 : formatDay(Math.max(1, card.interval * card.easeFactor * 1.3));
               return [
-                { rating: 1 as const, label: 'Again', sub: againSub, color: '#ef4444', darkBg: '#450a0a', lightBg: '#fff1f2' },
-                { rating: 2 as const, label: 'Hard', sub: hardSub, color: '#f97316', darkBg: '#431407', lightBg: '#fff7ed' },
-                { rating: 3 as const, label: 'Good', sub: goodSub, color: '#3b82f6', darkBg: '#1e3a5f', lightBg: '#eff6ff' },
-                { rating: 4 as const, label: 'Easy', sub: easySub, color: '#10b981', darkBg: '#022c22', lightBg: '#ecfdf5' },
+                { rating: 1 as const, label: 'Again', sub: againSub, tint: tints.danger },
+                { rating: 2 as const, label: 'Hard', sub: hardSub, tint: tints.tasks },
+                { rating: 3 as const, label: 'Good', sub: goodSub, tint: tints.schedule },
+                { rating: 4 as const, label: 'Easy', sub: easySub, tint: tints.attendance },
               ].map((btn) => (
-                <TouchableOpacity
+                <AnimatedPressable
                   key={btn.rating}
                   onPress={() => isFlipped && handleRate(btn.rating)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${btn.label}, next review in ${btn.sub}`}
                   style={{
-                    backgroundColor: isDark ? btn.darkBg : btn.lightBg,
-                    borderColor: btn.color + '50',
                     flex: 1,
+                    paddingVertical: 12,
+                    borderRadius: Radius.lg,
+                    alignItems: 'center',
+                    backgroundColor: btn.tint.fill,
+                    borderWidth: 1,
+                    borderColor: btn.tint.line,
+                    borderBottomWidth: 3,
+                    borderBottomColor: btn.tint.line,
                   }}
-                  className="py-3.5 rounded-2xl items-center border"
                 >
-                  <Text style={{ color: btn.color }} className="font-nunito-black text-sm">
+                  <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 14, color: btn.tint.ink }}>
                     {btn.label}
                   </Text>
-                  <Text style={{ color: btn.color + '99' }} className="font-nunito text-[10px]">
+                  <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: btn.tint.ink, opacity: 0.75, marginTop: 1 }}>
                     {btn.sub}
                   </Text>
-                </TouchableOpacity>
+                </AnimatedPressable>
               ));
             })()}
           </View>
@@ -2521,8 +2575,19 @@ export default function FlashcardsScreen() {
     if (quizDone) {
       const pct = quizQuestions.length > 0 ? Math.round((quizScore / quizQuestions.length) * 100) : 0;
       return (
-        <SafeAreaView className={`flex-1 px-6 ${isDark ? 'bg-slate-950' : 'bg-slate-50'}`}>
-          <View className="flex-1 items-center justify-center">
+        <SafeAreaView edges={['top', 'left', 'right']} className="flex-1" style={{ backgroundColor: theme.background }}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              flexGrow: 1,
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingHorizontal: 24,
+              paddingTop: 16,
+              paddingBottom: tabBarHeight + 24,
+            }}
+            showsVerticalScrollIndicator={false}
+          >
             <View
               style={{
                 width: 100,
@@ -2549,9 +2614,8 @@ export default function FlashcardsScreen() {
 
             {quizMissed.length > 0 && (
               <View
-                className={`w-full p-5 rounded-3xl mb-6 border ${
-                  isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'
-                }`}
+                className="w-full p-5 rounded-3xl mb-6 border"
+                style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
               >
                 <Text className={`font-nunito-bold text-xs tracking-widest mb-4 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
                   MISSED TERMS ({quizMissed.length})
@@ -2559,9 +2623,11 @@ export default function FlashcardsScreen() {
                 {quizMissed.map((q, i) => (
                   <View
                     key={i}
-                    className={`mb-3 pb-3 ${
-                      i < quizMissed.length - 1 ? (isDark ? 'border-b border-slate-800' : 'border-b border-slate-100') : ''
-                    }`}
+                    className="mb-3 pb-3"
+                    style={{
+                      borderBottomWidth: i < quizMissed.length - 1 ? 1 : 0,
+                      borderBottomColor: theme.cardBorder,
+                    }}
                   >
                     <Text className={`font-nunito-bold text-sm ${isDark ? 'text-white' : 'text-slate-800'}`}>
                       {q.question}
@@ -2575,7 +2641,8 @@ export default function FlashcardsScreen() {
             <View className="flex-row w-full" style={{ gap: 12 }}>
               <TouchableOpacity
                 onPress={() => setView(activeNode ? 'detail' : 'decks')}
-                className={`flex-1 py-4 rounded-2xl items-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
+                className="flex-1 py-4 rounded-2xl items-center border"
+                style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
               >
                 <Text className={`font-nunito-bold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
                   {activeNode ? 'Back to Deck' : 'All Decks'}
@@ -2590,7 +2657,7 @@ export default function FlashcardsScreen() {
                 </TouchableOpacity>
               )}
             </View>
-          </View>
+          </ScrollView>
         </SafeAreaView>
       );
     }
@@ -2599,11 +2666,12 @@ export default function FlashcardsScreen() {
     const progress = quizIndex / quizQuestions.length;
 
     return (
-      <SafeAreaView className={`flex-1 ${isDark ? 'bg-slate-950' : 'bg-slate-50'}`}>
+      <SafeAreaView edges={['top', 'left', 'right']} className="flex-1" style={{ backgroundColor: theme.background }}>
         <View className="flex-row justify-between items-center px-6 py-4">
           <TouchableOpacity
             onPress={() => setView(activeNode ? 'detail' : 'decks')}
-            className={`w-10 h-10 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-white shadow-sm'}`}
+            className="w-10 h-10 rounded-full items-center justify-center border"
+            style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder }}
           >
             <Ionicons name="close" size={20} color={isDark ? '#94a3b8' : '#64748b'} />
           </TouchableOpacity>
@@ -2613,15 +2681,18 @@ export default function FlashcardsScreen() {
           </Text>
         </View>
 
-        <View className={`mx-6 h-2 rounded-full mb-8 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`}>
+        <View className="mx-6 h-2 rounded-full mb-8 overflow-hidden" style={{ backgroundColor: theme.surfaceSecondary }}>
           <View style={{ width: `${progress * 100}%`, backgroundColor: '#10b981', height: '100%', borderRadius: 999 }} />
         </View>
 
-        <View className="flex-1 px-6">
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 20 }}
+          showsVerticalScrollIndicator={false}
+        >
           <View
-            className={`p-6 rounded-3xl mb-8 border ${
-              isDark ? 'bg-[#1a1a1b] border-slate-800/60' : 'bg-white border-slate-100 shadow-sm'
-            }`}
+            className="p-6 rounded-3xl mb-8 border"
+            style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
           >
             <Text className={`font-nunito-bold text-xs tracking-widest mb-3 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
               QUESTION {quizIndex + 1}
@@ -2636,9 +2707,9 @@ export default function FlashcardsScreen() {
               const isSelected = quizSelected === option;
               const isCorrect = option === q.correctAnswer;
               const showResult = quizSelected !== null;
-              let bgColor = isDark ? '#1a1a1b' : '#ffffff';
-              let borderColor = isDark ? '#334155' : '#e2e8f0';
-              let textColor = isDark ? '#e2e8f0' : '#334155';
+              let bgColor = theme.surface;
+              let borderColor = theme.cardBorder;
+              let textColor = theme.text;
 
               if (showResult) {
                 if (isCorrect) {
@@ -2694,9 +2765,9 @@ export default function FlashcardsScreen() {
               );
             })}
           </View>
-        </View>
+        </ScrollView>
 
-        <View className="px-6 pb-8 pt-4">
+        <View style={{ paddingHorizontal: 24, paddingTop: 12, paddingBottom: tabBarHeight + 8 }}>
           <View className="flex-row items-center justify-center" style={{ gap: 16 }}>
             <View className="flex-row items-center" style={{ gap: 4 }}>
               <Ionicons name="checkmark-circle" size={16} color="#10b981" />
@@ -2728,8 +2799,19 @@ export default function FlashcardsScreen() {
       const secs = matchElapsed % 60;
 
       return (
-        <SafeAreaView className={`flex-1 px-6 ${isDark ? 'bg-slate-950' : 'bg-slate-50'}`}>
-          <View className="flex-1 items-center justify-center">
+        <SafeAreaView edges={['top', 'left', 'right']} className="flex-1" style={{ backgroundColor: theme.background }}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              flexGrow: 1,
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingHorizontal: 24,
+              paddingTop: 16,
+              paddingBottom: tabBarHeight + 24,
+            }}
+            showsVerticalScrollIndicator={false}
+          >
             <View
               style={{
                 width: 100,
@@ -2784,7 +2866,8 @@ export default function FlashcardsScreen() {
             <View className="flex-row w-full" style={{ gap: 12 }}>
               <TouchableOpacity
                 onPress={() => setView(activeNode ? 'detail' : 'decks')}
-                className={`flex-1 py-4 rounded-2xl items-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
+                className="flex-1 py-4 rounded-2xl items-center border"
+                style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
               >
                 <Text className={`font-nunito-bold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
                   {activeNode ? 'Back to Deck' : 'All Decks'}
@@ -2799,7 +2882,7 @@ export default function FlashcardsScreen() {
                 </TouchableOpacity>
               )}
             </View>
-          </View>
+          </ScrollView>
         </SafeAreaView>
       );
     }
@@ -2808,11 +2891,12 @@ export default function FlashcardsScreen() {
     const cardSize = (SCREEN_WIDTH - 40 - (cols - 1) * 8) / cols;
 
     return (
-      <SafeAreaView className={`flex-1 ${isDark ? 'bg-slate-950' : 'bg-slate-50'}`}>
+      <SafeAreaView edges={['top', 'left', 'right']} className="flex-1" style={{ backgroundColor: theme.background }}>
         <View className="flex-row justify-between items-center px-6 py-4">
           <TouchableOpacity
             onPress={() => setView(activeNode ? 'detail' : 'decks')}
-            className={`w-10 h-10 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-white shadow-sm'}`}
+            className="w-10 h-10 rounded-full items-center justify-center border"
+            style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder }}
           >
             <Ionicons name="close" size={20} color={isDark ? '#94a3b8' : '#64748b'} />
           </TouchableOpacity>
@@ -2830,7 +2914,7 @@ export default function FlashcardsScreen() {
           </View>
         </View>
 
-        <View className={`mx-6 h-2 rounded-full mb-6 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`}>
+        <View className="mx-6 h-2 rounded-full mb-6 overflow-hidden" style={{ backgroundColor: theme.surfaceSecondary }}>
           <View
             style={{
               width: `${(matchMatched.size / (matchCards.length / 2)) * 100}%`,
@@ -2841,7 +2925,7 @@ export default function FlashcardsScreen() {
           />
         </View>
 
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24 }} showsVerticalScrollIndicator={false}>
           <View className="flex-row flex-wrap" style={{ gap: 8 }}>
             {matchCards.map((card) => {
               const isRevealed = matchRevealed.includes(card.id);
@@ -2904,1068 +2988,713 @@ export default function FlashcardsScreen() {
   // Render: Deck Management (Card list)
   // ─────────────────────────────────────────────────────────────────────────
 
-  const renderManage = () => {
-    if (!activeNode) return null;
-    const stats = getNodeStats(activeNode);
-    const deck = activeNode.deck ? decks.find((d) => d.id === activeNode.deck!.id) || activeNode.deck : null;
-    const color = deck ? deck.color : '#4f46e5';
+  // ─── Shared sheet atoms ──────────────────────────────────────────────────
 
-    const allNodeCards = collectCards(activeNode);
-    const allCardIds = allNodeCards.map((c) => c.id);
-    const isAllSelected = allCardIds.length > 0 && allCardIds.every((id) => selectedCardIds.has(id));
-    const handleToggleSelectAll = () => {
-      if (isAllSelected) {
-        setSelectedCardIds(new Set());
-      } else {
-        setSelectedCardIds(new Set(allCardIds));
-      }
-    };
+  const microLabel = {
+    fontFamily: 'Nunito_800ExtraBold' as const,
+    fontSize: 10,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase' as const,
+    color: theme.textTertiary,
+  };
 
-    return (
-      <SafeAreaView className={`flex-1 ${isDark ? 'bg-[#1a1a1b]' : 'bg-slate-50'}`}>
-        <View
-          className={`flex-row items-center px-6 py-4 border-b ${
-            isDark ? 'bg-[#1a1a1b] border-slate-800/50' : 'bg-white border-slate-200'
-          }`}
+  const fieldStyle = {
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: theme.inputBorder,
+    backgroundColor: theme.inputBg,
+    color: theme.text,
+    padding: 14,
+    fontFamily: 'Nunito_600SemiBold' as const,
+    fontSize: 15,
+  };
+
+  const PrimaryButton = ({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) => (
+    <AnimatedPressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={{
+        paddingVertical: 14,
+        borderRadius: Radius.lg,
+        alignItems: 'center',
+        backgroundColor: disabled ? theme.surfaceSecondary : theme.primary,
+        borderBottomWidth: 3,
+        borderBottomColor: disabled ? theme.cardBorder : theme.primaryDark,
+        opacity: disabled ? 0.7 : 1,
+      }}
+    >
+      <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15.5, color: disabled ? theme.textTertiary : '#ffffff' }}>
+        {label}
+      </Text>
+    </AnimatedPressable>
+  );
+
+  // ─── Create ──────────────────────────────────────────────────────────────
+
+  const renderCreateSheet = () => (
+    <KeyboardSheet
+      visible={showCreateSheet}
+      onClose={() => setShowCreateSheet(false)}
+      title="Create"
+      subtitle="A deck holds cards. A folder groups decks."
+      icon="add-circle-outline"
+      tint={tints.grades}
+      maxHeightRatio={0.6}
+    >
+      {[
+        {
+          key: 'deck',
+          icon: 'albums-outline' as const,
+          tint: tints.grades,
+          title: 'New deck',
+          desc: 'A set of flashcards you study together',
+          onPress: () => openAddDeck(),
+        },
+        {
+          key: 'folder',
+          icon: 'folder-outline' as const,
+          tint: tints.tasks,
+          title: 'New folder',
+          desc: 'Group decks under a subject, using ::',
+          onPress: () => openAddDeck('::'),
+        },
+      ].map((opt) => (
+        <TouchableOpacity
+          key={opt.key}
+          onPress={opt.onPress}
+          activeOpacity={0.75}
+          accessibilityRole="button"
+          accessibilityLabel={`${opt.title}. ${opt.desc}`}
+          style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 11 }}
         >
-          <TouchableOpacity
-            onPress={() => setView(activeNode ? 'detail' : 'decks')}
-            className={`w-10 h-10 rounded-full items-center justify-center mr-3 ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-          >
-            <Ionicons name="arrow-back" size={20} color={isDark ? '#94a3b8' : '#64748b'} />
-          </TouchableOpacity>
-          <View className="flex-1">
-            <Text className={`font-nunito-black text-sm leading-tight ${isDark ? 'text-white' : 'text-slate-800'}`} numberOfLines={2}>
-              {activeNode.fullPath}
+          <View style={{
+            width: 40, height: 40, borderRadius: 13, marginRight: 12,
+            alignItems: 'center', justifyContent: 'center',
+            backgroundColor: opt.tint.fill, borderWidth: 1, borderColor: opt.tint.line,
+          }}>
+            <Ionicons name={opt.icon} size={19} color={opt.tint.ink} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: theme.text }}>{opt.title}</Text>
+            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
+              {opt.desc}
             </Text>
           </View>
-          <View className="flex-row items-center" style={{ gap: 8 }}>
-            {deck && (
-              <>
-                <TouchableOpacity
-                  onPress={() => {
-                    setActiveDeck(deck);
-                    setShowImportModal(true);
-                  }}
-                  className={`flex-row items-center px-3 h-10 rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-                >
-                  <Ionicons name="cloud-upload-outline" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-                  <Text className={`font-nunito-bold ml-1.5 ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>Import</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={openAddCard}
-                  style={{ backgroundColor: color }}
-                  className="w-10 h-10 rounded-full items-center justify-center"
-                >
-                  <Ionicons name="add" size={24} color="white" />
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        </View>
+          <Ionicons name="chevron-forward" size={17} color={theme.textTertiary} />
+        </TouchableOpacity>
+      ))}
+    </KeyboardSheet>
+  );
 
-        <ScrollView className="flex-1" contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
-          <View className="items-center pt-12 pb-10">
-            <View className="w-48 mb-8" style={{ gap: 8 }}>
-              <View className="flex-row justify-between">
-                <Text className={`font-nunito-bold text-base ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>New:</Text>
-                <Text
-                  className={`font-nunito-bold text-base ${
-                    stats.new > 0 ? (isDark ? 'text-violet-400' : 'text-violet-600') : isDark ? 'text-slate-600' : 'text-slate-400'
-                  }`}
-                >
-                  {stats.new}
-                </Text>
-              </View>
-              <View className="flex-row justify-between">
-                <Text className={`font-nunito-bold text-base ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>Learning:</Text>
-                <Text
-                  className={`font-nunito-bold text-base ${
-                    stats.learning > 0
-                      ? isDark
-                        ? 'text-orange-400'
-                        : 'text-orange-600'
-                      : isDark
-                      ? 'text-slate-600'
-                      : 'text-slate-400'
-                  }`}
-                >
-                  {stats.learning}
-                </Text>
-              </View>
-              <View className="flex-row justify-between">
-                <Text className={`font-nunito-bold text-base ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>To Review:</Text>
-                <Text
-                  className={`font-nunito-bold text-base ${
-                    stats.due > 0 ? (isDark ? 'text-blue-400' : 'text-blue-600') : isDark ? 'text-slate-600' : 'text-slate-400'
-                  }`}
-                >
-                  {stats.due}
-                </Text>
-              </View>
-            </View>
-            <TouchableOpacity
-              onPress={() => startStudy(activeNode)}
-              style={{ backgroundColor: color }}
-              className="px-10 py-3.5 rounded-full flex-row items-center justify-center"
-            >
-              <Text className="font-nunito-bold text-white text-base">Study Now</Text>
-            </TouchableOpacity>
-          </View>
+  // ─── Deck actions ────────────────────────────────────────────────────────
 
-          <View className="px-6 pt-4 border-t border-slate-200 dark:border-slate-800/50">
-            <View className="flex-row items-center justify-between mb-4">
-              <Text className={`font-nunito-bold text-sm tracking-wider ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                {isSelectionMode
-                  ? `${selectedCardIds.size} SELECTED`
-                  : deck
-                  ? 'CARDS IN DECK'
-                  : 'ALL CARDS IN FOLDER'}
-              </Text>
-              <View className="flex-row items-center" style={{ gap: 16 }}>
-                {isSelectionMode ? (
-                  <>
-                    <TouchableOpacity onPress={handleToggleSelectAll}>
-                      <Text className={`font-nunito-bold text-sm ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>
-                        {isAllSelected ? 'Deselect All' : 'Select All'}
-                      </Text>
-                    </TouchableOpacity>
-                    {selectedCardIds.size > 0 && (
-                      <>
-                        <TouchableOpacity onPress={() => handleBulkReverse(true)}>
-                          <Text className={`font-nunito-bold text-sm ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>Reverse</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={handleBulkDelete}>
-                          <Text className="font-nunito-bold text-red-500 text-sm">Delete</Text>
-                        </TouchableOpacity>
-                      </>
-                    )}
-                    <TouchableOpacity
-                      onPress={() => {
-                        setIsSelectionMode(false);
-                        setSelectedCardIds(new Set());
-                      }}
-                    >
-                      <Text className={`font-nunito-bold text-sm ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>Cancel</Text>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <>
-                    <TouchableOpacity onPress={() => handleBulkReverse(false)} className="flex-row items-center">
-                      <Ionicons name="swap-vertical" size={16} color={isDark ? '#94a3b8' : '#64748b'} />
-                      <Text className={`font-nunito-bold text-xs ml-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Reverse</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setIsSelectionMode(true)} className="flex-row items-center">
-                      <Ionicons name="checkmark-circle-outline" size={16} color={isDark ? '#94a3b8' : '#64748b'} />
-                      <Text className={`font-nunito-bold text-xs ml-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Select</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
-              </View>
-            </View>
+  const renderDeckActionSheet = () => {
+    const node = actionNode;
+    const deck = node?.deck ? decks.find((d) => d.id === node.deck!.id) || node.deck : null;
 
-            {(() => {
-              const decksToRender = collectDecksFromNode(activeNode).filter((d) => d.cards.length > 0);
-              if (decksToRender.length === 0) {
-                return (
-                  <View className="py-10 items-center">
-                    <Image
-                      source={require('../../assets/images/confused.png')}
-                      style={{ width: 80, height: 80, marginBottom: 12 }}
-                      resizeMode="contain"
-                    />
-                    <Text className={`font-nunito-bold text-center ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      No cards yet!
-                    </Text>
-                    <Text className={`font-nunito text-xs text-center mt-1 px-8 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                      Tap + to add cards, or use the import button.
-                    </Text>
-                  </View>
-                );
-              }
-              return decksToRender.map((d) => (
-                <View key={d.id} className="mb-2">
-                  {!deck && (
-                    <Text className={`font-nunito-bold text-xs mb-2 ml-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                      {d.name.toUpperCase()}
-                    </Text>
-                  )}
-                  {d.cards.map((card) => {
-                    const cardDue = card.nextDue <= Date.now();
-                    const nextDueText = cardDue
-                      ? 'Due now'
-                      : new Date(card.nextDue).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-                    const isSelected = selectedCardIds.has(card.id);
-                    return (
-                      <TouchableOpacity
-                        key={card.id}
-                        activeOpacity={isSelectionMode ? 0.7 : 1}
-                        onPress={() => {
-                          if (isSelectionMode) {
-                            const newSet = new Set(selectedCardIds);
-                            if (newSet.has(card.id)) newSet.delete(card.id);
-                            else newSet.add(card.id);
-                            setSelectedCardIds(newSet);
-                          }
-                        }}
-                        className={`mb-3 p-4 rounded-3xl border flex-row items-center ${
-                          isSelected
-                            ? isDark
-                              ? 'bg-indigo-900/30 border-indigo-500/50'
-                              : 'bg-indigo-50 border-indigo-200'
-                            : isDark
-                            ? 'bg-slate-900 border-slate-800'
-                            : 'bg-white border-slate-100'
-                        }`}
-                      >
-                        {isSelectionMode && (
-                          <View className="mr-3">
-                            <Ionicons
-                              name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
-                              size={22}
-                              color={isSelected ? '#6366f1' : isDark ? '#475569' : '#cbd5e1'}
-                            />
-                          </View>
-                        )}
-                        <View className="flex-1">
-                          <View className="flex-row justify-between items-start">
-                            <View className="flex-1 mr-3">
-                              <Text className={`font-nunito-bold text-sm leading-tight mb-1.5 ${isDark ? 'text-white' : 'text-slate-800'}`} numberOfLines={2}>
-                                {card.front}
-                              </Text>
-                              <Text className={`font-nunito text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`} numberOfLines={2}>
-                                {card.back}
-                              </Text>
-                            </View>
-                            {!isSelectionMode && (
-                              <View className="items-end" style={{ gap: 8 }}>
-                                <View className={`px-2.5 py-0.5 rounded-full ${cardDue ? 'bg-amber-500/20' : isDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
-                                  <Text className={`font-nunito-bold text-[10px] ${cardDue ? 'text-amber-500' : isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                                    {nextDueText}
-                                  </Text>
-                                </View>
-                                <View className="flex-row items-center" style={{ gap: 12 }}>
-                                  <TouchableOpacity
-                                    onPress={() => {
-                                      setActiveDeck(d);
-                                      setEditingCard(card);
-                                      setCardForm({ front: card.front, back: card.back });
-                                      setShowAddCardModal(true);
-                                    }}
-                                  >
-                                    <Ionicons name="pencil" size={15} color={isDark ? '#94a3b8' : '#64748b'} />
-                                  </TouchableOpacity>
-                                  <TouchableOpacity
-                                    onPress={() => {
-                                      setActiveDeck(d);
-                                      handleDeleteCard(card);
-                                    }}
-                                  >
-                                    <Ionicons name="trash-outline" size={15} color="#ef4444" />
-                                  </TouchableOpacity>
-                                </View>
-                              </View>
-                            )}
-                          </View>
-                          {card.reviewCount > 0 && (
-                            <View className={`mt-2.5 pt-2.5 border-t flex-row items-center ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
-                              <Ionicons name="repeat-outline" size={11} color={isDark ? '#475569' : '#94a3b8'} />
-                              <Text className={`font-nunito text-[10px] ml-1 ${isDark ? 'text-slate-600' : 'text-slate-400'}`}>
-                                Reviewed {card.reviewCount} time{card.reviewCount !== 1 ? 's' : ''}
-                              </Text>
-                            </View>
-                          )}
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
+    const run = (fn: () => void) => {
+      setActionNode(null);
+      // Let the sheet finish dismissing before an alert or a view change lands.
+      setTimeout(fn, 220);
+    };
+
+    const groups: { key: string; items: any[] }[] = node
+      ? [
+          {
+            key: 'study',
+            items: [
+              { key: 'study', icon: 'play-circle-outline', tint: tints.grades, label: 'Study now', desc: 'Review what is due', onPress: () => startStudy(node) },
+              { key: 'ahead', icon: 'flash-outline', tint: tints.schedule, label: 'Study ahead', desc: 'Include cards that are not due yet', onPress: () => startStudy(node, true) },
+              {
+                key: 'exam', icon: 'calendar-outline', tint: tints.danger, label: 'Exam prep', desc: 'Plan reviews up to an exam date',
+                onPress: () => { setActiveNode(node); setActiveDeck(deck); setExamPlan(null); setExamReviewsPerDay(0); setShowExamModal(true); },
+              },
+            ],
+          },
+          {
+            key: 'organise',
+            items: [
+              { key: 'cards', icon: 'list-outline', tint: tints.tools, label: 'Manage cards', desc: 'Browse, edit and bulk-select', onPress: () => { setActiveNode(node); setActiveDeck(deck); setDetailSearch(''); setDetailFilter('all'); setView('detail'); } },
+              { key: 'sub', icon: 'git-branch-outline', tint: tints.tools, label: 'Add sub-deck', desc: 'Nest a new deck under this one', onPress: () => openAddSubNode(node) },
+              ...(deck ? [
+                { key: 'edit', icon: 'create-outline', tint: tints.tools, label: 'Edit deck', desc: 'Name, subject, colour and icon', onPress: () => openEditDeck(deck) },
+                { key: 'dup', icon: 'copy-outline', tint: tints.tools, label: 'Duplicate deck', desc: 'Copy the deck and all its cards', onPress: () => handleDuplicateDeck(deck) },
+                { key: 'move', icon: 'move-outline', tint: tints.tools, label: 'Move deck', desc: 'Put it under a different folder', onPress: () => handleMoveDeck(node) },
+              ] : []),
+              { key: 'export', icon: 'share-outline', tint: tints.tools, label: 'Export deck', desc: 'Share the cards as CSV text', onPress: () => handleExportDeck(node) },
+            ],
+          },
+          {
+            key: 'danger',
+            items: [
+              { key: 'reset', icon: 'refresh-outline', tint: tints.tasks, label: 'Reset progress', desc: 'Keeps the cards, clears all scheduling', onPress: () => handleResetProgress(node) },
+              { key: 'delete', icon: 'trash-outline', tint: tints.danger, label: deck && node.children.size === 0 ? 'Delete deck' : 'Delete folder', desc: 'Removes the cards permanently', onPress: () => handleDeleteNode(node), destructive: true },
+            ],
+          },
+        ]
+      : [];
+
+    return (
+      <KeyboardSheet
+        visible={Boolean(actionNode)}
+        onClose={() => setActionNode(null)}
+        title={node?.name || ''}
+        subtitle={node?.fullPath}
+        icon={deck ? 'albums-outline' : 'folder-outline'}
+        tint={tints.grades}
+      >
+        {groups.map((group, gi) => (
+          <View
+            key={group.key}
+            style={{
+              marginTop: gi === 0 ? 0 : 10,
+              paddingTop: gi === 0 ? 0 : 10,
+              borderTopWidth: gi === 0 ? 0 : 1,
+              borderTopColor: theme.cardBorder,
+            }}
+          >
+            {group.items.map((action: any) => (
+              <TouchableOpacity
+                key={action.key}
+                onPress={() => run(action.onPress)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`${action.label}. ${action.desc}`}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }}
+              >
+                <View style={{
+                  width: 36, height: 36, borderRadius: 12, marginRight: 12,
+                  alignItems: 'center', justifyContent: 'center',
+                  backgroundColor: action.tint.fill, borderWidth: 1, borderColor: action.tint.line,
+                }}>
+                  <Ionicons name={action.icon} size={17} color={action.tint.ink} />
                 </View>
-              ));
-            })()}
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: action.destructive ? action.tint.ink : theme.text }}>
+                    {action.label}
+                  </Text>
+                  <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
+                    {action.desc}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
           </View>
-        </ScrollView>
-      </SafeAreaView>
+        ))}
+      </KeyboardSheet>
     );
   };
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Modals
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const renderCreateSheet = () => (
-    <Modal visible={showCreateSheet} transparent animationType="slide" onRequestClose={() => setShowCreateSheet(false)}>
-      <View className="flex-1 justify-end bg-black/60">
-        <Pressable className="flex-1" onPress={() => setShowCreateSheet(false)} />
-        <View className={`rounded-t-[32px] pt-4 pb-12 px-6 ${isDark ? 'bg-slate-900' : 'bg-white'}`}>
-          <View className="items-center mb-5">
-            <View className={`w-12 h-1.5 rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
-          </View>
-          <Text className={`font-nunito-black text-xl mb-6 ${isDark ? 'text-white' : 'text-slate-800'}`}>Create</Text>
-          <TouchableOpacity
-            onPress={() => openAddDeck()}
-            className={`flex-row items-center p-4 rounded-2xl mb-3 ${isDark ? 'bg-slate-800' : 'bg-slate-50'}`}
-          >
-            <View
-              style={{
-                width: 40,
-                height: 40,
-                borderRadius: 12,
-                backgroundColor: 'rgba(99,102,241,0.12)',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 14,
-              }}
-            >
-              <Ionicons name="albums-outline" size={20} color="#6366f1" />
-            </View>
-            <View className="flex-1">
-              <Text className={`font-nunito-bold text-sm ${isDark ? 'text-white' : 'text-slate-800'}`}>New Deck</Text>
-              <Text className={`font-nunito text-xs ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>Create a flashcard deck</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={isDark ? '#475569' : '#cbd5e1'} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
-              openAddDeck('::');
-            }}
-            className={`flex-row items-center p-4 rounded-2xl ${isDark ? 'bg-slate-800' : 'bg-slate-50'}`}
-          >
-            <View
-              style={{
-                width: 40,
-                height: 40,
-                borderRadius: 12,
-                backgroundColor: 'rgba(249,115,22,0.12)',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 14,
-              }}
-            >
-              <Ionicons name="folder-outline" size={20} color="#f97316" />
-            </View>
-            <View className="flex-1">
-              <Text className={`font-nunito-bold text-sm ${isDark ? 'text-white' : 'text-slate-800'}`}>New Folder</Text>
-              <Text className={`font-nunito text-xs ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                Organize decks into a folder (use :: separator)
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={isDark ? '#475569' : '#cbd5e1'} />
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
+  // ─── Deck form ───────────────────────────────────────────────────────────
 
   const renderAddDeckModal = () => (
-    <Modal visible={showAddDeckModal} transparent animationType="slide" onRequestClose={() => setShowAddDeckModal(false)}>
-      <View className="flex-1 justify-end bg-black/60">
-        <Pressable className="flex-1" onPress={() => setShowAddDeckModal(false)} />
-        <View className={`rounded-t-[32px] pt-4 pb-12 px-6 ${isDark ? 'bg-slate-900' : 'bg-white'}`}>
-          <View className="items-center mb-5">
-            <View className={`w-12 h-1.5 rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
-          </View>
-          <View className="flex-row justify-between items-center mb-6">
-            <Text className={`font-nunito-black text-xl ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              {editingDeck ? 'Edit Deck' : 'New Deck'}
-            </Text>
-            <TouchableOpacity
-              onPress={() => setShowAddDeckModal(false)}
-              className={`w-8 h-8 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-            >
-              <Ionicons name="close" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-            </TouchableOpacity>
-          </View>
-          <Text className={`font-nunito-bold text-sm mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Deck Name *</Text>
-          <TextInput
-            className={`p-4 rounded-2xl mb-4 font-nunito border ${
-              isDark ? 'bg-slate-800 text-white border-slate-700' : 'bg-slate-50 text-slate-900 border-slate-200'
-            }`}
-            placeholder="e.g. Biology Chapter 3"
-            placeholderTextColor={isDark ? '#475569' : '#94a3b8'}
-            value={deckForm.name}
-            onChangeText={(t) => setDeckForm({ ...deckForm, name: t })}
-          />
-          <Text className={`font-nunito-bold text-sm mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Subject Tag (Optional)</Text>
-          {currentSubjects.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-3">
-              <View className="flex-row" style={{ gap: 8 }}>
-                {currentSubjects.map((s: any) => (
-                  <TouchableOpacity
-                    key={s.id}
-                    onPress={() => setDeckForm({ ...deckForm, subject: s.name })}
-                    className={`px-3 py-1.5 rounded-full border ${
-                      deckForm.subject === s.name
-                        ? isDark
-                          ? 'bg-indigo-500/20 border-indigo-500'
-                          : 'bg-indigo-100 border-indigo-500'
-                        : isDark
-                        ? 'bg-slate-800 border-slate-700'
-                        : 'bg-slate-100 border-slate-200'
-                    }`}
-                  >
-                    <Text
-                      className={`font-nunito-bold text-xs ${
-                        deckForm.subject === s.name ? 'text-indigo-500' : isDark ? 'text-slate-400' : 'text-slate-600'
-                      }`}
-                    >
-                      {s.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-          )}
-          <TextInput
-            className={`p-4 rounded-2xl mb-5 font-nunito border ${
-              isDark ? 'bg-slate-800 text-white border-slate-700' : 'bg-slate-50 text-slate-900 border-slate-200'
-            }`}
-            placeholder="e.g. BIOL101 (or select above)"
-            placeholderTextColor={isDark ? '#475569' : '#94a3b8'}
-            value={deckForm.subject}
-            onChangeText={(t) => setDeckForm({ ...deckForm, subject: t })}
-          />
+    <KeyboardSheet
+      visible={showAddDeckModal}
+      onClose={() => setShowAddDeckModal(false)}
+      title={editingDeck ? 'Edit deck' : 'New deck'}
+      subtitle="Use :: in the name to nest it under a folder"
+      icon="albums-outline"
+      tint={tints.grades}
+      footer={<PrimaryButton label={editingDeck ? 'Save changes' : 'Create deck'} onPress={handleSaveDeck} />}
+    >
+      <Text style={{ ...microLabel, marginBottom: 8 }}>Deck name</Text>
+      <TextInput
+        style={{ ...fieldStyle, marginBottom: 18 }}
+        placeholder="e.g. Biology Chapter 3"
+        placeholderTextColor={theme.textTertiary}
+        value={deckForm.name}
+        onChangeText={(t) => setDeckForm({ ...deckForm, name: t })}
+        accessibilityLabel="Deck name"
+        returnKeyType="next"
+      />
 
-          {/* Accent Color Selection (R3) */}
-          <Text className={`font-nunito-bold text-sm mb-3 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Accent Color</Text>
-          <View className="flex-row flex-wrap mb-4" style={{ gap: 12 }}>
-            {DECK_COLORS.map((c) => (
-              <TouchableOpacity
-                key={c}
-                onPress={() => setDeckForm({ ...deckForm, color: c })}
-                style={{
-                  width: 38,
-                  height: 38,
-                  borderRadius: 19,
-                  backgroundColor: c,
-                  borderWidth: deckForm.color === c ? 3 : 0,
-                  borderColor: 'white',
-                  shadowColor: c,
-                  shadowOffset: { width: 0, height: 3 },
-                  shadowOpacity: 0.5,
-                  shadowRadius: 5,
-                  elevation: 5,
-                }}
-              />
-            ))}
-          </View>
-
-          {/* Icon / Cover Style Selection (R3) */}
-          <Text className={`font-nunito-bold text-sm mb-3 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Deck Icon</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-6">
-            <View className="flex-row" style={{ gap: 10 }}>
-              {DECK_ICONS.map((iconName) => (
+      <Text style={{ ...microLabel, marginBottom: 8 }}>Subject tag (optional)</Text>
+      {currentSubjects.length > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {currentSubjects.map((sub: any) => {
+              const active = deckForm.subject === sub.name;
+              return (
                 <TouchableOpacity
-                  key={iconName}
-                  onPress={() => setDeckForm({ ...deckForm, icon: iconName })}
+                  key={sub.id}
+                  onPress={() => setDeckForm({ ...deckForm, subject: active ? '' : sub.name })}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
                   style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: Radius.lg,
-                    backgroundColor:
-                      deckForm.icon === iconName
-                        ? deckForm.color + (isDark ? '30' : '20')
-                        : isDark
-                        ? '#334155'
-                        : '#f1f5f9',
-                    borderWidth: deckForm.icon === iconName ? 2 : 1,
-                    borderColor: deckForm.icon === iconName ? deckForm.color : isDark ? '#475569' : '#cbd5e1',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    paddingHorizontal: 12, height: 30, borderRadius: Radius.full, justifyContent: 'center',
+                    backgroundColor: active ? tints.grades.fill : theme.surfaceSecondary,
+                    borderWidth: 1, borderColor: active ? tints.grades.line : theme.cardBorder,
                   }}
                 >
-                  <Ionicons
-                    name={iconName as any}
-                    size={20}
-                    color={deckForm.icon === iconName ? deckForm.color : isDark ? '#94a3b8' : '#64748b'}
-                  />
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: active ? tints.grades.ink : theme.textSecondary }}>
+                    {sub.name}
+                  </Text>
                 </TouchableOpacity>
-              ))}
-            </View>
-          </ScrollView>
+              );
+            })}
+          </View>
+        </ScrollView>
+      )}
+      <TextInput
+        style={{ ...fieldStyle, marginBottom: 18 }}
+        placeholder="e.g. BIOL101 (or pick one above)"
+        placeholderTextColor={theme.textTertiary}
+        value={deckForm.subject}
+        onChangeText={(t) => setDeckForm({ ...deckForm, subject: t })}
+        accessibilityLabel="Subject tag"
+      />
 
-          <TouchableOpacity
-            onPress={handleSaveDeck}
-            className="py-4 rounded-2xl items-center bg-indigo-500 shadow-lg shadow-indigo-500/30"
-          >
-            <Text className="font-nunito-bold text-white text-base">
-              {editingDeck ? 'Save Changes' : 'Create Deck'}
-            </Text>
-          </TouchableOpacity>
-        </View>
+      <Text style={{ ...microLabel, marginBottom: 10 }}>Accent colour</Text>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 18 }}>
+        {DECK_COLORS.map((c) => {
+          const active = deckForm.color === c;
+          return (
+            <TouchableOpacity
+              key={c}
+              onPress={() => setDeckForm({ ...deckForm, color: c })}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={`Accent colour ${c}`}
+              accessibilityState={{ selected: active }}
+              style={{
+                width: 38, height: 38, borderRadius: 13,
+                alignItems: 'center', justifyContent: 'center',
+                backgroundColor: c,
+                borderWidth: active ? 3 : 1,
+                borderColor: active ? theme.text : theme.cardBorder,
+              }}
+            >
+              {active && <Ionicons name="checkmark" size={17} color="#ffffff" />}
+            </TouchableOpacity>
+          );
+        })}
       </View>
-    </Modal>
+
+      <Text style={{ ...microLabel, marginBottom: 10 }}>Deck icon</Text>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
+        {DECK_ICONS.map((iconName) => {
+          const active = deckForm.icon === iconName;
+          return (
+            <TouchableOpacity
+              key={iconName}
+              onPress={() => setDeckForm({ ...deckForm, icon: iconName })}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={`Icon ${iconName}`}
+              accessibilityState={{ selected: active }}
+              style={{
+                width: 42, height: 42, borderRadius: Radius.md,
+                alignItems: 'center', justifyContent: 'center',
+                backgroundColor: active ? deckForm.color + (isDark ? '30' : '20') : theme.surfaceSecondary,
+                borderWidth: active ? 2 : 1,
+                borderColor: active ? deckForm.color : theme.cardBorder,
+              }}
+            >
+              <Ionicons name={iconName as any} size={19} color={active ? deckForm.color : theme.textSecondary} />
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </KeyboardSheet>
   );
+
+  // ─── Card form ───────────────────────────────────────────────────────────
 
   const renderAddCardModal = () => (
-    <Modal visible={showAddCardModal} transparent animationType="slide" onRequestClose={() => setShowAddCardModal(false)}>
-      <View className="flex-1 justify-end bg-black/60">
-        <Pressable className="flex-1" onPress={() => setShowAddCardModal(false)} />
-        <View className={`rounded-t-[32px] pt-4 pb-12 px-6 ${isDark ? 'bg-slate-900' : 'bg-white'}`}>
-          <View className="items-center mb-5">
-            <View className={`w-12 h-1.5 rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
-          </View>
-          <View className="flex-row justify-between items-center mb-6">
-            <Text className={`font-nunito-black text-xl ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              {editingCard ? 'Edit Card' : 'New Card'}
-            </Text>
-            <View className="flex-row items-center" style={{ gap: 12 }}>
-              <TouchableOpacity
-                onPress={() => setCardForm({ front: cardForm.back, back: cardForm.front })}
-                className={`flex-row items-center px-3 h-8 rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-              >
-                <Ionicons name="swap-vertical" size={14} color={isDark ? '#94a3b8' : '#64748b'} />
-                <Text className={`font-nunito-bold text-xs ml-1.5 ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>Reverse</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setShowAddCardModal(false)}
-                className={`w-8 h-8 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-              >
-                <Ionicons name="close" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-              </TouchableOpacity>
-            </View>
-          </View>
-          <Text className={`font-nunito-bold text-sm mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Front (Question)</Text>
-          <TextInput
-            className={`p-4 rounded-2xl mb-4 font-nunito border ${
-              isDark ? 'bg-slate-800 text-white border-slate-700' : 'bg-slate-50 text-slate-900 border-slate-200'
-            }`}
-            placeholder="What is the capital of France?"
-            placeholderTextColor={isDark ? '#475569' : '#94a3b8'}
-            value={cardForm.front}
-            onChangeText={(t) => setCardForm({ ...cardForm, front: t })}
-            multiline
-            textAlignVertical="top"
-            style={{ minHeight: 88 }}
-          />
-          <Text className={`font-nunito-bold text-sm mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Back (Answer)</Text>
-          <TextInput
-            className={`p-4 rounded-2xl mb-6 font-nunito border ${
-              isDark ? 'bg-slate-800 text-white border-slate-700' : 'bg-slate-50 text-slate-900 border-slate-200'
-            }`}
-            placeholder="Paris"
-            placeholderTextColor={isDark ? '#475569' : '#94a3b8'}
-            value={cardForm.back}
-            onChangeText={(t) => setCardForm({ ...cardForm, back: t })}
-            multiline
-            textAlignVertical="top"
-            style={{ minHeight: 88 }}
-          />
-          <TouchableOpacity
-            onPress={handleSaveCard}
-            className="py-4 rounded-2xl items-center bg-indigo-500 shadow-lg shadow-indigo-500/30"
-          >
-            <Text className="font-nunito-bold text-white text-base">{editingCard ? 'Save Card' : 'Add Card'}</Text>
-          </TouchableOpacity>
+    <KeyboardSheet
+      visible={showAddCardModal}
+      onClose={() => setShowAddCardModal(false)}
+      title={editingCard ? 'Edit card' : 'New card'}
+      subtitle={activeDeck?.name}
+      icon="documents-outline"
+      tint={tints.grades}
+      headerRight={
+        <TouchableOpacity
+          onPress={() => setCardForm({ front: cardForm.back, back: cardForm.front })}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="Swap front and back"
+          style={{
+            flexDirection: 'row', alignItems: 'center', gap: 4,
+            paddingHorizontal: 10, height: 32, borderRadius: Radius.full,
+            backgroundColor: theme.surfaceSecondary,
+          }}
+        >
+          <Ionicons name="swap-vertical" size={14} color={theme.textSecondary} />
+          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: theme.textSecondary }}>Swap</Text>
+        </TouchableOpacity>
+      }
+      footer={
+        <View style={{ gap: 4 }}>
+          <PrimaryButton label={editingCard ? 'Save card' : 'Add card'} onPress={() => handleSaveCard(false)} />
+          {!editingCard && (
+            <TouchableOpacity
+              onPress={() => handleSaveCard(true)}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Save this card and start another"
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 9 }}
+            >
+              <Ionicons name="add" size={15} color={theme.textSecondary} />
+              <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>
+                Save & add another
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
-      </View>
-    </Modal>
+      }
+    >
+      <Text style={{ ...microLabel, marginBottom: 8 }}>Front · the prompt</Text>
+      <TextInput
+        style={{ ...fieldStyle, minHeight: 88, textAlignVertical: 'top', marginBottom: 16 }}
+        placeholder="What is the capital of France?"
+        placeholderTextColor={theme.textTertiary}
+        value={cardForm.front}
+        onChangeText={(t) => setCardForm({ ...cardForm, front: t })}
+        accessibilityLabel="Front of card"
+        multiline
+      />
+
+      <Text style={{ ...microLabel, marginBottom: 8 }}>Back · the answer</Text>
+      <TextInput
+        style={{ ...fieldStyle, minHeight: 88, textAlignVertical: 'top', marginBottom: 8 }}
+        placeholder="Paris"
+        placeholderTextColor={theme.textTertiary}
+        value={cardForm.back}
+        onChangeText={(t) => setCardForm({ ...cardForm, back: t })}
+        accessibilityLabel="Back of card"
+        multiline
+      />
+    </KeyboardSheet>
   );
+
+  // ─── Import ──────────────────────────────────────────────────────────────
 
   const renderImportModal = () => (
-    <Modal visible={showImportModal} transparent animationType="slide" onRequestClose={closeImportModal}>
-      <View className="flex-1 justify-end bg-black/60">
-        <Pressable className="flex-1" onPress={closeImportModal} />
-        <View className={`rounded-t-[32px] pt-4 pb-12 px-6 max-h-[88%] ${isDark ? 'bg-slate-900' : 'bg-white'}`}>
-          <View className="items-center mb-5">
-            <View className={`w-12 h-1.5 rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
-          </View>
-          <View className="flex-row justify-between items-center mb-6">
-            <Text className={`font-nunito-black text-xl ${isDark ? 'text-white' : 'text-slate-800'}`}>Import Cards</Text>
+    <KeyboardSheet
+      visible={showImportModal}
+      onClose={closeImportModal}
+      title="Import cards"
+      subtitle={activeDeck ? `Into ${activeDeck.name}` : undefined}
+      icon="cloud-upload-outline"
+      tint={tints.tools}
+      footer={
+        parsedImport.length > 0 ? (
+          <PrimaryButton
+            label={`Import ${parsedImport.length} card${parsedImport.length !== 1 ? 's' : ''}`}
+            onPress={handleConfirmImport}
+          />
+        ) : importText.trim().length > 0 ? (
+          <PrimaryButton label="Preview cards" onPress={handleParseText} />
+        ) : undefined
+      }
+    >
+      <Text style={{ ...microLabel, marginBottom: 8 }}>1 · What separates front from back?</Text>
+      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 18 }}>
+        {(['comma', 'semicolon', 'pipe', 'tab'] as const).map((sep) => {
+          const active = importSeparator === sep;
+          const glyph = sep === 'comma' ? ',' : sep === 'semicolon' ? ';' : sep === 'pipe' ? '|' : '⇥';
+          return (
             <TouchableOpacity
-              onPress={closeImportModal}
-              className={`w-8 h-8 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-            >
-              <Ionicons name="close" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-            </TouchableOpacity>
-          </View>
-          <View className="mb-4">
-            <Text className={`font-nunito-bold text-sm mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>1. Select Separator</Text>
-            <View className="flex-row" style={{ gap: 8 }}>
-              {(['comma', 'semicolon', 'pipe', 'tab'] as const).map((sep) => (
-                <TouchableOpacity
-                  key={sep}
-                  onPress={() => {
-                    setImportSeparator(sep);
-                    setParsedImport([]);
-                  }}
-                  className={`flex-1 py-2.5 rounded-xl border items-center justify-center ${
-                    importSeparator === sep
-                      ? 'bg-indigo-500/10 border-indigo-500'
-                      : isDark
-                      ? 'bg-slate-800 border-slate-700'
-                      : 'bg-slate-100 border-slate-200'
-                  }`}
-                >
-                  <Text
-                    className={`font-nunito-bold text-sm ${
-                      importSeparator === sep ? 'text-indigo-500' : isDark ? 'text-slate-400' : 'text-slate-500'
-                    }`}
-                  >
-                    {sep.charAt(0).toUpperCase() + sep.slice(1)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-          <View className="mb-4">
-            <Text className={`font-nunito-bold text-sm mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>2. Paste Text</Text>
-            <TextInput
-              value={importText}
-              onChangeText={(t) => {
-                setImportText(t);
-                setParsedImport([]);
+              key={sep}
+              onPress={() => { setImportSeparator(sep); setParsedImport([]); }}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={`Separate with ${sep}`}
+              style={{
+                flex: 1, height: 46, borderRadius: Radius.md,
+                alignItems: 'center', justifyContent: 'center',
+                backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary,
+                borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
               }}
-              multiline
-              numberOfLines={4}
-              placeholder={'Front, Back\nQ2, A2...'}
-              placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
-              style={{ minHeight: 100, textAlignVertical: 'top' }}
-              className={`w-full p-4 rounded-2xl font-nunito text-sm ${
-                isDark ? 'bg-slate-800 text-white' : 'bg-slate-50 text-slate-800'
-              }`}
-            />
-            {importText.trim().length > 0 && parsedImport.length === 0 && (
-              <TouchableOpacity
-                onPress={handleParseText}
-                className={`mt-3 py-3 rounded-xl items-center ${isDark ? 'bg-slate-700' : 'bg-slate-200'}`}
-              >
-                <Text className={`font-nunito-bold ${isDark ? 'text-white' : 'text-slate-700'}`}>Parse Text</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          <Text className={`font-nunito-bold text-sm mb-2 text-center ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>OR</Text>
-          <TouchableOpacity
-            onPress={handlePickFile}
-            disabled={importLoading}
-            className={`flex-row items-center justify-center p-4 rounded-2xl border-2 border-dashed mb-5 ${
-              isDark ? 'border-slate-600' : 'border-slate-300'
-            }`}
-          >
-            {importLoading ? (
-              <ActivityIndicator color="#3b82f6" />
-            ) : (
-              <>
-                <Ionicons name="cloud-upload-outline" size={22} color={isDark ? '#60a5fa' : '#3b82f6'} />
-                <Text className={`font-nunito-bold ml-2 ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>
-                  {importFileName || 'Upload .txt or .csv'}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
-          {parsedImport.length > 0 && (
-            <>
-              <Text className={`font-nunito-bold text-sm mb-3 ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                {parsedImport.length} card{parsedImport.length !== 1 ? 's' : ''} found — Preview
+            >
+              <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 15, color: active ? tints.tools.ink : theme.textSecondary }}>
+                {glyph}
               </Text>
-              <ScrollView className="max-h-44 mb-5" showsVerticalScrollIndicator={false}>
-                {parsedImport.slice(0, 10).map((card, idx) => (
-                  <View key={idx} className={`p-3 rounded-xl mb-2 ${isDark ? 'bg-slate-800' : 'bg-slate-50'}`}>
-                    <Text className={`font-nunito-bold text-xs ${isDark ? 'text-white' : 'text-slate-800'}`} numberOfLines={1}>
-                      {card.front}
-                    </Text>
-                    <Text className={`font-nunito text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`} numberOfLines={1}>
-                      {card.back}
+              <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 9.5, color: active ? tints.tools.ink : theme.textTertiary }}>
+                {sep}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <Text style={{ ...microLabel, marginBottom: 8 }}>2 · Paste your list</Text>
+      <TextInput
+        value={importText}
+        onChangeText={(t) => { setImportText(t); setParsedImport([]); }}
+        multiline
+        placeholder={'Front, Back\nQ2, A2…'}
+        placeholderTextColor={theme.textTertiary}
+        accessibilityLabel="Paste cards to import"
+        style={{ ...fieldStyle, minHeight: 104, textAlignVertical: 'top', fontSize: 14, marginBottom: 14 }}
+      />
+
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
+        <View style={{ flex: 1, height: 1, backgroundColor: theme.cardBorder }} />
+        <Text style={{ ...microLabel, marginHorizontal: 10 }}>or</Text>
+        <View style={{ flex: 1, height: 1, backgroundColor: theme.cardBorder }} />
+      </View>
+
+      <TouchableOpacity
+        onPress={handlePickFile}
+        disabled={importLoading}
+        activeOpacity={0.75}
+        accessibilityRole="button"
+        accessibilityLabel="Upload a text or CSV file"
+        style={{
+          flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+          height: 52, borderRadius: Radius.lg, marginBottom: 18,
+          borderWidth: 1, borderStyle: 'dashed',
+          borderColor: isDark ? '#3d4468' : '#cbd5e1',
+        }}
+      >
+        {importLoading ? (
+          <ActivityIndicator color={theme.primary} />
+        ) : (
+          <>
+            <Ionicons name="document-attach-outline" size={18} color={theme.textSecondary} />
+            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>
+              {importFileName || 'Upload a .txt or .csv file'}
+            </Text>
+          </>
+        )}
+      </TouchableOpacity>
+
+      {parsedImport.length > 0 && (
+        <>
+          <Text style={{ ...microLabel, marginBottom: 8 }}>
+            Preview · {parsedImport.length} card{parsedImport.length !== 1 ? 's' : ''} found
+          </Text>
+          {parsedImport.slice(0, 10).map((card, idx) => (
+            <Card key={idx} variant="sunken" padding={11} radius={Radius.md} style={{ marginBottom: 6 }}>
+              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text }}>
+                {card.front}
+              </Text>
+              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 2 }}>
+                {card.back}
+              </Text>
+            </Card>
+          ))}
+          {parsedImport.length > 10 && (
+            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, textAlign: 'center', paddingVertical: 6 }}>
+              …and {parsedImport.length - 10} more
+            </Text>
+          )}
+        </>
+      )}
+    </KeyboardSheet>
+  );
+
+  // ─── Exam prep ───────────────────────────────────────────────────────────
+
+  const renderExamModal = () => {
+    const daysLeft = Math.max(0, Math.ceil((examDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
+    const urgencyTint = daysLeft <= 1 ? tints.danger : daysLeft <= 7 ? tints.tasks : tints.attendance;
+    const paceLabel = daysLeft <= 1 ? 'Cram mode' : daysLeft <= 7 ? 'Intensive' : 'Standard pace';
+
+    return (
+      <KeyboardSheet
+        visible={showExamModal}
+        onClose={() => setShowExamModal(false)}
+        title="Exam prep"
+        subtitle="Reviews are spread with expanding intervals sized to your window"
+        icon="calendar-outline"
+        tint={tints.danger}
+        footer={
+          examPlan ? (
+            <PrimaryButton label="Apply exam schedule" onPress={applyExamSchedule} />
+          ) : (
+            <PrimaryButton
+              label="Generate study plan"
+              onPress={() => {
+                const d = Math.max(0.5, (examDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+                const totalCards = activeNode ? collectCards(activeNode).length : 0;
+                const { plan } = computeExamPlan(d, totalCards, examReviewsPerDay);
+                setExamPlan(plan);
+              }}
+            />
+          )
+        }
+      >
+        <Text style={{ ...microLabel, marginBottom: 8 }}>When is your exam?</Text>
+        <TouchableOpacity
+          onPress={() => setExamShowDatePicker(true)}
+          activeOpacity={0.75}
+          accessibilityRole="button"
+          accessibilityLabel={`Exam date, ${examDate.toDateString()}. Tap to change.`}
+          style={{
+            flexDirection: 'row', alignItems: 'center',
+            paddingHorizontal: 14, height: 52, borderRadius: Radius.lg, marginBottom: 10,
+            backgroundColor: theme.inputBg, borderWidth: 1, borderColor: theme.inputBorder,
+          }}
+        >
+          <Ionicons name="calendar" size={18} color={tints.danger.ink} style={{ marginRight: 10 }} />
+          <Text style={{ flex: 1, fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: theme.text }}>
+            {examDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color={theme.textTertiary} />
+        </TouchableOpacity>
+
+        {examShowDatePicker && (
+          <DateTimePicker
+            value={examDate}
+            mode="date"
+            display="default"
+            minimumDate={new Date()}
+            onChange={(e, d) => {
+              setExamShowDatePicker(false);
+              if (d) { setExamDate(d); setExamPlan(null); }
+            }}
+          />
+        )}
+
+        <View style={{
+          flexDirection: 'row', alignItems: 'center',
+          paddingHorizontal: 12, paddingVertical: 10, borderRadius: Radius.md, marginBottom: 18,
+          backgroundColor: urgencyTint.fill, borderWidth: 1, borderColor: urgencyTint.line,
+        }}>
+          <Ionicons name={daysLeft <= 3 ? 'alert-circle-outline' : 'information-circle-outline'} size={16} color={urgencyTint.ink} />
+          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: urgencyTint.ink, marginLeft: 7 }}>
+            {daysLeft === 0 ? 'Exam is today!' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} left`}
+          </Text>
+          <View style={{ flex: 1 }} />
+          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: theme.textSecondary }}>{paceLabel}</Text>
+        </View>
+
+        <Text style={{ ...microLabel, marginBottom: 8 }}>Review sessions</Text>
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 18 }}>
+          {([0, 3, 4, 5, 6] as const).map((n) => {
+            const active = examReviewsPerDay === n;
+            return (
+              <TouchableOpacity
+                key={n}
+                onPress={() => { setExamReviewsPerDay(n); setExamPlan(null); }}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={n === 0 ? 'Automatic number of sessions' : `${n} sessions`}
+                style={{
+                  flex: 1, height: 40, borderRadius: Radius.md,
+                  alignItems: 'center', justifyContent: 'center',
+                  backgroundColor: active ? tints.danger.fill : theme.surfaceSecondary,
+                  borderWidth: 1, borderColor: active ? tints.danger.line : theme.cardBorder,
+                }}
+              >
+                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: active ? tints.danger.ink : theme.textSecondary }}>
+                  {n === 0 ? 'Auto' : `${n}×`}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {examPlan && (
+          <>
+            <Text style={{ ...microLabel, marginBottom: 8 }}>
+              Your schedule · {examPlan.length} session{examPlan.length !== 1 ? 's' : ''}
+            </Text>
+            <Card variant="sunken" padding={12} radius={Radius.lg} style={{ marginBottom: 6 }}>
+              {examPlan.map((slot, i) => (
+                <View key={i} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: i === examPlan.length - 1 ? 0 : 9 }}>
+                  <View style={{
+                    width: 22, height: 22, borderRadius: 8, marginRight: 10,
+                    alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: i === 0 ? tints.danger.solid : theme.surfaceSecondary,
+                  }}>
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 10, color: i === 0 ? '#ffffff' : theme.textSecondary }}>
+                      {i + 1}
                     </Text>
                   </View>
-                ))}
-                {parsedImport.length > 10 && (
-                  <Text className={`font-nunito text-xs text-center py-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                    ...and {parsedImport.length - 10} more
+                  <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary }}>
+                    {slot.label}
                   </Text>
-                )}
-              </ScrollView>
-              <TouchableOpacity
-                onPress={handleConfirmImport}
-                className="py-4 rounded-2xl items-center bg-indigo-500 shadow-lg shadow-indigo-500/30"
-              >
-                <Text className="font-nunito-bold text-white text-base">
-                  Import {parsedImport.length} Card{parsedImport.length !== 1 ? 's' : ''}
-                </Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
-      </View>
-    </Modal>
-  );
-
-  const renderSettingsModal = () => (
-    <Modal visible={showSettingsModal} transparent animationType="slide" onRequestClose={() => setShowSettingsModal(false)}>
-      <View className="flex-1 justify-end bg-black/60">
-        <Pressable className="flex-1" onPress={() => setShowSettingsModal(false)} />
-        <View className={`rounded-t-[32px] pt-4 pb-12 px-6 max-h-[90%] ${isDark ? 'bg-slate-900' : 'bg-white'}`}>
-          <View className="items-center mb-5">
-            <View className={`w-12 h-1.5 rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
-          </View>
-          <View className="flex-row justify-between items-center mb-4">
-            <Text className={`font-nunito-black text-xl ${isDark ? 'text-white' : 'text-slate-800'}`}>Study Options</Text>
-            <TouchableOpacity
-              onPress={() => setShowSettingsModal(false)}
-              className={`w-8 h-8 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-            >
-              <Ionicons name="close" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-            </TouchableOpacity>
-          </View>
-          <Text className={`font-nunito text-sm mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-            FinScholar uses SM-2 Spaced Repetition. Customize your learning steps and intervals.
-          </Text>
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <View className="mb-4">
-              <Text className={`font-nunito-bold text-sm mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                Learning Steps (Minutes)
-              </Text>
-              <Text className={`font-nunito text-xs mb-2 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                Space-separated (e.g., "1 10")
-              </Text>
-              <TextInput
-                value={settingsForm.learningSteps}
-                onChangeText={(t) => setSettingsForm((prev) => ({ ...prev, learningSteps: t }))}
-                className={`w-full p-4 rounded-2xl font-nunito-bold text-base ${
-                  isDark ? 'bg-slate-800 text-white' : 'bg-slate-50 text-slate-800'
-                }`}
-              />
-            </View>
-            <View className="mb-4">
-              <Text className={`font-nunito-bold text-sm mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                Graduating Interval (Days)
-              </Text>
-              <TextInput
-                value={settingsForm.graduatingInterval}
-                onChangeText={(t) => setSettingsForm((prev) => ({ ...prev, graduatingInterval: t }))}
-                keyboardType="numeric"
-                className={`w-full p-4 rounded-2xl font-nunito-bold text-base ${
-                  isDark ? 'bg-slate-800 text-white' : 'bg-slate-50 text-slate-800'
-                }`}
-              />
-            </View>
-            <View className="mb-6">
-              <Text className={`font-nunito-bold text-sm mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                Easy Interval (Days)
-              </Text>
-              <TextInput
-                value={settingsForm.easyInterval}
-                onChangeText={(t) => setSettingsForm((prev) => ({ ...prev, easyInterval: t }))}
-                keyboardType="numeric"
-                className={`w-full p-4 rounded-2xl font-nunito-bold text-base ${
-                  isDark ? 'bg-slate-800 text-white' : 'bg-slate-50 text-slate-800'
-                }`}
-              />
-            </View>
-            <TouchableOpacity
-              onPress={async () => {
-                await saveSrSettings({
-                  learningSteps: settingsForm.learningSteps || '1 10',
-                  graduatingInterval: parseInt(settingsForm.graduatingInterval, 10) || 1,
-                  easyInterval: parseInt(settingsForm.easyInterval, 10) || 4,
-                  studyTimeHour: parseInt(settingsForm.studyTimeHour, 10) || 8,
-                  studyTimeMinute: parseInt(settingsForm.studyTimeMinute, 10) || 0,
-                });
-                setShowSettingsModal(false);
-              }}
-              className="w-full py-4 rounded-2xl items-center bg-indigo-500 shadow-lg shadow-indigo-500/30"
-            >
-              <Text className="font-nunito-bold text-white text-base">Save Settings</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  const renderExamModal = () => (
-    <Modal visible={showExamModal} transparent animationType="slide" onRequestClose={() => setShowExamModal(false)}>
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' }}>
-        <View className={`rounded-t-3xl p-6 pb-10 ${isDark ? 'bg-[#121212]' : 'bg-white'}`} style={{ maxHeight: '85%' }}>
-          <View className="flex-row items-center justify-between mb-2">
-            <View className="flex-row items-center" style={{ gap: 10 }}>
-              <View
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  backgroundColor: 'rgba(236,72,153,0.12)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <Ionicons name="calendar-outline" size={18} color="#ec4899" />
-              </View>
-              <Text className={`font-nunito-black text-lg ${isDark ? 'text-white' : 'text-slate-800'}`}>Exam Prep</Text>
-            </View>
-            <TouchableOpacity
-              onPress={() => setShowExamModal(false)}
-              className={`w-8 h-8 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-            >
-              <Ionicons name="close" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-            </TouchableOpacity>
-          </View>
-          <Text className={`font-nunito text-xs mb-5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-            Based on Cepeda et al. (2008) optimal spacing — reviews are distributed using expanding intervals sized to your study window.
-          </Text>
-
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <Text className={`font-nunito-bold text-sm mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-              When is your exam?
-            </Text>
-            <TouchableOpacity
-              onPress={() => setExamShowDatePicker(true)}
-              className={`flex-row items-center justify-between p-4 rounded-2xl border mb-1 ${
-                isDark ? 'bg-slate-800/60 border-slate-700' : 'bg-slate-50 border-slate-200'
-              }`}
-            >
-              <View className="flex-row items-center" style={{ gap: 8 }}>
-                <Ionicons name="calendar" size={18} color="#ec4899" />
-                <Text className={`font-nunito-bold text-sm ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                  {examDate.toLocaleDateString('en-US', {
-                    weekday: 'short',
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric',
-                  })}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={isDark ? '#64748b' : '#94a3b8'} />
-            </TouchableOpacity>
-            {examShowDatePicker && (
-              <DateTimePicker
-                value={examDate}
-                mode="date"
-                display="default"
-                minimumDate={new Date()}
-                onChange={(e, d) => {
-                  setExamShowDatePicker(false);
-                  if (d) {
-                    setExamDate(d);
-                    setExamPlan(null);
-                  }
-                }}
-              />
-            )}
-
-            {(() => {
-              const daysLeft = Math.max(0, Math.ceil((examDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
-              const urgency = daysLeft <= 1 ? '#ef4444' : daysLeft <= 3 ? '#f97316' : daysLeft <= 7 ? '#eab308' : '#10b981';
-              return (
-                <View className={`flex-row items-center mt-3 mb-4 px-3 py-2.5 rounded-xl`} style={{ backgroundColor: urgency + '15' }}>
-                  <Ionicons name={daysLeft <= 3 ? 'alert-circle-outline' : 'information-circle-outline'} size={16} color={urgency} />
-                  <Text className={`font-nunito-bold text-xs ml-2`} style={{ color: urgency }}>
-                    {daysLeft === 0 ? 'Exam is today!' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} remaining`}
-                  </Text>
-                  <Text className={`font-nunito text-xs ml-auto ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                    {daysLeft <= 1 ? 'Cram mode' : daysLeft <= 7 ? 'Intensive' : 'Standard pace'}
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: theme.text }}>
+                    {slot.cardsPerSession} cards
                   </Text>
                 </View>
-              );
-            })()}
-
-            <Text className={`font-nunito-bold text-sm mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-              Review Sessions
-            </Text>
-            <View className="flex-row items-center mb-4" style={{ gap: 8 }}>
-              <TouchableOpacity
-                onPress={() => {
-                  setExamReviewsPerDay(0);
-                  setExamPlan(null);
-                }}
-                className={`flex-1 py-2.5 rounded-xl items-center border ${
-                  examReviewsPerDay === 0
-                    ? 'border-pink-500 bg-pink-500/10'
-                    : isDark
-                    ? 'border-slate-700 bg-slate-800/40'
-                    : 'border-slate-200 bg-slate-50'
-                }`}
-              >
-                <Text
-                  className={`font-nunito-bold text-xs ${
-                    examReviewsPerDay === 0 ? 'text-pink-500' : isDark ? 'text-slate-400' : 'text-slate-500'
-                  }`}
-                >
-                  Auto
-                </Text>
-              </TouchableOpacity>
-              {[3, 4, 5, 6].map((n) => (
-                <TouchableOpacity
-                  key={n}
-                  onPress={() => {
-                    setExamReviewsPerDay(n);
-                    setExamPlan(null);
-                  }}
-                  className={`flex-1 py-2.5 rounded-xl items-center border ${
-                    examReviewsPerDay === n
-                      ? 'border-pink-500 bg-pink-500/10'
-                      : isDark
-                      ? 'border-slate-700 bg-slate-800/40'
-                      : 'border-slate-200 bg-slate-50'
-                  }`}
-                >
-                  <Text
-                    className={`font-nunito-bold text-xs ${
-                      examReviewsPerDay === n ? 'text-pink-500' : isDark ? 'text-slate-400' : 'text-slate-500'
-                    }`}
-                  >
-                    {n}x
-                  </Text>
-                </TouchableOpacity>
               ))}
-            </View>
+            </Card>
+            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, lineHeight: 15 }}>
+              Intervals expand over time for optimal retention — the spacing effect (Cepeda et al., 2008).
+            </Text>
+          </>
+        )}
+      </KeyboardSheet>
+    );
+  };
 
-            {!examPlan ? (
+  // ─── Move deck ───────────────────────────────────────────────────────────
+
+  const renderMoveModal = () => {
+    const paths = new Set<string>();
+    decks.forEach((d) => {
+      const parts = (d.subject || '').split('::').filter(Boolean);
+      for (let i = 1; i <= parts.length; i++) paths.add(parts.slice(0, i).join('::') + '::');
+    });
+    const folderOptions = ['', ...Array.from(paths).slice(0, 12)];
+
+    return (
+      <KeyboardSheet
+        visible={showMoveModal}
+        onClose={() => setShowMoveModal(false)}
+        title="Move deck"
+        subtitle={movingNode ? `Currently at ${movingNode.fullPath}` : undefined}
+        icon="move-outline"
+        tint={tints.tools}
+        footer={<PrimaryButton label="Move here" onPress={confirmMoveDeck} />}
+      >
+        <Text style={{ ...microLabel, marginBottom: 8 }}>Destination folder</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 16 }}>
+          {folderOptions.map((path) => {
+            const active = moveTargetPath === path;
+            return (
               <TouchableOpacity
-                onPress={() => {
-                  const daysLeft = Math.max(0.5, (examDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
-                  const totalCards = activeNode ? collectCards(activeNode).length : 0;
-                  const { plan } = computeExamPlan(daysLeft, totalCards, examReviewsPerDay);
-                  setExamPlan(plan);
-                }}
-                className="w-full py-3.5 rounded-2xl items-center bg-pink-500 shadow-lg shadow-pink-500/30 mb-4"
-              >
-                <Text className="font-nunito-bold text-white text-sm">Generate Study Plan</Text>
-              </TouchableOpacity>
-            ) : (
-              <View
-                className={`p-4 rounded-2xl border mb-4 ${
-                  isDark ? 'bg-slate-800/40 border-slate-700' : 'bg-slate-50 border-slate-200'
-                }`}
-              >
-                <Text className={`font-nunito-black text-xs mb-3 ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                  Your Review Schedule ({examPlan.length} sessions)
-                </Text>
-                {examPlan.map((slot, i) => (
-                  <View key={i} className="flex-row items-center mb-2">
-                    <View
-                      style={{
-                        width: 22,
-                        height: 22,
-                        borderRadius: 11,
-                        backgroundColor: i === 0 ? '#ec4899' : isDark ? '#334155' : '#e2e8f0',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        marginRight: 10,
-                      }}
-                    >
-                      <Text
-                        style={{
-                          fontFamily: 'Nunito_800ExtraBold',
-                          fontSize: 10,
-                          color: i === 0 ? '#fff' : isDark ? '#94a3b8' : '#64748b',
-                        }}
-                      >
-                        {i + 1}
-                      </Text>
-                    </View>
-                    <Text className={`font-nunito-bold text-xs flex-1 ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                      {slot.label}
-                    </Text>
-                    <Text className={`font-nunito text-[10px] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                      {slot.cardsPerSession} cards
-                    </Text>
-                  </View>
-                ))}
-                <Text className={`font-nunito text-[10px] mt-2 ${isDark ? 'text-slate-600' : 'text-slate-400'}`}>
-                  Intervals expand over time for optimal retention (spacing effect).
-                </Text>
-              </View>
-            )}
-
-            {examPlan && (
-              <TouchableOpacity
-                onPress={applyExamSchedule}
-                className="w-full py-4 rounded-2xl items-center bg-pink-500 shadow-lg shadow-pink-500/30"
-              >
-                <Text className="font-nunito-bold text-white text-base">Apply Exam Schedule</Text>
-              </TouchableOpacity>
-            )}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-
-  const renderMoveModal = () => (
-    <Modal visible={showMoveModal} transparent animationType="slide" onRequestClose={() => setShowMoveModal(false)}>
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' }}>
-        <View className={`rounded-t-3xl p-6 pb-10 ${isDark ? 'bg-[#121212]' : 'bg-white'}`}>
-          <View className="flex-row items-center justify-between mb-2">
-            <View className="flex-row items-center" style={{ gap: 10 }}>
-              <View
+                key={path || '__root__'}
+                onPress={() => setMoveTargetPath(path)}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={path ? `Move under ${path}` : 'Move to top level'}
                 style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  backgroundColor: 'rgba(99,102,241,0.12)',
-                  alignItems: 'center',
-                  justifyContent: 'center',
+                  flexDirection: 'row', alignItems: 'center', gap: 5,
+                  paddingHorizontal: 11, height: 32, borderRadius: Radius.full,
+                  backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary,
+                  borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
                 }}
               >
-                <Ionicons name="move-outline" size={18} color="#6366f1" />
-              </View>
-              <Text className={`font-nunito-black text-lg ${isDark ? 'text-white' : 'text-slate-800'}`}>Move Deck</Text>
-            </View>
-            <TouchableOpacity
-              onPress={() => setShowMoveModal(false)}
-              className={`w-8 h-8 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-            >
-              <Ionicons name="close" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
-            </TouchableOpacity>
-          </View>
-          <Text className={`font-nunito text-xs mb-4 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-            Enter the destination path. Use "::" to nest under a folder. Leave empty to move to root level.
-          </Text>
-
-          {movingNode && (
-            <View className={`flex-row items-center mb-3 px-3 py-2.5 rounded-xl ${isDark ? 'bg-slate-800/60' : 'bg-slate-50'}`}>
-              <Ionicons name="location-outline" size={14} color={isDark ? '#94a3b8' : '#64748b'} />
-              <Text className={`font-nunito text-xs ml-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                Current: <Text className="font-nunito-bold">{movingNode.fullPath}</Text>
-              </Text>
-            </View>
-          )}
-
-          <Text className={`font-nunito-bold text-sm mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-            Destination Path
-          </Text>
-          <TextInput
-            value={moveTargetPath}
-            onChangeText={setMoveTargetPath}
-            placeholder="e.g. DDS032:: (or empty for root)"
-            placeholderTextColor={isDark ? '#475569' : '#94a3b8'}
-            className={`w-full p-4 rounded-2xl font-nunito-bold text-sm mb-4 ${
-              isDark ? 'bg-slate-800 text-white' : 'bg-slate-50 text-slate-800'
-            }`}
-          />
-
-          <Text className={`font-nunito-bold text-xs mb-2 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>Existing folders:</Text>
-          <View className="flex-row flex-wrap mb-4" style={{ gap: 6 }}>
-            {(() => {
-              const paths = new Set<string>();
-              decks.forEach((d) => {
-                const parts = d.subject.split('::');
-                for (let i = 1; i <= parts.length; i++) paths.add(parts.slice(0, i).join('::') + '::');
-              });
-              return Array.from(paths)
-                .slice(0, 8)
-                .map((p) => (
-                  <TouchableOpacity
-                    key={p}
-                    onPress={() => setMoveTargetPath(p)}
-                    className={`px-3 py-1.5 rounded-lg ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
-                  >
-                    <Text className={`font-nunito text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{p}</Text>
-                  </TouchableOpacity>
-                ));
-            })()}
-          </View>
-
-          <TouchableOpacity
-            onPress={confirmMoveDeck}
-            className="w-full py-4 rounded-2xl items-center bg-indigo-500 shadow-lg shadow-indigo-500/30"
-          >
-            <Text className="font-nunito-bold text-white text-base">Move Here</Text>
-          </TouchableOpacity>
+                <Ionicons
+                  name={path ? 'folder-outline' : 'home-outline'}
+                  size={13}
+                  color={active ? tints.tools.ink : theme.textTertiary}
+                />
+                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: active ? tints.tools.ink : theme.textSecondary }}>
+                  {path || 'Top level'}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
-      </View>
-    </Modal>
-  );
+
+        <Text style={{ ...microLabel, marginBottom: 8 }}>Or type a path</Text>
+        <TextInput
+          value={moveTargetPath}
+          onChangeText={setMoveTargetPath}
+          placeholder="e.g. BIOL101:: — leave empty for top level"
+          placeholderTextColor={theme.textTertiary}
+          accessibilityLabel="Destination path"
+          style={{ ...fieldStyle, marginBottom: 6 }}
+        />
+        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, lineHeight: 15 }}>
+          "::" nests one level. "BIOL101::Unit 2::" puts the deck two folders deep.
+        </Text>
+      </KeyboardSheet>
+    );
+  };
 
   // ─────────────────────────────────────────────────────────────────────────
   // Root render
@@ -3976,11 +3705,11 @@ export default function FlashcardsScreen() {
       {view === 'decks' && renderDecks()}
       {view === 'detail' && renderDetail()}
       {view === 'study' && renderStudy()}
-      {view === 'manage' && renderManage()}
       {view === 'quiz' && renderQuiz()}
       {view === 'match' && renderMatch()}
 
       {renderCreateSheet()}
+      {renderDeckActionSheet()}
       {renderAddDeckModal()}
       {renderAddCardModal()}
       {renderImportModal()}

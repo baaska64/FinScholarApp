@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   View,
   Image,
@@ -24,9 +24,21 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
 interface AnimatedSplashProps {
   onFinish: () => void;
+  /**
+   * Whether the app behind the splash is ready to show. The exit waits for
+   * this: previously the splash faded itself out on a fixed 2.5s timer while
+   * the root layout kept it mounted until fonts finished, so a slow load left
+   * the user staring at an invisible splash over a blank screen.
+   */
+  ready?: boolean;
 }
 
-export default function AnimatedSplash({ onFinish }: AnimatedSplashProps) {
+/** Floor for how long the splash stays up, so a fast boot doesn't flash it. */
+const MIN_VISIBLE_MS = 1500;
+
+export default function AnimatedSplash({ onFinish, ready = true }: AnimatedSplashProps) {
+  const exitStarted = useRef(false);
+  const introDoneAt = useRef(Date.now() + MIN_VISIBLE_MS);
   // ─── Shared values ────────────────────────────────────────────
   const mascotScale = useSharedValue(0.3);
   const mascotOpacity = useSharedValue(0);
@@ -40,6 +52,7 @@ export default function AnimatedSplash({ onFinish }: AnimatedSplashProps) {
 
   const overallOpacity = useSharedValue(1);
   const overallScale = useSharedValue(1);
+  const overallLift = useSharedValue(0);
 
   // Decorative blobs (matching welcome screen)
   const blob1Scale = useSharedValue(0.5);
@@ -61,8 +74,8 @@ export default function AnimatedSplash({ onFinish }: AnimatedSplashProps) {
     blob3Scale.value = withDelay(200, withSpring(1, { damping: 8, stiffness: 40 }));
 
     // ─── Step 2: Mascot bounces in (200ms) ──────────────────────
-    mascotOpacity.value = withDelay(150, withTiming(1, { duration: 300 }));
-    mascotScale.value = withDelay(150, withSpring(1, {
+    mascotOpacity.value = withDelay(120, withTiming(1, { duration: 260 }));
+    mascotScale.value = withDelay(120, withSpring(1, {
       damping: 7,
       stiffness: 100,
       mass: 0.9,
@@ -81,15 +94,15 @@ export default function AnimatedSplash({ onFinish }: AnimatedSplashProps) {
     }, 500);
 
     // ─── Step 4: Title slides up (450ms) ────────────────────────
-    titleOpacity.value = withDelay(450, withTiming(1, { duration: 400 }));
-    titleTranslateY.value = withDelay(450, withSpring(0, { damping: 14, stiffness: 100 }));
+    titleOpacity.value = withDelay(380, withTiming(1, { duration: 340 }));
+    titleTranslateY.value = withDelay(380, withSpring(0, { damping: 14, stiffness: 110 }));
 
     // ─── Step 5: Subtitle slides up (650ms) ─────────────────────
-    subtitleOpacity.value = withDelay(650, withTiming(1, { duration: 350 }));
-    subtitleTranslateY.value = withDelay(650, withSpring(0, { damping: 14, stiffness: 100 }));
+    subtitleOpacity.value = withDelay(540, withTiming(1, { duration: 300 }));
+    subtitleTranslateY.value = withDelay(540, withSpring(0, { damping: 14, stiffness: 110 }));
 
     // ─── Step 6: Bottom accent bar slides in (800ms) ────────────
-    barWidth.value = withDelay(800, withSpring(60, { damping: 12, stiffness: 80 }));
+    barWidth.value = withDelay(660, withSpring(60, { damping: 12, stiffness: 80 }));
 
     // ─── Step 7: Sparkle twinkle loops ──────────────────────────
     sparkle1Opacity.value = withDelay(600, withRepeat(
@@ -111,27 +124,31 @@ export default function AnimatedSplash({ onFinish }: AnimatedSplashProps) {
       ), -1, true,
     ));
 
-    // ─── Step 8: Exit animation (2.5s) ──────────────────────────
+  }, []);
+
+  // ─── Exit: as soon as the app is ready, never before the floor ────
+  useEffect(() => {
+    if (!ready || exitStarted.current) return;
+    const wait = Math.max(0, introDoneAt.current - Date.now());
     const timeout = setTimeout(() => {
-      overallOpacity.value = withTiming(0, {
-        duration: 350,
-        easing: Easing.out(Easing.ease),
-      });
-      overallScale.value = withTiming(1.08, {
-        duration: 350,
-        easing: Easing.out(Easing.ease),
-      }, () => {
+      if (exitStarted.current) return;
+      exitStarted.current = true;
+      // Lift and fade rather than zoom: the welcome screen shows the same
+      // mascot in roughly the same place, so the splash should get out of
+      // its way, not push toward the viewer.
+      overallOpacity.value = withTiming(0, { duration: 320, easing: Easing.out(Easing.cubic) });
+      overallLift.value = withTiming(-26, { duration: 320, easing: Easing.out(Easing.cubic) });
+      overallScale.value = withTiming(1.03, { duration: 320, easing: Easing.out(Easing.cubic) }, () => {
         runOnJS(onFinish)();
       });
-    }, 2500);
-
+    }, wait);
     return () => clearTimeout(timeout);
-  }, []);
+  }, [ready]);
 
   // ─── Animated styles ──────────────────────────────────────────
   const containerStyle = useAnimatedStyle(() => ({
     opacity: overallOpacity.value,
-    transform: [{ scale: overallScale.value }],
+    transform: [{ translateY: overallLift.value }, { scale: overallScale.value }],
   }));
 
   const mascotStyle = useAnimatedStyle(() => ({

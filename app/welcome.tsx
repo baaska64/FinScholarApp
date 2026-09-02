@@ -25,13 +25,14 @@ export default function WelcomeScreen() {
   const heroBg = isDark ? '#12103d' : '#4f46e5';
   const pageBg = isDark ? '#1a1f3d' : '#ffffff'; // Match cardBg to prevent ugly gaps at the bottom
   const cardBg = isDark ? '#1a1f3d' : '#ffffff';
-  const cardBorder = isDark ? '#2d2f54' : '#e8e8f4';
-  const textPrimary = isDark ? '#f1f5f9' : '#1e293b';
-  const textSecondary = isDark ? '#94a3b8' : '#64748b';
+  const cardBorder = isDark ? '#2d2f54' : '#e3e5f0';
+  const textPrimary = isDark ? '#f1f2f9' : '#1e293b';
+  const textSecondary = isDark ? '#c2c6dc' : '#525f78';
+  const lip = isDark ? '#0d0e21' : '#d8dbea';
 
   // ─── Animations ────────────────────────────────────────────────────────
   const mascotFloat = useRef(new Animated.Value(0)).current;
-  const mascotScale = useRef(new Animated.Value(0.3)).current;
+  const mascotScale = useRef(new Animated.Value(0.94)).current;
   const titleFade = useRef(new Animated.Value(0)).current;
   const cardSlide = useRef(new Animated.Value(0)).current;
   const blob1 = useRef(new Animated.Value(0.5)).current;
@@ -41,9 +42,10 @@ export default function WelcomeScreen() {
   const sparkle2 = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Mascot bounce-in
+    // Settle, don't bounce: the splash just showed this mascot at full size,
+    // so this is a continuation of that shot rather than a new entrance.
     Animated.spring(mascotScale, {
-      toValue: 1, friction: 4, tension: 50, useNativeDriver: true, delay: 200,
+      toValue: 1, friction: 7, tension: 80, useNativeDriver: true,
     }).start();
 
     // Gentle float loop
@@ -251,10 +253,8 @@ export default function WelcomeScreen() {
                 flex: 1, height: 54, borderRadius: 16,
                 alignItems: 'center', justifyContent: 'center',
                 backgroundColor: '#4f46e5',
-                ...Platform.select({
-                  ios: { shadowColor: '#4f46e5', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
-                  android: { elevation: 5 },
-                }),
+                borderBottomWidth: 3,
+                borderBottomColor: '#3730a3',
               }}
               onPress={() => router.push({ pathname: '/login', params: { mode: 'signin' } })}
               activeOpacity={0.85}
@@ -269,9 +269,11 @@ export default function WelcomeScreen() {
               style={{
                 flex: 1, height: 54, borderRadius: 16,
                 alignItems: 'center', justifyContent: 'center',
-                backgroundColor: 'transparent',
-                borderWidth: 2,
-                borderColor: '#4f46e5',
+                backgroundColor: isDark ? 'rgba(129,140,248,0.10)' : '#eef0fe',
+                borderWidth: 1.5,
+                borderColor: isDark ? 'rgba(129,140,248,0.45)' : '#c7cbf7',
+                borderBottomWidth: 3,
+                borderBottomColor: isDark ? 'rgba(129,140,248,0.55)' : '#b3b8f2',
               }}
               onPress={() => router.push({ pathname: '/login', params: { mode: 'signup' } })}
               activeOpacity={0.85}
@@ -284,14 +286,41 @@ export default function WelcomeScreen() {
 
           {/* Guest access */}
           <TouchableOpacity
-            style={{ paddingVertical: 14, alignItems: 'center' }}
+            style={{
+              height: 52,
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexDirection: 'row',
+              borderRadius: 16,
+              backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#f4f5fb',
+              borderWidth: 1,
+              borderColor: cardBorder,
+              borderBottomWidth: 2,
+              borderBottomColor: lip,
+            }}
             onPress={() => router.replace('/(tabs)')}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Continue without an account"
           >
+            <Ionicons name="phone-portrait-outline" size={16} color={textSecondary} style={{ marginRight: 6 }} />
             <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, color: textSecondary }}>
-              Continue as guest
+              Continue without an account
             </Text>
           </TouchableOpacity>
+
+          <Text
+            style={{
+              fontFamily: 'Nunito_400Regular',
+              fontSize: 12,
+              color: textSecondary,
+              textAlign: 'center',
+              marginTop: 12,
+              lineHeight: 17,
+            }}
+          >
+            Everything works offline. Signing in later adds cloud backup — nothing you enter now is lost.
+          </Text>
         </View>
       </Animated.View>
     </View>

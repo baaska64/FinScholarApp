@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, ScrollView, Modal, TextInput, TouchableOpacity, Pressable } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/services/supabaseClient';
@@ -15,7 +15,9 @@ import SubjectCard from '@/components/ledger/SubjectCard';
 import ActiveSubjectView from '@/components/ledger/ActiveSubjectView';
 import { AlertService } from '@/components/CustomAlert';
 import { useSemesterContext } from '@/components/SemesterContext';
-import { getTheme, Typography, Radius, Shadows } from '@/constants/Theme';
+import { getTheme, getTints, Typography, Radius } from '@/constants/Theme';
+import Card from '@/components/ui/Card';
+import AnimatedPressable from '@/components/ui/AnimatedPressable';
 import { ListSkeleton } from '@/components/ui/LoadingSkeleton';
 import PremiumPaywallModal from '@/components/PremiumPaywallModal';
 import {
@@ -24,6 +26,10 @@ import {
   getUnscheduledSubjects,
   getTrackedSubjects,
 } from '@/utils/subjectRegistry';
+import SpotlightTarget from '@/components/spotlight/SpotlightTarget';
+import { useScreenTour } from '@/components/spotlight/useScreenTour';
+import { SPOTLIGHT_IDS, TOUR_KEYS, GRADES_TOUR } from '@/constants/tours';
+import { useTabBarHeight } from '@/components/CustomTabBar';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -49,6 +55,15 @@ const INITIAL_DATA = {
   years: []
 };
 
+const GRADING_SYSTEMS: { key: string; label: string; hint: string }[] = [
+  { key: '1_IS_BEST', label: '1.0 is Best', hint: 'Philippine standard — 1.00 highest, 5.00 lowest' },
+  { key: '5_IS_BEST', label: '5.0 is Best', hint: '5.00 highest, 1.00 lowest' },
+  { key: '4_IS_BEST', label: '4.0 is Best', hint: 'US-style GPA — 4.00 highest' },
+  { key: 'PERCENT', label: 'Percentage', hint: 'Raw 0–100% with no conversion' },
+];
+
+const GUTTER = 14;
+
 export default function GradeLedgerTab() {
   const [data, setData] = useState<any>(null);
   const { selectedYear: activeYearId, selectedSemester: activeSemId } = useSemesterContext();
@@ -65,11 +80,18 @@ export default function GradeLedgerTab() {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const theme = getTheme(isDark);
+  const tints = getTints(isDark);
+  const insets = useSafeAreaInsets();
+  const tabBarHeight = useTabBarHeight();
 
   // ── Add Subject modal state
   const [showAddSubjectModal, setShowAddSubjectModal] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState('');
   const [addSubjectError, setAddSubjectError] = useState('');
+
+  // ── Per-subject action sheet. One modal for the whole list rather than three
+  //    buttons parked on every card.
+  const [menuSubjectId, setMenuSubjectId] = useState<string | null>(null);
 
   useEffect(() => {
     setIsPremium(SyncService.getIsPremium());
@@ -115,7 +137,7 @@ export default function GradeLedgerTab() {
           if (sub.hasSchedule === undefined) sub.hasSchedule = false;
         });
       }));
-      
+
       setIsPremium(SyncService.getIsPremium());
       setData(loaded);
   }, []);
@@ -145,6 +167,9 @@ export default function GradeLedgerTab() {
     await SyncService.pushLocalChanges(newData);
   }, []);
 
+  // First visit only: point at whichever "add subject" control is on screen.
+  useScreenTour(TOUR_KEYS.grades, GRADES_TOUR, data !== null);
+
   if (!data) return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
       <ListSkeleton count={3} cardHeight={140} />
@@ -154,6 +179,7 @@ export default function GradeLedgerTab() {
   const currentYear = data.years?.find((y: any) => y.id === activeYearId);
   const currentSem = currentYear?.semesters?.find((s: any) => s.id === activeSemId);
   const system = data.settings?.gradingSystem || '1_IS_BEST';
+  const systemLabel = GRADING_SYSTEMS.find(s => s.key === system)?.label || '1.0 is Best';
 
   let semPercent = 0, semEq = 0, yearPercent = 0, yearEq = 0, cumPercent = 0, cumEq = 0;
   if (currentSem) {
@@ -173,6 +199,7 @@ export default function GradeLedgerTab() {
   // Active filter subjects
   const allSubjects = currentSem?.subjects || [];
   const trackedSubjects = currentSem ? getTrackedSubjects(currentSem) : [];
+  const pausedCount = allSubjects.length - trackedSubjects.length;
   const displayedSubjects = activeTab === 'tracked' ? trackedSubjects : allSubjects;
 
   const sortedSubjects = [...displayedSubjects].sort((a: any, b: any) => {
@@ -181,6 +208,9 @@ export default function GradeLedgerTab() {
     if (aTracked === bTracked) return 0;
     return aTracked ? -1 : 1;
   });
+
+  const activeSubject = activeSubId ? currentSem?.subjects?.find((s: any) => s.id === activeSubId) : null;
+  const menuSubject = menuSubjectId ? allSubjects.find((s: any) => s.id === menuSubjectId) : null;
 
   // ── Add Subject handler
   const handleAddSubject = () => {
@@ -238,9 +268,9 @@ export default function GradeLedgerTab() {
       `Are you sure you want to delete ${sub.name}?`,
       [
         { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
-          style: "destructive", 
+        {
+          text: "Delete",
+          style: "destructive",
           onPress: () => {
             const nd = JSON.parse(JSON.stringify(data));
             const sem = nd.years.find((y: any) => y.id === activeYearId)?.semesters.find((s: any) => s.id === activeSemId);
@@ -248,7 +278,7 @@ export default function GradeLedgerTab() {
               sem.subjects = sem.subjects.filter((s: any) => s.id !== sub.id);
               saveData(nd);
             }
-          } 
+          }
         }
       ]
     );
@@ -273,9 +303,9 @@ export default function GradeLedgerTab() {
       `Are you sure you want to delete ${selectedSubjects.size} subject(s)?`,
       [
         { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
-          style: "destructive", 
+        {
+          text: "Delete",
+          style: "destructive",
           onPress: () => {
             const nd = JSON.parse(JSON.stringify(data));
             const sem = nd.years.find((y: any) => y.id === activeYearId)?.semesters.find((s: any) => s.id === activeSemId);
@@ -300,450 +330,390 @@ export default function GradeLedgerTab() {
     }
   };
 
+  const microLabel = {
+    fontFamily: 'Nunito_800ExtraBold' as const,
+    fontSize: 10,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase' as const,
+    color: theme.textTertiary,
+  };
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     Subject detail replaces the whole screen rather than rendering inside the
+     list's ScrollView. It used to be nested inside one, so the detail view's
+     own scroll fought the page's — and its Back button scrolled away with the
+     content.
+     ══════════════════════════════════════════════════════════════════════════ */
+  if (activeSubject && currentSem) {
+    return (
+      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+        <ActiveSubjectView
+          subject={activeSubject}
+          system={system}
+          onBack={() => setActiveSubId(null)}
+          onChange={(newSubject: any) => {
+            const nd = JSON.parse(JSON.stringify(data));
+            const sem = nd.years.find((y: any) => y.id === activeYearId)?.semesters.find((s: any) => s.id === activeSemId);
+            if (sem) {
+              const idx = sem.subjects.findIndex((s: any) => s.id === activeSubId);
+              if (idx !== -1) {
+                const oldName = sem.subjects[idx].name;
+                sem.subjects[idx] = newSubject;
+
+                // Update connected schedule blocks if subject was renamed
+                if (newSubject.name !== oldName && sem.classes) {
+                  sem.classes.forEach((c: any) => {
+                    if (c.subjectId === activeSubId) {
+                      c.name = newSubject.name;
+                    }
+                  });
+                }
+                saveData(nd);
+              }
+            }
+          }}
+        />
+      </SafeAreaView>
+    );
+  }
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
-      {/* Screen Header Actions Bar */}
-      <View style={{
-        paddingHorizontal: 16, paddingTop: 14, paddingBottom: 14, zIndex: 10,
-        borderBottomWidth: 1, borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
-        backgroundColor: theme.surface,
-        ...(!isDark ? Shadows.sm : {}),
-      }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          {/* Header Title & Subtitle */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, paddingRight: 12 }}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+      {/* ══ App bar — flush with the page, term switcher as the subtitle chip,
+             matching the schedule tab. The old bar was a bordered, shadowed
+             panel with two near-identical gear icons; grading options moved to
+             the summary card they configure, so only one gear is left. ══════ */}
+      <View
+        style={{
+          flexDirection: 'row', alignItems: 'center',
+          paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10, zIndex: 10,
+          backgroundColor: theme.background,
+        }}
+      >
+        <View style={{ flex: 1, marginRight: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
             <View style={{
-              width: 38, height: 38, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', marginRight: 10,
-              backgroundColor: isDark ? 'rgba(99,102,241,0.2)' : '#e0e7ff',
-              flexShrink: 0
+              width: 32, height: 32, borderRadius: 10,
+              backgroundColor: tints.grades.fill,
+              borderWidth: 1, borderColor: tints.grades.line,
+              alignItems: 'center', justifyContent: 'center',
             }}>
-              <Ionicons name="school" size={19} color={isDark ? '#818cf8' : '#4f46e5'} />
+              <Ionicons name="school" size={17} color={tints.grades.ink} />
             </View>
-            
-              <View style={{ flex: 1, justifyContent: 'center' }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
-                  <Text numberOfLines={1} style={{ ...Typography.title, color: theme.text, fontSize: 20, flexShrink: 1, marginRight: 8 }}>
-                    Grade Ledger
-                  </Text>
-                </View>
-                
-                <Text numberOfLines={1} style={{ ...Typography.caption, color: theme.textTertiary, fontSize: 12 }}>
-                  Track grades & calculate GWAs
-                </Text>
+            <Text
+              accessibilityRole="header"
+              numberOfLines={1}
+              style={{ fontFamily: 'Nunito_900Black', fontSize: 19, color: theme.text, letterSpacing: -0.4, flexShrink: 1 }}
+            >
+              Grade Ledger
+            </Text>
+            {isPremium ? (
+              <View style={{ backgroundColor: tints.attendance.solid, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                <Text style={{ fontSize: 9.5, fontFamily: 'Nunito_800ExtraBold', color: '#fff', letterSpacing: 0.3 }}>PRO</Text>
               </View>
+            ) : (
+              <TouchableOpacity
+                onPress={() => setShowPaywall(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Upgrade to FinScholar Pro"
+                style={{ backgroundColor: theme.primary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', gap: 3 }}
+              >
+                <Ionicons name="diamond" size={9} color="#fff" />
+                <Text style={{ fontSize: 9.5, fontFamily: 'Nunito_800ExtraBold', color: '#fff' }}>GET PRO</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
-          {/* Header Controls (Sync, Settings, Profile) */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-            {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={20} color={theme.textTertiary} />}
-            {syncStatus === 'saved' && <Ionicons name="cloud-done" size={20} color={theme.success} />}
-            {syncStatus === 'offline' && <Ionicons name="cloud-offline" size={20} color={theme.textTertiary} />}
-
-            <TouchableOpacity 
-              onPress={() => setShowSettings(true)}
-              activeOpacity={0.7}
-              style={{ 
-                width: 36, height: 36, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', 
-                backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9' 
-              }}
-            >
-              <Ionicons name="options-outline" size={20} color={isDark ? '#cbd5e1' : '#475569'} />
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              onPress={() => router.push('/(tabs)/profile')}
-              activeOpacity={0.7}
-              style={{ 
-                width: 36, height: 36, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', 
-                backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9' 
-              }}
-            >
-              <Ionicons name="settings-outline" size={20} color={isDark ? '#cbd5e1' : '#475569'} />
-            </TouchableOpacity>
+          <View style={{ paddingLeft: 41, marginTop: 1 }}>
+            <Tabs
+              compact
+              years={data.years}
+              activeYearId={activeYearId}
+              activeSemId={activeSemId}
+              onSelectYear={() => { setActiveSubId(null); setIsEditing(false); setSelectedSubjects(new Set()); }}
+              onSelectSem={() => { setActiveSubId(null); setIsEditing(false); setSelectedSubjects(new Set()); }}
+            />
           </View>
+        </View>
+
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View
+            accessible
+            accessibilityLabel={syncStatus === 'syncing' ? 'Syncing' : syncStatus === 'saved' ? 'Synced' : 'Offline'}
+            style={{ width: 22, alignItems: 'center' }}
+          >
+            {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={19} color={theme.textTertiary} />}
+            {syncStatus === 'saved' && <Ionicons name="cloud-done" size={19} color={tints.attendance.solid} />}
+            {(syncStatus === 'offline' || syncStatus === 'error') && <Ionicons name="cloud-offline" size={19} color={theme.textTertiary} />}
+          </View>
+
+          <TouchableOpacity
+            onPress={() => router.push('/(tabs)/profile')}
+            accessibilityRole="button"
+            accessibilityLabel="Settings"
+            style={{
+              width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+              backgroundColor: theme.surface,
+              borderWidth: 1, borderColor: theme.cardBorder,
+              borderBottomWidth: 2, borderBottomColor: theme.lip,
+            }}
+          >
+            <Ionicons name="settings-outline" size={18} color={theme.textSecondary} />
+          </TouchableOpacity>
         </View>
       </View>
 
-      <ScrollView 
-        className="flex-1 px-4 pt-4" 
-        contentContainerStyle={{ paddingBottom: 100 }} 
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}
         removeClippedSubviews={true}
         showsVerticalScrollIndicator={false}
       >
-        <View style={{ width: '100%', maxWidth: 800, alignSelf: 'center' }}>
-        {activeSubId && currentSem ? (
-          <ActiveSubjectView 
-            subject={currentSem.subjects.find((s: any) => s.id === activeSubId)}
+        <View style={{ width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: GUTTER, paddingTop: 2 }}>
+
+          {/* ══ Standing: semester leads, year and overall follow ═══════════ */}
+          <GwaSummary
+            semGwa={system === 'PERCENT' ? semPercent : semEq}
+            yearGwa={system === 'PERCENT' ? yearPercent : yearEq}
+            cumGwa={system === 'PERCENT' ? cumPercent : cumEq}
+            semPercent={semPercent}
+            yearPercent={yearPercent}
+            cumPercent={cumPercent}
             system={system}
-            onBack={() => setActiveSubId(null)}
-            onChange={(newSubject: any) => {
-              const nd = JSON.parse(JSON.stringify(data));
-              const sem = nd.years.find((y: any) => y.id === activeYearId)?.semesters.find((s: any) => s.id === activeSemId);
-              if (sem) {
-                const idx = sem.subjects.findIndex((s: any) => s.id === activeSubId);
-                if (idx !== -1) {
-                  const oldName = sem.subjects[idx].name;
-                  sem.subjects[idx] = newSubject;
-                  
-                  // Update connected schedule blocks if subject was renamed
-                  if (newSubject.name !== oldName && sem.classes) {
-                    sem.classes.forEach((c: any) => {
-                      if (c.subjectId === activeSubId) {
-                        c.name = newSubject.name;
-                      }
-                    });
-                  }
-                  saveData(nd);
-                }
-              }
-            }}
+            systemLabel={systemLabel}
+            onOpenSettings={() => setShowSettings(true)}
           />
-        ) : (
-          <>
-            {/* Top GWA Summary (Overall Hero Banner + Side-by-side Semester/Year Donut Cards) */}
-            <GwaSummary 
-              semGwa={system === 'PERCENT' ? semPercent : semEq} 
-              yearGwa={system === 'PERCENT' ? yearPercent : yearEq} 
-              cumGwa={system === 'PERCENT' ? cumPercent : cumEq} 
-              semPercent={semPercent}
-              yearPercent={yearPercent}
-              cumPercent={cumPercent}
-              system={system} 
-            />
 
-            {/* Academic Term Switcher & View Filter Tabs */}
-            <Tabs 
-              years={data.years} 
-              activeYearId={activeYearId} 
-              activeSemId={activeSemId}
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-              onSelectYear={() => setActiveSubId(null)}
-              onSelectSem={() => setActiveSubId(null)}
-            />
-
-            {/* Empty State A: No Academic Terms / Semester Selected */}
-            {!currentSem ? (
-              <View 
-                style={{
-                  borderRadius: Radius['2xl'],
-                  padding: 28,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  marginTop: 16,
-                  borderWidth: 1,
-                  borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-                  backgroundColor: isDark ? theme.card : theme.surface,
-                  ...Shadows.md,
-                }}
-              >
-                <View style={{
-                  width: 60, height: 60, borderRadius: Radius.full,
-                  alignItems: 'center', justifyContent: 'center', marginBottom: 16,
-                  backgroundColor: isDark ? 'rgba(99,102,241,0.2)' : '#e0e7ff',
-                }}>
-                  <Ionicons name="folder-open-outline" size={32} color={isDark ? '#818cf8' : '#4f46e5'} />
-                </View>
-                {data?.years?.length === 0 ? (
-                  <>
-                    <Text style={{ ...Typography.title, fontSize: 18, color: theme.text, textAlign: 'center', marginBottom: 8 }}>
-                      No Academic Terms Found
-                    </Text>
-                    <Text style={{ ...Typography.body, fontSize: 14, color: theme.textSecondary, textAlign: 'center', marginBottom: 20, lineHeight: 20 }}>
-                      Set up your academic terms to get started with grade tracking!
-                    </Text>
-                    <TouchableOpacity 
-                      onPress={() => router.push('/academic-manager')}
-                      activeOpacity={0.8}
-                      style={{
-                        paddingHorizontal: 20, paddingVertical: 12, borderRadius: Radius.full,
-                        flexDirection: 'row', alignItems: 'center',
-                        backgroundColor: theme.primary,
-                        ...Shadows.sm,
-                      }}
-                    >
-                      <Ionicons name="add-circle-outline" size={18} color="white" />
-                      <Text style={{ ...Typography.bodyBold, color: 'white', marginLeft: 8, fontSize: 14 }}>
-                        Setup Academic Term
-                      </Text>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <>
-                    <Text style={{ ...Typography.title, fontSize: 18, color: theme.text, textAlign: 'center', marginBottom: 8 }}>
-                      No Semester Selected
-                    </Text>
-                    <Text style={{ ...Typography.body, fontSize: 14, color: theme.textSecondary, textAlign: 'center', marginBottom: 16, lineHeight: 20 }}>
-                      Select a semester above to manage your subjects and grades!
-                    </Text>
-                  </>
-                )}
-              </View>
+          {!currentSem ? (
+            /* ══ No term, or none picked ═════════════════════════════════ */
+            data?.years?.length === 0 ? (
+              <EmptyPanel
+                theme={theme} tint={tints.schedule} icon="folder-open-outline"
+                title="No academic terms yet"
+                body="Your subjects, grades and classes all live inside a term. Create your first one to start tracking."
+                actionLabel="Set up academic term"
+                actionIcon="add-circle-outline"
+                onAction={() => router.push('/academic-manager')}
+              />
             ) : (
-              <View className="mt-1">
-                {/* Unscheduled subjects warning pill banner */}
-                {unscheduledSubjects.length > 0 && (
-                  <TouchableOpacity
-                    onPress={() => router.push('/(tabs)/schedule')}
-                    activeOpacity={0.8}
-                    style={{
-                      borderRadius: Radius.xl,
-                      borderWidth: 1,
-                      borderColor: isDark ? 'rgba(217,119,6,0.3)' : '#fde68a',
-                      backgroundColor: isDark ? 'rgba(69,26,3,0.5)' : '#fffbeb',
-                      padding: 14,
-                      marginBottom: 16,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      ...Shadows.sm,
-                    }}
-                  >
-                    <View style={{
-                      width: 32, height: 32, borderRadius: Radius.full,
-                      backgroundColor: isDark ? 'rgba(245,158,11,0.2)' : '#fef3c7',
-                      alignItems: 'center', justifyContent: 'center', marginRight: 10,
-                    }}>
-                      <Ionicons name="time-outline" size={18} color="#f59e0b" />
-                    </View>
-                    <View className="flex-1">
-                      <Text style={{ ...Typography.captionBold, color: isDark ? '#fbbf24' : '#b45309', fontSize: 13 }}>
-                        {unscheduledSubjects.length} subject{unscheduledSubjects.length > 1 ? 's' : ''} without a schedule
-                      </Text>
-                      <Text style={{ ...Typography.caption, color: isDark ? '#fcd34d' : '#d97706', fontSize: 11, marginTop: 1 }}>
-                        {unscheduledSubjects.map((s: any) => s.name).join(', ')} · Tap to add class times →
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                )}
-
-                {/* Section Header Toolbar & Edit Selection Mode Bar */}
-                <View 
+              <EmptyPanel
+                theme={theme} tint={tints.schedule} icon="calendar-outline"
+                title="No semester selected"
+                body="Pick a term from the switcher at the top to manage its subjects and grades."
+              />
+            )
+          ) : (
+            <>
+              {/* ══ Subjects missing class times — a quiet strip, not a card ══ */}
+              {unscheduledSubjects.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => router.push('/(tabs)/schedule')}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${unscheduledSubjects.length} subjects have no class times. Opens the schedule.`}
                   style={{
-                    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-                    marginBottom: 14, paddingHorizontal: 4,
+                    flexDirection: 'row', alignItems: 'center',
+                    padding: 12, borderRadius: Radius.lg, marginBottom: 16,
+                    backgroundColor: tints.tasks.fill,
+                    borderWidth: 1, borderColor: tints.tasks.line,
                   }}
                 >
-                  {isEditing ? (
-                    /* Edit Mode Selection Toolbar */
-                    <View 
-                      style={{
-                        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flex: 1,
-                        backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
-                        borderRadius: Radius.full, paddingHorizontal: 12, paddingVertical: 8,
-                        borderWidth: 1, borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-                        ...Shadows.sm,
-                      }}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        {/* Select All / Deselect All Pill */}
-                        <TouchableOpacity
-                          onPress={handleToggleSelectAll}
-                          activeOpacity={0.7}
-                          style={{
-                            paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.full,
-                            backgroundColor: isDark ? theme.card : '#ffffff',
-                            borderWidth: 1, borderColor: isDark ? theme.cardBorder : '#cbd5e1',
-                          }}
-                        >
-                          <Text style={{ ...Typography.captionBold, color: isDark ? '#cbd5e1' : '#475569', fontSize: 12 }}>
-                            {selectedSubjects.size === sortedSubjects.length && sortedSubjects.length > 0 ? 'Deselect All' : 'Select All'}
-                          </Text>
-                        </TouchableOpacity>
+                  <View style={{
+                    width: 34, height: 34, borderRadius: 11, marginRight: 11,
+                    alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: isDark ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.7)',
+                  }}>
+                    <Ionicons name="time-outline" size={17} color={tints.tasks.ink} />
+                  </View>
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>
+                      {unscheduledSubjects.length} subject{unscheduledSubjects.length > 1 ? 's' : ''} without class times
+                    </Text>
+                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 1 }}>
+                      {unscheduledSubjects.map((s: any) => s.name).join(', ')}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={tints.tasks.ink} />
+                </TouchableOpacity>
+              )}
 
-                        {/* Delete Selected Pill Button */}
-                        <TouchableOpacity
-                          onPress={handleDeleteSelected}
-                          disabled={selectedSubjects.size === 0}
-                          activeOpacity={0.7}
-                          style={{
-                            paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.full,
-                            backgroundColor: selectedSubjects.size > 0 ? theme.error : (isDark ? '#334155' : '#e2e8f0'),
-                            flexDirection: 'row', alignItems: 'center', gap: 4,
-                            opacity: selectedSubjects.size > 0 ? 1 : 0.6,
-                            ... (selectedSubjects.size > 0 ? Shadows.sm : {}),
-                          }}
-                        >
-                          <Ionicons name="trash" size={14} color={selectedSubjects.size > 0 ? 'white' : (isDark ? '#94a3b8' : '#64748b')} />
-                          <Text style={{ ...Typography.captionBold, color: selectedSubjects.size > 0 ? 'white' : (isDark ? '#94a3b8' : '#64748b'), fontSize: 12 }}>
-                            Delete ({selectedSubjects.size})
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-
-                      {/* Cancel / Done Pill */}
-                      <TouchableOpacity
-                        onPress={() => {
-                          setIsEditing(false);
-                          setSelectedSubjects(new Set());
-                        }}
-                        activeOpacity={0.7}
-                        style={{
-                          paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.full,
-                          backgroundColor: theme.primary,
-                        }}
-                      >
-                        <Text style={{ ...Typography.captionBold, color: 'white', fontSize: 12 }}>
-                          Done
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  ) : (
-                    /* Standard Section Header Bar */
-                    <>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        <Text style={{ ...Typography.subtitle, color: theme.text, fontSize: 18 }}>
-                          Subjects
-                        </Text>
-                        <View 
-                          style={{ 
-                            backgroundColor: isDark ? 'rgba(99,102,241,0.2)' : '#e0e7ff', 
-                            paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.full 
-                          }}
-                        >
-                          <Text style={{ ...Typography.captionBold, color: isDark ? '#818cf8' : '#4f46e5', fontSize: 11 }}>
-                            {displayedSubjects.length}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        {/* Edit Mode Pill Toggle */}
-                        {allSubjects.length > 0 && (
-                          <TouchableOpacity 
-                            onPress={() => setIsEditing(true)}
-                            activeOpacity={0.7}
-                            style={{
-                              paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.full,
-                              backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
-                              borderWidth: 1, borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-                              flexDirection: 'row', alignItems: 'center', gap: 4,
-                            }}
-                          >
-                            <Ionicons name="create-outline" size={14} color={isDark ? '#cbd5e1' : '#475569'} />
-                            <Text style={{ ...Typography.captionBold, color: isDark ? '#cbd5e1' : '#475569', fontSize: 12 }}>
-                              Edit
-                            </Text>
-                          </TouchableOpacity>
-                        )}
-
-                        {/* Add Subject Pill Button */}
-                        <TouchableOpacity 
-                          onPress={handleAddSubject}
-                          activeOpacity={0.8}
-                          style={{
-                            paddingHorizontal: 12, paddingVertical: 6, borderRadius: Radius.full,
-                            backgroundColor: theme.primary,
-                            flexDirection: 'row', alignItems: 'center', gap: 4,
-                            ...Shadows.sm,
-                          }}
-                        >
-                          <Ionicons name="add" size={16} color="white" />
-                          <Text style={{ ...Typography.captionBold, color: 'white', fontSize: 12 }}>
-                            Add Subject
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    </>
-                  )}
+              {/* ══ Section heading + the one primary action ════════════════ */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                <View style={{ width: 4, height: 20, borderRadius: 2, backgroundColor: tints.grades.solid, marginRight: 9 }} />
+                <Text
+                  accessibilityRole="header"
+                  style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, letterSpacing: -0.2 }}
+                >
+                  Subjects
+                </Text>
+                <View style={{
+                  marginLeft: 8, minWidth: 22, paddingHorizontal: 7, paddingVertical: 2,
+                  borderRadius: Radius.full, alignItems: 'center', backgroundColor: theme.surfaceSecondary,
+                }}>
+                  <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>
+                    {displayedSubjects.length}
+                  </Text>
                 </View>
 
-                {/* Empty State B: No subjects in current semester */}
-                {allSubjects.length === 0 ? (
-                  <View 
+                <View style={{ flex: 1 }} />
+
+                <SpotlightTarget id={SPOTLIGHT_IDS.gradesAddSubject}>
+                  <AnimatedPressable
+                    onPress={handleAddSubject}
+                    accessibilityRole="button"
+                    accessibilityLabel="Add subject"
                     style={{
-                      borderRadius: Radius['2xl'],
-                      padding: 24,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginTop: 8,
-                      marginBottom: 16,
-                      borderWidth: 1,
-                      borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-                      backgroundColor: isDark ? theme.card : theme.surface,
-                      ...Shadows.md,
+                      flexDirection: 'row', alignItems: 'center', gap: 4,
+                      paddingHorizontal: 12, height: 32, borderRadius: Radius.full,
+                      backgroundColor: theme.primary,
+                      borderBottomWidth: 2, borderBottomColor: isDark ? '#4338ca' : '#3730a3',
                     }}
                   >
-                    <View style={{
-                      width: 52, height: 52, borderRadius: Radius.full,
-                      alignItems: 'center', justifyContent: 'center', marginBottom: 14,
-                      backgroundColor: isDark ? 'rgba(99,102,241,0.15)' : '#e0e7ff',
-                    }}>
-                      <Ionicons name="book-outline" size={26} color={isDark ? '#818cf8' : '#4f46e5'} />
-                    </View>
-                    <Text style={{ ...Typography.subtitle, fontSize: 16, color: theme.text, textAlign: 'center', marginBottom: 4 }}>
-                      No Subjects Added Yet
-                    </Text>
-                    <Text style={{ ...Typography.body, fontSize: 13, color: theme.textSecondary, textAlign: 'center', marginBottom: 18, lineHeight: 18 }}>
-                      Add your subjects to start tracking your grades, weights, and GWAs!
-                    </Text>
-                    <TouchableOpacity 
-                      onPress={handleAddSubject}
-                      activeOpacity={0.8}
+                    <Ionicons name="add" size={16} color="#ffffff" />
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: '#ffffff' }}>Add</Text>
+                  </AnimatedPressable>
+                </SpotlightTarget>
+              </View>
+
+              {/* ══ Filter + selection, sitting with the list they act on ═══ */}
+              {allSubjects.length > 0 && (
+                isEditing ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                    <TouchableOpacity
+                      onPress={handleToggleSelectAll}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
                       style={{
-                        paddingHorizontal: 18, paddingVertical: 10, borderRadius: Radius.full,
-                        flexDirection: 'row', alignItems: 'center',
-                        backgroundColor: theme.primary,
-                        ...Shadows.sm,
+                        flexDirection: 'row', alignItems: 'center', gap: 5,
+                        paddingHorizontal: 12, height: 32, borderRadius: Radius.full,
+                        backgroundColor: theme.surface,
+                        borderWidth: 1, borderColor: theme.cardBorder,
+                        borderBottomWidth: 2, borderBottomColor: theme.lip,
                       }}
                     >
-                      <Ionicons name="add-circle" size={16} color="white" />
-                      <Text style={{ ...Typography.bodyBold, color: 'white', marginLeft: 6, fontSize: 13 }}>
-                        Add First Subject
+                      <Ionicons
+                        name={selectedSubjects.size === sortedSubjects.length && sortedSubjects.length > 0 ? 'checkbox' : 'square-outline'}
+                        size={14}
+                        color={theme.textSecondary}
+                      />
+                      <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: theme.textSecondary }}>
+                        {selectedSubjects.size === sortedSubjects.length && sortedSubjects.length > 0 ? 'None' : 'All'}
                       </Text>
                     </TouchableOpacity>
-                  </View>
-                ) : activeTab === 'tracked' && trackedSubjects.length === 0 ? (
-                  /* Empty State C: No tracked subjects when activeTab === 'tracked' */
-                  <View 
-                    style={{
-                      borderRadius: Radius['2xl'],
-                      padding: 24,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginTop: 8,
-                      marginBottom: 16,
-                      borderWidth: 1,
-                      borderColor: isDark ? theme.cardBorder : '#e2e8f0',
-                      backgroundColor: isDark ? theme.card : theme.surface,
-                      ...Shadows.md,
-                    }}
-                  >
-                    <View style={{
-                      width: 52, height: 52, borderRadius: Radius.full,
-                      alignItems: 'center', justifyContent: 'center', marginBottom: 14,
-                      backgroundColor: isDark ? 'rgba(245,158,11,0.15)' : '#fef3c7',
-                    }}>
-                      <Ionicons name="eye-off-outline" size={26} color={isDark ? '#fbbf24' : '#d97706'} />
-                    </View>
-                    <Text style={{ ...Typography.subtitle, fontSize: 16, color: theme.text, textAlign: 'center', marginBottom: 4 }}>
-                      No Tracked Subjects
-                    </Text>
-                    <Text style={{ ...Typography.body, fontSize: 13, color: theme.textSecondary, textAlign: 'center', marginBottom: 18, lineHeight: 18 }}>
-                      All subjects in this term are currently paused from GWA calculation.
-                    </Text>
-                    <TouchableOpacity 
-                      onPress={() => setActiveTab('all')}
-                      activeOpacity={0.8}
+
+                    <TouchableOpacity
+                      onPress={handleDeleteSelected}
+                      disabled={selectedSubjects.size === 0}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Delete ${selectedSubjects.size} selected subjects`}
                       style={{
-                        paddingHorizontal: 18, paddingVertical: 10, borderRadius: Radius.full,
-                        flexDirection: 'row', alignItems: 'center',
-                        backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
-                        borderWidth: 1, borderColor: isDark ? theme.cardBorder : '#cbd5e1',
+                        flexDirection: 'row', alignItems: 'center', gap: 5,
+                        paddingHorizontal: 12, height: 32, borderRadius: Radius.full,
+                        backgroundColor: selectedSubjects.size > 0 ? tints.danger.fill : theme.surfaceSecondary,
+                        borderWidth: 1,
+                        borderColor: selectedSubjects.size > 0 ? tints.danger.line : theme.cardBorder,
+                        opacity: selectedSubjects.size > 0 ? 1 : 0.55,
                       }}
                     >
-                      <Ionicons name="layers-outline" size={16} color={isDark ? '#cbd5e1' : '#475569'} />
-                      <Text style={{ ...Typography.bodyBold, color: isDark ? '#cbd5e1' : '#475569', marginLeft: 6, fontSize: 13 }}>
-                        Show All Subjects
+                      <Ionicons name="trash-outline" size={14} color={selectedSubjects.size > 0 ? tints.danger.ink : theme.textTertiary} />
+                      <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: selectedSubjects.size > 0 ? tints.danger.ink : theme.textTertiary }}>
+                        Delete{selectedSubjects.size > 0 ? ` (${selectedSubjects.size})` : ''}
                       </Text>
+                    </TouchableOpacity>
+
+                    <View style={{ flex: 1 }} />
+
+                    <TouchableOpacity
+                      onPress={() => { setIsEditing(false); setSelectedSubjects(new Set()); }}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      style={{ paddingHorizontal: 14, height: 32, borderRadius: Radius.full, justifyContent: 'center', backgroundColor: theme.primary }}
+                    >
+                      <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: '#ffffff' }}>Done</Text>
                     </TouchableOpacity>
                   </View>
                 ) : (
-                  /* Subject List Cards */
-                  sortedSubjects.map((sub: any) => (
-                    <SubjectCard 
-                      key={sub.id} 
-                      subject={sub} 
-                      system={system} 
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                    <Card variant="sunken" padding={3} radius={Radius.full} style={{ flexDirection: 'row' }}>
+                      {([
+                        { key: 'all', label: 'All', count: allSubjects.length },
+                        { key: 'tracked', label: 'Counted', count: trackedSubjects.length },
+                      ] as const).map(opt => {
+                        const active = activeTab === opt.key;
+                        return (
+                          <TouchableOpacity
+                            key={opt.key}
+                            onPress={() => setActiveTab(opt.key)}
+                            activeOpacity={0.75}
+                            accessibilityRole="tab"
+                            accessibilityState={{ selected: active }}
+                            accessibilityLabel={opt.key === 'tracked'
+                              ? `Counted towards GWA, ${opt.count} subjects`
+                              : `All subjects, ${opt.count}`}
+                            style={{
+                              flexDirection: 'row', alignItems: 'center', gap: 5,
+                              paddingHorizontal: 13, height: 28, borderRadius: Radius.full,
+                              backgroundColor: active ? theme.surface : 'transparent',
+                              borderWidth: active ? 1 : 0,
+                              borderColor: theme.cardBorder,
+                            }}
+                          >
+                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: active ? theme.text : theme.textTertiary }}>
+                              {opt.label}
+                            </Text>
+                            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: active ? theme.textSecondary : theme.textTertiary }}>
+                              {opt.count}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </Card>
+
+                    <View style={{ flex: 1 }} />
+
+                    <TouchableOpacity
+                      onPress={() => setIsEditing(true)}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Select subjects to delete"
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 4 }}
+                    >
+                      <Ionicons name="checkbox-outline" size={15} color={theme.textSecondary} />
+                      <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary }}>Select</Text>
+                    </TouchableOpacity>
+                  </View>
+                )
+              )}
+
+              {/* ══ The list ═══════════════════════════════════════════════ */}
+              {allSubjects.length === 0 ? (
+                <EmptyPanel
+                  theme={theme} tint={tints.grades} icon="book-outline"
+                  title="No subjects yet"
+                  body="Add each subject with its units and passing mark, then log scores as they come in. Your GWA updates as you go."
+                  actionLabel="Add your first subject"
+                  actionIcon="add-circle"
+                  onAction={handleAddSubject}
+                />
+              ) : activeTab === 'tracked' && trackedSubjects.length === 0 ? (
+                <EmptyPanel
+                  theme={theme} tint={tints.tasks} icon="pause-circle-outline"
+                  title="Nothing counted right now"
+                  body={`All ${allSubjects.length} subject${allSubjects.length > 1 ? 's' : ''} in this term are paused, so none are included in your GWA.`}
+                  actionLabel="Show all subjects"
+                  actionIcon="layers-outline"
+                  onAction={() => setActiveTab('all')}
+                  subdued
+                />
+              ) : (
+                <>
+                  {sortedSubjects.map((sub: any) => (
+                    <SubjectCard
+                      key={sub.id}
+                      subject={sub}
+                      system={system}
                       isSelectionMode={isEditing}
                       isEditMode={isEditing}
                       isSelected={selectedSubjects.has(sub.id)}
@@ -760,92 +730,189 @@ export default function GradeLedgerTab() {
                         setSelectedSubjects(newSet);
                       }}
                       onClick={() => setActiveSubId(sub.id)}
-                      onToggleTracking={() => handleToggleTracking(sub.id)}
-                      onDelete={() => handleDeleteSubject(sub)}
-                      onDuplicate={() => handleDuplicateSubject(sub)}
+                      onOpenMenu={() => setMenuSubjectId(sub.id)}
                     />
-                  ))
-                )}
+                  ))}
 
-                {/* Dashed Add Subject Card Button (shown below list when subjects exist) */}
-                {allSubjects.length > 0 && !isEditing && (
-                  <TouchableOpacity 
-                    onPress={handleAddSubject}
-                    activeOpacity={0.7}
-                    style={{
-                      borderRadius: Radius['2xl'],
-                      borderWidth: 2,
-                      borderStyle: 'dashed',
-                      borderColor: isDark ? 'rgba(99,102,241,0.4)' : '#a5b4fc',
-                      backgroundColor: isDark ? 'rgba(30,41,59,0.5)' : '#eff6ff',
-                      paddingVertical: 18,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginTop: 4,
-                      marginBottom: 16,
-                    }}
-                  >
-                    <View style={{
-                      width: 40, height: 40, borderRadius: Radius.full,
-                      backgroundColor: theme.primary,
-                      alignItems: 'center', justifyContent: 'center',
-                      marginBottom: 8,
-                      ...Shadows.sm,
-                    }}>
-                      <Ionicons name="add" size={22} color="white" />
-                    </View>
-                    <Text style={{ ...Typography.bodyBold, color: isDark ? '#818cf8' : '#3b82f6', fontSize: 15 }}>
-                      Add New Subject
+                  {/* A slim end-of-list add row rather than a second big card */}
+                  {!isEditing && (
+                    <TouchableOpacity
+                      onPress={handleAddSubject}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Add another subject"
+                      style={{
+                        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                        gap: 6, height: 44, borderRadius: Radius.lg, marginTop: 2,
+                        borderWidth: 1, borderStyle: 'dashed',
+                        borderColor: isDark ? '#3d4468' : '#cbd5e1',
+                      }}
+                    >
+                      <Ionicons name="add" size={16} color={theme.textSecondary} />
+                      <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>
+                        Add subject
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Explains why a paused subject is greyed out, only when one is */}
+                  {activeTab === 'all' && pausedCount > 0 && (
+                    <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, textAlign: 'center', marginTop: 12, lineHeight: 16 }}>
+                      {pausedCount} paused subject{pausedCount > 1 ? 's are' : ' is'} excluded from your GWA.
+                      {'\n'}Resume from the ··· menu on the card.
                     </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
-          </>
-        )}
+                  )}
+                </>
+              )}
+            </>
+          )}
         </View>
       </ScrollView>
 
-      {/* Add Subject Modal */}
-      <Modal 
-        visible={showAddSubjectModal} 
-        transparent 
-        animationType="slide" 
+      {/* ══ Subject actions ═══════════════════════════════════════════════ */}
+      <Modal
+        visible={Boolean(menuSubject)}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setMenuSubjectId(null)}
+      >
+        <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: theme.overlay }}>
+          <Pressable style={{ flex: 1 }} onPress={() => setMenuSubjectId(null)} />
+          <View
+            style={{
+              borderTopLeftRadius: Radius['4xl'], borderTopRightRadius: Radius['4xl'],
+              backgroundColor: theme.surface,
+              paddingTop: 12, paddingHorizontal: 16, paddingBottom: insets.bottom + 20,
+            }}
+          >
+            <View style={{ alignItems: 'center', marginBottom: 14 }}>
+              <View style={{ width: 44, height: 5, borderRadius: 3, backgroundColor: theme.cardBorder }} />
+            </View>
+
+            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 19, color: theme.text, marginBottom: 2 }}>
+              {menuSubject?.name}
+            </Text>
+            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12.5, color: theme.textTertiary, marginBottom: 14 }}>
+              {menuSubject?.gradeTrackingEnabled === false ? 'Paused · not counted in your GWA' : 'Counted in your GWA'}
+            </Text>
+
+            {[
+              {
+                key: 'open',
+                icon: 'create-outline' as const,
+                label: 'Open subject',
+                hint: 'Edit periods, weights and scores',
+                tint: tints.grades,
+                onPress: () => setActiveSubId(menuSubject.id),
+              },
+              {
+                key: 'track',
+                icon: (menuSubject?.gradeTrackingEnabled === false ? 'play-circle-outline' : 'pause-circle-outline') as keyof typeof Ionicons.glyphMap,
+                label: menuSubject?.gradeTrackingEnabled === false ? 'Resume grade tracking' : 'Pause grade tracking',
+                hint: menuSubject?.gradeTrackingEnabled === false
+                  ? 'Include this subject in GWA again'
+                  : 'Keep the scores, leave it out of your GWA',
+                tint: tints.tasks,
+                onPress: () => handleToggleTracking(menuSubject.id),
+              },
+              {
+                key: 'duplicate',
+                icon: 'copy-outline' as const,
+                label: 'Duplicate',
+                hint: 'Copy the whole grading setup to a new subject',
+                tint: tints.tools,
+                onPress: () => handleDuplicateSubject(menuSubject),
+              },
+              {
+                key: 'delete',
+                icon: 'trash-outline' as const,
+                label: 'Delete subject',
+                hint: 'Removes the subject and all its scores',
+                tint: tints.danger,
+                onPress: () => handleDeleteSubject(menuSubject),
+              },
+            ].map(action => (
+              <TouchableOpacity
+                key={action.key}
+                onPress={() => {
+                  const run = action.onPress;
+                  setMenuSubjectId(null);
+                  // Let the sheet dismiss before an alert or a screen change lands.
+                  setTimeout(run, 220);
+                }}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`${action.label}. ${action.hint}`}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 11 }}
+              >
+                <View style={{
+                  width: 38, height: 38, borderRadius: 12, marginRight: 12,
+                  alignItems: 'center', justifyContent: 'center',
+                  backgroundColor: action.tint.fill,
+                  borderWidth: 1, borderColor: action.tint.line,
+                }}>
+                  <Ionicons name={action.icon} size={18} color={action.tint.ink} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: action.key === 'delete' ? action.tint.ink : theme.text }}>
+                    {action.label}
+                  </Text>
+                  <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
+                    {action.hint}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </Modal>
+
+      {/* ══ Add Subject ═══════════════════════════════════════════════════ */}
+      <Modal
+        visible={showAddSubjectModal}
+        transparent
+        animationType="slide"
         onRequestClose={() => setShowAddSubjectModal(false)}
       >
-        <View className="flex-1 justify-end bg-black/60">
-          <Pressable className="flex-1" onPress={() => setShowAddSubjectModal(false)} />
-          <View 
+        <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: theme.overlay }}>
+          <Pressable style={{ flex: 1 }} onPress={() => setShowAddSubjectModal(false)} />
+          <View
             style={{
               borderTopLeftRadius: Radius['4xl'],
               borderTopRightRadius: Radius['4xl'],
-              backgroundColor: isDark ? theme.surface : '#ffffff',
+              backgroundColor: theme.surface,
+              paddingTop: 12, paddingHorizontal: 20, paddingBottom: insets.bottom + 28,
             }}
-            className="px-6 pt-4 pb-12"
           >
-            <View className="items-center mb-5">
-              <View className={`w-12 h-1.5 rounded-full ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={{ width: 44, height: 5, borderRadius: 3, backgroundColor: theme.cardBorder }} />
             </View>
-            <View className="flex-row justify-between items-center mb-6">
-              <Text style={{ ...Typography.title, color: theme.text }}>New Subject</Text>
-              <TouchableOpacity 
-                onPress={() => setShowAddSubjectModal(false)} 
+
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={{ ...Typography.title, color: theme.text }}>New subject</Text>
+                <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12.5, color: theme.textTertiary, marginTop: 2 }}>
+                  Units, passing mark and scores come next.
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowAddSubjectModal(false)}
                 activeOpacity={0.7}
-                className={`w-8 h-8 rounded-full items-center justify-center ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                style={{ width: 32, height: 32, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surfaceSecondary }}
               >
-                <Ionicons name="close" size={18} color={isDark ? '#94a3b8' : '#64748b'} />
+                <Ionicons name="close" size={18} color={theme.textSecondary} />
               </TouchableOpacity>
             </View>
 
-            <Text style={{ ...Typography.captionBold, color: theme.textSecondary, marginBottom: 8 }}>
-              Subject Name *
-            </Text>
+            <Text style={{ ...microLabel, marginBottom: 8 }}>Subject name</Text>
             <TextInput
               style={{
-                borderRadius: Radius.xl,
+                borderRadius: Radius.lg,
                 borderWidth: 1,
-                borderColor: isDark ? theme.cardBorder : '#cbd5e1',
-                backgroundColor: isDark ? theme.inputBg : '#f8fafc',
+                borderColor: theme.inputBorder,
+                backgroundColor: theme.inputBg,
                 color: theme.text,
                 padding: 14,
                 fontFamily: 'Nunito_600SemiBold',
@@ -853,7 +920,7 @@ export default function GradeLedgerTab() {
                 marginBottom: 8,
               }}
               placeholder="e.g. MATH101, Physics, English Lit"
-              placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+              placeholderTextColor={theme.textTertiary}
               value={newSubjectName}
               onChangeText={t => { setNewSubjectName(t); setAddSubjectError(''); }}
               autoFocus
@@ -861,99 +928,117 @@ export default function GradeLedgerTab() {
               onSubmitEditing={handleConfirmAddSubject}
             />
             {addSubjectError ? (
-              <Text style={{ ...Typography.captionBold, color: theme.error, marginBottom: 16 }}>
-                {addSubjectError}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                <Ionicons name="alert-circle" size={14} color={theme.error} style={{ marginRight: 5 }} />
+                <Text style={{ ...Typography.captionBold, color: theme.error, flex: 1 }}>
+                  {addSubjectError}
+                </Text>
+              </View>
             ) : (
               <Text style={{ ...Typography.caption, color: theme.textTertiary, marginBottom: 16 }}>
-                If this subject already exists, you'll be notified.
+                Use the same name as your schedule so the two stay linked.
               </Text>
             )}
 
-            <TouchableOpacity
+            <AnimatedPressable
               onPress={handleConfirmAddSubject}
-              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Add subject"
               style={{
-                borderRadius: Radius.xl,
+                borderRadius: Radius.lg,
                 backgroundColor: theme.primary,
                 paddingVertical: 14,
                 alignItems: 'center',
-                ...Shadows.md,
+                borderBottomWidth: 3, borderBottomColor: isDark ? '#4338ca' : '#3730a3',
               }}
             >
               <Text style={{ ...Typography.bodyBold, color: 'white', fontSize: 16 }}>
-                Add Subject
+                Add subject
               </Text>
-            </TouchableOpacity>
+            </AnimatedPressable>
           </View>
         </View>
       </Modal>
 
-      {/* System Settings Grading System Modal */}
-      <Modal 
-        visible={showSettings} 
-        animationType="slide" 
-        presentationStyle="pageSheet" 
+      {/* ══ Ledger settings ═══════════════════════════════════════════════ */}
+      <Modal
+        visible={showSettings}
+        animationType="slide"
+        presentationStyle="pageSheet"
         onRequestClose={() => setShowSettings(false)}
       >
-        <View style={{ flex: 1, paddingTop: 24, paddingHorizontal: 24, backgroundColor: theme.background }}>
-          <View className="flex-row justify-between items-center mb-8">
-            <Text style={{ ...Typography.heading, color: theme.text, fontSize: 24 }}>Settings</Text>
-            <TouchableOpacity 
-              onPress={() => setShowSettings(false)} 
+        <View style={{ flex: 1, paddingTop: 24, paddingHorizontal: GUTTER + 6, backgroundColor: theme.background }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <Text style={{ ...Typography.heading, color: theme.text, fontSize: 24 }}>Ledger settings</Text>
+              <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12.5, color: theme.textTertiary, marginTop: 2 }}>
+                How every grade in the app is shown.
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setShowSettings(false)}
               activeOpacity={0.7}
-              style={{ borderRadius: Radius.full, padding: 8, backgroundColor: isDark ? theme.surfaceSecondary : '#e2e8f0' }}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+              style={{ width: 34, height: 34, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surfaceSecondary }}
             >
-              <Ionicons name="close" size={20} color={isDark ? "#cbd5e1" : "#475569"} />
+              <Ionicons name="close" size={19} color={theme.textSecondary} />
             </TouchableOpacity>
           </View>
 
-          <View 
-            style={{ 
-              borderRadius: Radius['3xl'], padding: 20, marginBottom: 24, 
-              backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder,
-              ...Shadows.sm,
-            }}
-          >
-            <Text style={{ ...Typography.label, color: theme.textTertiary, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 16 }}>
-              Grading System
-            </Text>
-            {['1_IS_BEST', '5_IS_BEST', '4_IS_BEST', 'PERCENT'].map((sys) => (
-              <TouchableOpacity 
-                key={sys}
-                activeOpacity={0.7}
-                onPress={() => {
-                  const nd = JSON.parse(JSON.stringify(data));
-                  if (!nd.settings) nd.settings = {};
-                  nd.settings.gradingSystem = sys;
-                  saveData(nd);
-                }}
-                style={{
-                  flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-                  paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: isDark ? theme.cardBorder : '#f1f5f9',
-                }}
-              >
-                <Text style={{ ...Typography.bodyBold, color: theme.text, fontSize: 15 }}>
-                  {sys === '1_IS_BEST' ? '1.0 is Best (e.g. UP)' : 
-                   sys === '5_IS_BEST' ? '5.0 is Best (e.g. PUP)' : 
-                   sys === '4_IS_BEST' ? '4.0 is Best (e.g. DLSU)' : 
-                   'Percentage (0-100%)'}
-                </Text>
-                {system === sys && <Ionicons name="checkmark-circle" size={24} color={theme.primary} />}
-              </TouchableOpacity>
-            ))}
-          </View>
+          <Text style={{ ...microLabel, marginBottom: 8, paddingLeft: 2 }}>Grading system</Text>
+          <Card padding={0} radius={Radius.xl} style={{ overflow: 'hidden', marginBottom: 24 }}>
+            {GRADING_SYSTEMS.map((sys, i) => {
+              const selected = system === sys.key;
+              return (
+                <TouchableOpacity
+                  key={sys.key}
+                  activeOpacity={0.7}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`${sys.label}. ${sys.hint}`}
+                  onPress={() => {
+                    const nd = JSON.parse(JSON.stringify(data));
+                    if (!nd.settings) nd.settings = {};
+                    nd.settings.gradingSystem = sys.key;
+                    saveData(nd);
+                  }}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center',
+                    paddingVertical: 13, paddingHorizontal: 14,
+                    borderTopWidth: i === 0 ? 0 : 1, borderTopColor: theme.cardBorder,
+                    backgroundColor: selected ? tints.grades.fill : 'transparent',
+                  }}
+                >
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15, color: theme.text }}>
+                      {sys.label}
+                    </Text>
+                    <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
+                      {sys.hint}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={selected ? 'radio-button-on' : 'radio-button-off'}
+                    size={21}
+                    color={selected ? theme.primary : theme.textTertiary}
+                  />
+                </TouchableOpacity>
+              );
+            })}
+          </Card>
 
-          <TouchableOpacity 
+          <Text style={{ ...microLabel, marginBottom: 8, paddingLeft: 2 }}>Danger zone</Text>
+          <TouchableOpacity
             onPress={() => {
               AlertService.alert(
                 "Reset Data",
                 "Are you sure you want to reset all Ledger data? This cannot be undone.",
                 [
                   { text: "Cancel", style: "cancel" },
-                  { 
-                    text: "Reset", 
-                    style: "destructive", 
+                  {
+                    text: "Reset",
+                    style: "destructive",
                     onPress: () => {
                       saveData(INITIAL_DATA);
                       setShowSettings(false);
@@ -963,25 +1048,109 @@ export default function GradeLedgerTab() {
               );
             }}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Erase all ledger data"
             style={{
-              borderRadius: Radius['2xl'], padding: 16, alignItems: 'center',
-              backgroundColor: isDark ? 'rgba(153,27,27,0.3)' : '#fee2e2',
-              borderWidth: 1, borderColor: isDark ? 'rgba(239,68,68,0.3)' : '#fca5a5',
+              flexDirection: 'row', alignItems: 'center',
+              borderRadius: Radius.xl, padding: 14,
+              backgroundColor: tints.danger.fill,
+              borderWidth: 1, borderColor: tints.danger.line,
             }}
           >
-            <Text style={{ ...Typography.bodyBold, color: theme.error, fontSize: 15 }}>
-              Erase All Data
-            </Text>
+            <Ionicons name="trash-outline" size={18} color={tints.danger.ink} style={{ marginRight: 10 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: tints.danger.ink }}>
+                Erase all data
+              </Text>
+              <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 1 }}>
+                Deletes every term, subject and score on this device.
+              </Text>
+            </View>
           </TouchableOpacity>
         </View>
       </Modal>
 
       {/* Premium Paywall Modal */}
-      <PremiumPaywallModal 
-        visible={showPaywall} 
-        onClose={() => setShowPaywall(false)} 
-        entryPoint="grades" 
+      <PremiumPaywallModal
+        visible={showPaywall}
+        onClose={() => setShowPaywall(false)}
+        entryPoint="grades"
       />
     </SafeAreaView>
+  );
+}
+
+interface EmptyPanelProps {
+  theme: any;
+  tint: { fill: string; line: string; ink: string; solid: string };
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  body: string;
+  actionLabel?: string;
+  actionIcon?: keyof typeof Ionicons.glyphMap;
+  onAction?: () => void;
+  /** Renders the action as a quiet button — for "nothing to see" rather than "get started". */
+  subdued?: boolean;
+}
+
+/**
+ * The one empty state on this screen. There used to be three hand-rolled ones
+ * with different padding, icon sizes and button weights, so "no terms", "no
+ * subjects" and "nothing tracked" each looked like a different product.
+ */
+function EmptyPanel({ theme, tint, icon, title, body, actionLabel, actionIcon, onAction, subdued }: EmptyPanelProps) {
+  return (
+    <Card padding={0} radius={Radius['2xl']} style={{ overflow: 'hidden' }}>
+      <View style={{
+        alignItems: 'center', paddingTop: 24, paddingBottom: 20,
+        backgroundColor: tint.fill,
+        borderBottomWidth: 1, borderBottomColor: tint.line,
+      }}>
+        <View style={{
+          width: 60, height: 60, borderRadius: 20,
+          alignItems: 'center', justifyContent: 'center',
+          backgroundColor: theme.surface,
+          borderWidth: 2, borderColor: tint.line,
+        }}>
+          <Ionicons name={icon} size={28} color={tint.ink} />
+        </View>
+      </View>
+
+      <View style={{ padding: 20, alignItems: 'center' }}>
+        <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 17, color: theme.text, textAlign: 'center', letterSpacing: -0.3 }}>
+          {title}
+        </Text>
+        <Text style={{
+          fontFamily: 'Nunito_400Regular', fontSize: 13, color: theme.textSecondary,
+          textAlign: 'center', lineHeight: 19, marginTop: 6,
+          marginBottom: actionLabel && onAction ? 18 : 0,
+        }}>
+          {body}
+        </Text>
+
+        {actionLabel && onAction && (
+          <AnimatedPressable
+            onPress={onAction}
+            accessibilityRole="button"
+            accessibilityLabel={actionLabel}
+            style={{
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+              paddingVertical: 12, paddingHorizontal: 20, borderRadius: Radius.lg, width: '100%',
+              backgroundColor: subdued ? theme.surfaceSecondary : theme.primary,
+              borderWidth: subdued ? 1 : 0, borderColor: theme.cardBorder,
+              borderBottomWidth: subdued ? 2 : 3,
+              borderBottomColor: subdued ? theme.lip : theme.primaryDark,
+            }}
+          >
+            {actionIcon && (
+              <Ionicons name={actionIcon} size={16} color={subdued ? theme.textSecondary : '#ffffff'} style={{ marginRight: 7 }} />
+            )}
+            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: subdued ? theme.textSecondary : '#ffffff' }}>
+              {actionLabel}
+            </Text>
+          </AnimatedPressable>
+        )}
+      </View>
+    </Card>
   );
 }

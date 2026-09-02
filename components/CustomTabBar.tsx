@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
 import { getTheme } from '@/constants/Theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import SpotlightTarget from '@/components/spotlight/SpotlightTarget';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -23,6 +24,27 @@ const TABS: TabItem[] = [
   { key: 'flashcards', title: 'Study', icon: 'layers-outline', iconFocused: 'layers' },
 ];
 
+/** paddingTop (8) + the tab button's minHeight (52). */
+const TAB_BAR_CONTENT_HEIGHT = 60;
+
+/** The bar's own bottom padding. One definition, used by the bar and by callers. */
+function tabBarBottomPadding(bottomInset: number) {
+  return Platform.OS === 'ios' ? Math.max(28, bottomInset) : Math.max(12, bottomInset + 8);
+}
+
+/**
+ * Total height the tab bar occupies.
+ *
+ * The bar is `position: 'absolute'`, so any screen with content at the bottom
+ * has to reserve this height itself. Screens used to hand-tune a number for it,
+ * which drifts from the bar and silently clips the last row — that is what hid
+ * the practice-test options and the bottom of Profile. Use this instead.
+ */
+export function useTabBarHeight() {
+  const insets = useSafeAreaInsets();
+  return TAB_BAR_CONTENT_HEIGHT + tabBarBottomPadding(insets.bottom);
+}
+
 interface CustomTabBarProps {
   state: any;
   descriptors: any;
@@ -40,16 +62,19 @@ export default function CustomTabBar({ state, descriptors, navigation }: CustomT
   const visualIndex = activeTabIndex >= 0 ? activeTabIndex : 0;
   
   const tabWidth = SCREEN_WIDTH / TABS.length;
+  const PILL_WIDTH = Math.min(52, tabWidth - 8);
+  const PILL_HEIGHT = 30;
 
-  // Sliding indicator animation
+  // The active pill slides between tabs rather than a hairline sitting above
+  // them: it reads as the selection itself, not a separate decoration.
   const slideAnim = useRef(new Animated.Value(visualIndex * tabWidth)).current;
 
   useEffect(() => {
     Animated.spring(slideAnim, {
       toValue: visualIndex * tabWidth,
       useNativeDriver: true,
-      friction: 8,
-      tension: 60,
+      friction: 9,
+      tension: 70,
     }).start();
   }, [visualIndex, tabWidth]);
 
@@ -60,35 +85,36 @@ export default function CustomTabBar({ state, descriptors, navigation }: CustomT
         bottom: 0,
         left: 0,
         right: 0,
-        backgroundColor: isDark ? 'rgba(30, 41, 59, 0.95)' : 'rgba(255, 255, 255, 0.95)',
+        backgroundColor: theme.tabBg,
         borderTopWidth: 1,
-        borderTopColor: isDark ? theme.tabBorder : '#f1f5f9',
-        paddingBottom: Platform.OS === 'ios' ? Math.max(28, insets.bottom) : Math.max(12, insets.bottom + 8),
+        borderTopColor: theme.tabBorder,
+        paddingBottom: tabBarBottomPadding(insets.bottom),
         paddingTop: 8,
         ...Platform.select({
-          ios: { shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.06, shadowRadius: 12 },
-          android: { elevation: 12 },
+          ios: { shadowColor: '#000', shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.04, shadowRadius: 3 },
+          android: { elevation: 8 },
         }),
       }}
     >
-      {/* Sliding active indicator */}
+      {/* Sliding active pill, painted behind the icons */}
       <Animated.View
+        pointerEvents="none"
         style={{
           position: 'absolute',
-          top: 0,
+          top: 10,
           left: 0,
           width: tabWidth,
-          height: 3,
-          borderRadius: 2,
+          height: PILL_HEIGHT,
+          alignItems: 'center',
           transform: [{ translateX: slideAnim }],
         }}
       >
         <View
           style={{
-            flex: 1,
-            marginHorizontal: tabWidth * 0.25,
-            borderRadius: 2,
-            backgroundColor: theme.tabActive,
+            width: PILL_WIDTH,
+            height: PILL_HEIGHT,
+            borderRadius: PILL_HEIGHT / 2,
+            backgroundColor: isDark ? 'rgba(129,140,248,0.18)' : 'rgba(79,70,229,0.10)',
           }}
         />
       </Animated.View>
@@ -120,17 +146,18 @@ export default function CustomTabBar({ state, descriptors, navigation }: CustomT
           };
 
           return (
-            <TabButton
-              key={tab.key}
-              tab={tab}
-              isFocused={isFocused}
-              isDark={isDark}
-              theme={theme}
-              onPress={onPress}
-              onLongPress={onLongPress}
-              accessibilityLabel={descriptor?.options?.tabBarAccessibilityLabel}
-              testID={descriptor?.options?.tabBarButtonTestID}
-            />
+            <SpotlightTarget key={tab.key} id={`tab.${tab.key}`} style={{ flex: 1 }}>
+              <TabButton
+                tab={tab}
+                isFocused={isFocused}
+                isDark={isDark}
+                theme={theme}
+                onPress={onPress}
+                onLongPress={onLongPress}
+                accessibilityLabel={descriptor?.options?.tabBarAccessibilityLabel}
+                testID={descriptor?.options?.tabBarButtonTestID}
+              />
+            </SpotlightTarget>
           );
         })}
       </View>
@@ -154,9 +181,10 @@ const TabButton = React.memo(function TabButton({ tab, isFocused, isDark, theme,
 
   useEffect(() => {
     Animated.spring(scale, {
-      toValue: isFocused ? 1.1 : 1,
+      toValue: isFocused ? 1.08 : 1,
       useNativeDriver: true,
-      friction: 6,
+      friction: 5,
+      tension: 90,
     }).start();
   }, [isFocused]);
 
@@ -172,22 +200,26 @@ const TabButton = React.memo(function TabButton({ tab, isFocused, isDark, theme,
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 6,
+        paddingTop: 4,
+        paddingBottom: 6,
+        minHeight: 52,
       }}
       activeOpacity={0.7}
     >
-      <Animated.View style={{ transform: [{ scale }] }}>
+      <Animated.View style={{ height: 30, justifyContent: 'center', transform: [{ scale }] }}>
         <Ionicons
           name={isFocused ? tab.iconFocused : tab.icon}
-          size={22}
+          size={21}
           color={isFocused ? theme.tabActive : theme.tabInactive}
         />
       </Animated.View>
       <Text
+        numberOfLines={1}
         style={{
-          marginTop: 4,
+          marginTop: 3,
           fontSize: 10,
-          fontFamily: isFocused ? 'Nunito_700Bold' : 'Nunito_400Regular',
+          letterSpacing: isFocused ? 0 : 0.1,
+          fontFamily: isFocused ? 'Nunito_800ExtraBold' : 'Nunito_400Regular',
           color: isFocused ? theme.tabActive : theme.tabInactive,
         }}
       >

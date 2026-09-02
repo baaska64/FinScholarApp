@@ -98,4 +98,6 @@ export interface ExamScheduleSlot {
   cardsPerSession: number;
 }
 
-export type StudyViewMode = 'decks' | 'detail' | 'study' | 'manage' | 'quiz' | 'match';
+// 'manage' was folded into 'detail' — the two were the same card list with
+// different halves of the features. Do not reintroduce it.
+export type StudyViewMode = 'decks' | 'detail' | 'study' | 'quiz' | 'match';
