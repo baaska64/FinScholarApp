@@ -156,7 +156,11 @@ export default function DashboardScreen() {
     const theme = getTheme(isDark);
     const insets = useSafeAreaInsets();
     const { width: SCREEN_WIDTH } = useWindowDimensions();
-    
+    // Must sit with the other hooks: the loading branch below returns early, so
+    // calling this further down changed the hook count between the skeleton
+    // render and the first render with data.
+    const tabBarHeight = useTabBarHeight();
+
     const [user, setUser] = useState<any>(null);
     const [data, setData] = useState<any>(null);
     const [refreshing, setRefreshing] = useState(false);
@@ -573,12 +577,29 @@ export default function DashboardScreen() {
         textTransform: 'uppercase' as const,
         color: theme.textTertiary,
     };
-    const hairline = { height: 1, backgroundColor: theme.cardBorder };
+    /**
+     * The fill for tiles that sit *inside* a panel. Separating them by shape and
+     * a gap is what stops the board reading as a spreadsheet; a hairline between
+     * two flat bands does the opposite.
+     */
+    const softFill = isDark ? 'rgba(0,0,0,0.20)' : theme.surfaceSecondary;
+    /**
+     * Divider between rows of a list panel, inset from both edges. Rules that
+     * run the full width of a card turn a list into ruled paper — this is
+     * absolutely positioned so it can be dropped into a row without disturbing
+     * the row's own flex layout.
+     */
+    const rowDivider = {
+        position: 'absolute' as const,
+        top: 0, left: 12, right: 12, height: 1,
+        backgroundColor: theme.cardBorder,
+    };
 
     const statTiles = [
         {
             key: 'gwa',
             tint: tints.grades,
+            icon: 'school' as const,
             label: 'Sem GWA',
             value: gwaValue,
             caption: currentSem?.subjects?.length ? `${currentSem.subjects.length} subjects` : 'No subjects',
@@ -587,6 +608,7 @@ export default function DashboardScreen() {
         {
             key: 'attendance',
             tint: attendanceTint,
+            icon: 'checkmark-circle' as const,
             label: 'Attendance',
             value: `${overallAttendance}%`,
             caption: attendanceCaption,
@@ -595,6 +617,7 @@ export default function DashboardScreen() {
         {
             key: 'tasks',
             tint: tints.tasks,
+            icon: 'list' as const,
             label: 'Tasks',
             value: `${pendingTasksCount}`,
             caption: pendingTasksCount === 0 ? 'All clear' : 'Pending',
@@ -610,7 +633,6 @@ export default function DashboardScreen() {
     ];
 
     const GUTTER = 14;
-    const tabBarHeight = useTabBarHeight();
 
     return (
         <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
@@ -675,7 +697,7 @@ export default function DashboardScreen() {
                             accessibilityRole="button"
                             accessibilityLabel="Settings"
                             style={{
-                                width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+                                width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center',
                                 backgroundColor: theme.surface,
                                 borderWidth: 1, borderColor: theme.cardBorder,
                                 borderBottomWidth: 2, borderBottomColor: theme.lip,
@@ -698,7 +720,7 @@ export default function DashboardScreen() {
                 {!data?.years || data.years.length === 0 ? (
                     /* ── First run: no term exists yet ─────────────────────── */
                     <View style={{ paddingHorizontal: GUTTER }}>
-                        <Card padding={0} radius={Radius['2xl']} style={{ marginTop: 8, overflow: 'hidden' }}>
+                        <Card padding={0} radius={Radius['4xl']} style={{ marginTop: 8, overflow: 'hidden' }}>
                             <View style={{
                                 backgroundColor: tints.schedule.fill,
                                 paddingTop: 26, paddingBottom: 20, alignItems: 'center',
@@ -760,8 +782,8 @@ export default function DashboardScreen() {
                     floating cards; grouping them is what stops the page reading
                     as a stack of unrelated widgets.
                    ══════════════════════════════════════════════════════════════ */}
-                <FadeInItem index={0} style={{ paddingHorizontal: GUTTER, marginBottom: 16 }}>
-                    <Card padding={0} radius={Radius['2xl']} style={{ overflow: 'hidden' }}>
+                <FadeInItem index={0} style={{ paddingHorizontal: GUTTER, marginBottom: 14 }}>
+                    <Card padding={0} radius={Radius['4xl']} style={{ overflow: 'hidden' }}>
 
                         {/* ── Fin's welcome ────────────────────────────────
                             Fin is given a habitat rather than a chip: the water
@@ -850,116 +872,130 @@ export default function DashboardScreen() {
                             </View>
                         </TouchableOpacity>
 
-                        <View style={hairline} />
+                        {/* ── Term and the headline numbers ────────────────
+                            No dividers. The panel used to be cut into bands by
+                            two full-bleed hairlines, with the three numbers
+                            separated underneath by column rules — row rules plus
+                            column rules is a table, and that is exactly what the
+                            board read as. Everything below the greeting is now
+                            an inset rounded tile floating on the panel's surface,
+                            separated by gaps. Colour stays on a small icon chip
+                            rather than filling the tiles, so the accent palette
+                            is not spent three times above the fold. */}
+                        <View style={{ padding: 10, gap: 10 }}>
+                            <View style={{ borderRadius: 20, backgroundColor: softFill, overflow: 'hidden' }}>
+                                <Tabs
+                                    years={data?.years || []}
+                                    activeYearId={activeYearId}
+                                    activeSemId={activeSemId}
+                                    spotlightId={SPOTLIGHT_IDS.homeTerm}
+                                    renderTrigger={(open, label) => (
+                                        <View>
+                                            <TouchableOpacity
+                                                onPress={open}
+                                                activeOpacity={0.75}
+                                                accessibilityRole="button"
+                                                accessibilityLabel={`Active term: ${label}. Tap to switch term.`}
+                                                style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingTop: 13, paddingBottom: 10 }}
+                                            >
+                                                <View style={{ flex: 1, marginRight: 10 }}>
+                                                    <Text style={microLabel}>Active term</Text>
+                                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 18, color: theme.text, marginTop: 2, letterSpacing: -0.3 }}>
+                                                        {label}
+                                                    </Text>
+                                                </View>
+                                                <View style={{
+                                                    flexDirection: 'row', alignItems: 'center', gap: 4,
+                                                    paddingLeft: 12, paddingRight: 9, height: 32, borderRadius: 16,
+                                                    backgroundColor: theme.surface,
+                                                }}>
+                                                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: theme.textSecondary }}>Switch</Text>
+                                                    <Ionicons name="chevron-down" size={14} color={theme.textSecondary} />
+                                                </View>
+                                            </TouchableOpacity>
 
-                        {/* Term + timeline */}
-                        <Tabs
-                            years={data?.years || []}
-                            activeYearId={activeYearId}
-                            activeSemId={activeSemId}
-                            spotlightId={SPOTLIGHT_IDS.homeTerm}
-                            renderTrigger={(open, label) => (
-                                <View>
+                                            {currentSem?.startDate && currentSem?.endDate ? (
+                                                <View style={{ paddingHorizontal: 14, paddingBottom: 14 }}>
+                                                    <ProgressBar
+                                                        progress={semProgress.percent / 100}
+                                                        height={10}
+                                                        color={tints.schedule.solid}
+                                                        trackColor={isDark ? 'rgba(0,0,0,0.28)' : '#ffffff'}
+                                                        accessibilityLabel="Semester progress"
+                                                    />
+                                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+                                                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: tints.schedule.ink }}>
+                                                            {semProgress.percent}%
+                                                        </Text>
+                                                        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginLeft: 6 }}>
+                                                            · day {semProgress.daysPassed} of {semProgress.totalDays}
+                                                        </Text>
+                                                        <View style={{ flex: 1 }} />
+                                                        <Text numberOfLines={1} style={{ flexShrink: 1, fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary }}>
+                                                            {formatSemRange(currentSem.startDate, currentSem.endDate)}
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                            ) : (
+                                                <TouchableOpacity
+                                                    onPress={() => router.push('/(tabs)/academic-manager')}
+                                                    activeOpacity={0.7}
+                                                    accessibilityRole="button"
+                                                    accessibilityLabel="Set semester start and end dates in Academic Manager"
+                                                    style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 14 }}
+                                                >
+                                                    <Ionicons name="information-circle-outline" size={15} color={theme.textTertiary} style={{ marginRight: 7 }} />
+                                                    <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textSecondary }}>
+                                                        {formatSemRange(currentSem?.startDate, currentSem?.endDate)
+                                                            ? `${formatSemRange(currentSem?.startDate, currentSem?.endDate)} · add the other date`
+                                                            : 'Add start & end dates to track this semester'}
+                                                    </Text>
+                                                    <Ionicons name="chevron-forward" size={14} color={theme.textTertiary} />
+                                                </TouchableOpacity>
+                                            )}
+                                        </View>
+                                    )}
+                                />
+                            </View>
+
+                            <View style={{ flexDirection: 'row', gap: 8 }}>
+                                {statTiles.map((tile) => (
                                     <TouchableOpacity
-                                        onPress={open}
+                                        key={tile.key}
+                                        onPress={tile.onPress}
                                         activeOpacity={0.75}
                                         accessibilityRole="button"
-                                        accessibilityLabel={`Active term: ${label}. Tap to switch term.`}
-                                        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingTop: 12, paddingBottom: 10 }}
+                                        accessibilityLabel={`${tile.label}: ${tile.value}. ${tile.caption}.`}
+                                        style={{
+                                            flex: 1,
+                                            borderRadius: 18,
+                                            paddingHorizontal: 11, paddingTop: 11, paddingBottom: 12,
+                                            backgroundColor: softFill,
+                                        }}
                                     >
-                                        <View style={{ flex: 1, marginRight: 10 }}>
-                                            <Text style={microLabel}>Active term</Text>
-                                            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 18, color: theme.text, marginTop: 2, letterSpacing: -0.3 }}>
-                                                {label}
-                                            </Text>
-                                        </View>
                                         <View style={{
-                                            flexDirection: 'row', alignItems: 'center', gap: 4,
-                                            paddingLeft: 10, paddingRight: 8, height: 30, borderRadius: 10,
-                                            backgroundColor: theme.surfaceSecondary,
-                                            borderWidth: 1, borderColor: theme.cardBorder,
+                                            width: 26, height: 26, borderRadius: 13, marginBottom: 9,
+                                            alignItems: 'center', justifyContent: 'center',
+                                            backgroundColor: tile.tint.fill,
                                         }}>
-                                            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: theme.textSecondary }}>Switch</Text>
-                                            <Ionicons name="chevron-down" size={14} color={theme.textSecondary} />
+                                            <Ionicons name={tile.icon} size={14} color={tile.tint.ink} />
                                         </View>
-                                    </TouchableOpacity>
-
-                                    {currentSem?.startDate && currentSem?.endDate ? (
-                                        <View style={{ paddingHorizontal: 14, paddingBottom: 13 }}>
-                                            <ProgressBar
-                                                progress={semProgress.percent / 100}
-                                                height={8}
-                                                color={tints.schedule.solid}
-                                                accessibilityLabel="Semester progress"
-                                            />
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 7 }}>
-                                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: tints.schedule.ink }}>
-                                                    {semProgress.percent}%
-                                                </Text>
-                                                <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginLeft: 6 }}>
-                                                    · day {semProgress.daysPassed} of {semProgress.totalDays}
-                                                </Text>
-                                                <View style={{ flex: 1 }} />
-                                                <Text numberOfLines={1} style={{ flexShrink: 1, fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary }}>
-                                                    {formatSemRange(currentSem.startDate, currentSem.endDate)}
-                                                </Text>
-                                            </View>
-                                        </View>
-                                    ) : (
-                                        <TouchableOpacity
-                                            onPress={() => router.push('/(tabs)/academic-manager')}
-                                            activeOpacity={0.7}
-                                            accessibilityRole="button"
-                                            accessibilityLabel="Set semester start and end dates in Academic Manager"
-                                            style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 13 }}
+                                        <Text
+                                            numberOfLines={1}
+                                            adjustsFontSizeToFit
+                                            style={{ fontFamily: 'Nunito_900Black', fontSize: 23, color: theme.text, letterSpacing: -0.8 }}
                                         >
-                                            <Ionicons name="information-circle-outline" size={15} color={theme.textTertiary} style={{ marginRight: 7 }} />
-                                            <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textSecondary }}>
-                                                {formatSemRange(currentSem?.startDate, currentSem?.endDate)
-                                                    ? `${formatSemRange(currentSem?.startDate, currentSem?.endDate)} · add the other date`
-                                                    : 'Add start & end dates to track this semester'}
-                                            </Text>
-                                            <Ionicons name="chevron-forward" size={14} color={theme.textTertiary} />
-                                        </TouchableOpacity>
-                                    )}
-                                </View>
-                            )}
-                        />
-
-                        <View style={hairline} />
-
-                        {/* Three headline numbers. Each column carries a colour
-                            rail so the domain is readable before the label is. */}
-                        <View style={{ flexDirection: 'row' }}>
-                            {statTiles.map((tile, i) => (
-                                <TouchableOpacity
-                                    key={tile.key}
-                                    onPress={tile.onPress}
-                                    activeOpacity={0.7}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={`${tile.label}: ${tile.value}. ${tile.caption}.`}
-                                    style={{
-                                        flex: 1,
-                                        paddingTop: 11, paddingBottom: 13, paddingHorizontal: 11,
-                                        borderLeftWidth: i === 0 ? 0 : 1,
-                                        borderLeftColor: theme.cardBorder,
-                                    }}
-                                >
-                                    <View style={{ height: 3, width: 22, borderRadius: 2, backgroundColor: tile.tint.solid, marginBottom: 8 }} />
-                                    <Text numberOfLines={1} style={microLabel}>{tile.label}</Text>
-                                    <Text
-                                        numberOfLines={1}
-                                        adjustsFontSizeToFit
-                                        style={{ fontFamily: 'Nunito_900Black', fontSize: 24, color: theme.text, letterSpacing: -0.8, marginTop: 3 }}
-                                    >
-                                        {tile.value}
-                                    </Text>
-                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: tile.tint.ink, marginTop: 2 }}>
-                                        {tile.caption}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
+                                            {tile.value}
+                                        </Text>
+                                        <Text numberOfLines={1} style={{ ...microLabel, marginTop: 2 }}>{tile.label}</Text>
+                                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: tile.tint.ink, marginTop: 3 }}>
+                                            {tile.caption}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
                         </View>
+
                     </Card>
                 </FadeInItem>
 
@@ -976,7 +1012,7 @@ export default function DashboardScreen() {
 
                 {/* ══ Toolbelt — recessed, so it reads as fixed to the page ═════ */}
                 <FadeInItem index={2} style={{ paddingHorizontal: GUTTER, marginBottom: 24 }}>
-                    <Card variant="sunken" padding={6} radius={Radius.xl} style={{ flexDirection: 'row' }}>
+                    <View style={{ flexDirection: 'row', padding: 6, borderRadius: Radius['3xl'], backgroundColor: softFill }}>
                         {quickActions.map((action) => (
                             <TouchableOpacity
                                 key={action.key}
@@ -987,11 +1023,9 @@ export default function DashboardScreen() {
                                 style={{ flex: 1, alignItems: 'center', paddingVertical: 9, paddingHorizontal: 2 }}
                             >
                                 <View style={{
-                                    width: 42, height: 42, borderRadius: 14, marginBottom: 7,
+                                    width: 44, height: 44, borderRadius: 22, marginBottom: 8,
                                     alignItems: 'center', justifyContent: 'center',
                                     backgroundColor: action.tint.fill,
-                                    borderWidth: 1, borderColor: action.tint.line,
-                                    borderBottomWidth: 2,
                                 }}>
                                     <Ionicons name={action.icon} size={19} color={action.tint.ink} />
                                 </View>
@@ -1003,7 +1037,7 @@ export default function DashboardScreen() {
                                 </Text>
                             </TouchableOpacity>
                         ))}
-                    </Card>
+                    </View>
                 </FadeInItem>
 
                 {/* ══ TODAY — a timeline, not a list of boxes ═══════════════════ */}
@@ -1065,7 +1099,7 @@ export default function DashboardScreen() {
                         }
 
                         return (
-                            <Card padding={0} radius={Radius.xl} style={{ overflow: 'hidden' }}>
+                            <Card padding={0} radius={Radius['3xl']} style={{ overflow: 'hidden' }}>
                                 {todayClasses.map((cls: any, idx: number) => {
                                     const nowDate = new Date();
                                     const currentHourFloat = nowDate.getHours() + (nowDate.getMinutes() / 60);
@@ -1097,13 +1131,12 @@ export default function DashboardScreen() {
                                         <View
                                             key={cls.id || idx}
                                             style={{
-                                                borderTopWidth: idx === 0 ? 0 : 1,
-                                                borderTopColor: theme.cardBorder,
                                                 backgroundColor: isNow
                                                     ? tints.attendance.fill
                                                     : 'transparent',
                                             }}
                                         >
+                                            {idx > 0 && <View pointerEvents="none" style={rowDivider} />}
                                             <View style={{ flexDirection: 'row', paddingVertical: 11, paddingRight: 10, paddingLeft: 10, opacity: isDone ? 0.55 : 1 }}>
                                                 {/* Time rail */}
                                                 <View style={{ width: 50, alignItems: 'center', paddingTop: 1 }}>
@@ -1272,7 +1305,7 @@ export default function DashboardScreen() {
                         }
 
                         return (
-                            <Card padding={0} radius={Radius.xl} style={{ overflow: 'hidden' }}>
+                            <Card padding={0} radius={Radius['3xl']} style={{ overflow: 'hidden' }}>
                                 {visibleTasks.map((m: any, idx: number) => {
                                     const mTime = parseLocalDate(m.date);
                                     const mDate = new Date(mTime || Date.now());
@@ -1288,11 +1321,10 @@ export default function DashboardScreen() {
                                             key={m.id || idx}
                                             style={{
                                                 flexDirection: 'row', alignItems: 'center', padding: 10,
-                                                borderTopWidth: idx === 0 ? 0 : 1,
-                                                borderTopColor: theme.cardBorder,
                                                 backgroundColor: isOverdue ? tints.danger.fill : 'transparent',
                                             }}
                                         >
+                                            {idx > 0 && <View pointerEvents="none" style={rowDivider} />}
                                             <TouchableOpacity
                                                 activeOpacity={0.7}
                                                 onPress={() => router.push({ pathname: '/(tabs)/requirements', params: { subjectId: m.subjectId } })}
@@ -1409,7 +1441,7 @@ export default function DashboardScreen() {
                         }
 
                         return (
-                            <Card padding={0} radius={Radius.xl} style={{ overflow: 'hidden' }}>
+                            <Card padding={0} radius={Radius['3xl']} style={{ overflow: 'hidden' }}>
                                 {upcomingEvents.map((m: any, idx: number) => {
                                     const mTime = parseLocalDate(m.date);
                                     const mDate = new Date(mTime || Date.now());
@@ -1428,10 +1460,9 @@ export default function DashboardScreen() {
                                             accessibilityLabel={`${m.title}, ${daysText}, ${prio} priority`}
                                             style={{
                                                 flexDirection: 'row', alignItems: 'center', padding: 10,
-                                                borderTopWidth: idx === 0 ? 0 : 1,
-                                                borderTopColor: theme.cardBorder,
                                             }}
                                         >
+                                            {idx > 0 && <View pointerEvents="none" style={rowDivider} />}
                                             <View style={{
                                                 width: 44, height: 48, borderRadius: 12, marginRight: 11,
                                                 alignItems: 'center', justifyContent: 'center',
@@ -1507,7 +1538,7 @@ export default function DashboardScreen() {
                                     <Card
                                         key={sub.id || idx}
                                         padding={0}
-                                        radius={Radius.lg}
+                                        radius={Radius['2xl']}
                                         onPress={() => router.push({ pathname: '/(tabs)/requirements', params: { subjectId: sub.id } })}
                                         accessibilityLabel={`${codeDisplay}${nameDisplay ? `, ${nameDisplay}` : ''}, ${sub.units ?? 0} units, ${completedTasks} of ${totalTasks} tasks done`}
                                         style={{ width: subjectCardWidth, overflow: 'hidden' }}

@@ -1,12 +1,71 @@
 import assert from 'node:assert';
 import { getSubjectStyle, getSubjectIcon, getThemeTokens, SUBJECT_PALETTE } from '../widget/subjectUtils.ts';
-import { FinScholarWidget, getFirstGrapheme } from '../widget/FinScholarWidget.tsx';
-import { FlexWidget, TextWidget, SvgWidget } from 'react-native-android-widget';
+import { FinScholarWidget } from '../widget/FinScholarWidget.tsx';
+import { AgendaWidget } from '../widget/AgendaWidget.tsx';
+import { DeadlinesWidget } from '../widget/DeadlinesWidget.tsx';
+import { FocusWidget } from '../widget/FocusWidget.tsx';
+import { StatsWidget } from '../widget/StatsWidget.tsx';
+import { buildWidgetSnapshot, buildDemoSnapshot, emptySnapshot } from '../widget/widgetData.ts';
+import { getMetrics } from '../widget/widgetLayout.ts';
+import { getWidgetPalette } from '../widget/widgetTheme.ts';
+import { collect, requiredHeight, textNodes, texts, typeOf } from './helpers/widgetTree.js';
 
-function getChildren(node) {
-  if (!node || !node.props) return [];
-  if (Array.isArray(node.props.children)) return node.props.children.filter(Boolean);
-  return node.props.children ? [node.props.children] : [];
+const FAMILY = [
+  ['FinScholarWidget', FinScholarWidget, 110, 110],
+  ['FinScholarAgendaWidget', AgendaWidget, 180, 110],
+  ['FinScholarDeadlinesWidget', DeadlinesWidget, 110, 110],
+  ['FinScholarFocusWidget', FocusWidget, 180, 40],
+  ['FinScholarStatsWidget', StatsWidget, 110, 110],
+];
+
+/** Thursday 3 Sep 2026, 08:12 — the same clock the other widget suites use. */
+const NOW = new Date(2026, 8, 3, 8, 12, 0);
+
+function ledgerOf(classCount, taskCount = 0) {
+  return {
+    settings: { gradingSystem: '1_IS_BEST' },
+    years: [
+      {
+        id: 'y1',
+        semesters: [
+          {
+            id: 's1',
+            name: '1st Semester',
+            startDate: '2026-08-31',
+            endDate: '2026-12-11',
+            classes: Array.from({ length: classCount }, (_, i) => ({
+              id: `c${i}`,
+              name: i === 0 ? 'CS 101 - Intro to CS' : `Subject ${i} - Advanced Topic`,
+              room: `Room ${100 + i}`,
+              day: i === 0 ? 3 : i % 7,
+              startHour: i === 0 ? 7.5 : 8 + (i % 10),
+              duration: i === 0 ? 1.5 : 1,
+              colorIdx: i % 6,
+            })),
+            subjects: [
+              {
+                id: 'sub1',
+                name: 'CS 101',
+                colorIdx: 0,
+                requirements: Array.from({ length: taskCount }, (_, i) => ({
+                  id: `t${i}`,
+                  title: `Task ${i}`,
+                  status: 'pending',
+                  priority: ['high', 'medium', 'low'][i % 3],
+                  dueDate: new Date(2026, 8, 1 + i).toISOString(),
+                })),
+              },
+            ],
+            attendanceLog: {},
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function snapshotOf(classCount, taskCount = 0) {
+  return buildWidgetSnapshot(ledgerOf(classCount, taskCount), { yearId: 'y1', semId: 's1', now: NOW });
 }
 
 export function runEmpiricalStressHarness(describe, test) {
@@ -54,8 +113,8 @@ export function runEmpiricalStressHarness(describe, test) {
         '🔥🎨🤖💻📚🎓',
         'こんにちは世界',
         'مرحبا بالعالم',
-        '\0\u0001\uFFFF',
-        '\uD83D\uDE00\uD83D\uDE02',
+        '\0￿',
+        '😀😂',
         'C++ / C# / .NET 9.0 (Advanced)'
       ];
 
@@ -96,96 +155,54 @@ export function runEmpiricalStressHarness(describe, test) {
     });
   });
 
-  describe('Challenger Stress Suite 2: Component Tree & Flex Layout Stability', () => {
-    const buildMockClasses = (count) => {
-      const items = [];
-      for (let i = 0; i < count; i++) {
-        items.push({
-          courseName: i === 0 ? 'CS 101 - Intro to CS' : `Subject ${i} - Advanced Topic`,
-          room: `Room ${100 + i}`,
-          timeStr: `${8 + (i % 8)}:00 AM`,
-          timeRemainingStr: i === 0 ? 'In progress' : `In ${i}h`,
-          isOngoing: i === 0,
-        });
-      }
-      return items;
-    };
-
-    test('2.1 Class Count Scaling (0, 1, 2, 4, 10, 50 classes)', () => {
-      const counts = [0, 1, 2, 4, 10, 50];
-
-      for (const count of counts) {
-        const classes = buildMockClasses(count);
-        const widget = FinScholarWidget({ classes, isDark: false });
-
-        assert(widget, `Widget should render for ${count} classes`);
-        assert.strictEqual(widget.props.style.flex, 1);
-        assert.strictEqual(widget.props.style.width, 'match_parent');
-        assert.strictEqual(widget.props.style.borderRadius, 32);
-
-        if (count === 0) {
-          // Empty state structure
-          const children = getChildren(widget);
-          assert.strictEqual(children.length, 3, 'Empty state should have calendar icon container, TextWidget title, TextWidget subtitle');
-          assert.strictEqual(children[1].props.text, 'No upcoming classes!');
-        } else {
-          // Main layout structure (Top Section + Middle Wavy Divider + Bottom White Section)
-          const children = getChildren(widget);
-          assert.strictEqual(children.length, 3, 'Main widget should have top section, middle wavy divider, and bottom section');
-
-          const topSection = children[0];
-          const middleSection = children[1];
-          const bottomSection = children[2];
-
-          // Top section structure check
-          assert.strictEqual(topSection.props.style.width, 'match_parent');
-
-          // Middle section wave divider check
-          const waveSvg = getChildren(middleSection).find(c => c.type === SvgWidget || c.type?.name === 'SvgWidget');
-          assert(waveSvg, 'Middle section should contain SvgWidget wave');
-
-          // Bottom section flex check
-          assert.strictEqual(bottomSection.props.style.flex, 1);
-          assert.strictEqual(bottomSection.props.style.width, 'match_parent');
-          assert.strictEqual(bottomSection.props.style.backgroundColor, '#ffffff');
-
-          const bottomChildren = getChildren(bottomSection);
-          if (count === 1) {
-            // 1 active class -> 0 upcoming classes -> renders empty state text
-            const emptyTextNode = getChildren(bottomChildren[0])[0];
-            assert.strictEqual(emptyTextNode.props.text, 'No other classes today');
-          } else {
-            // count - 1 upcoming classes (capped at visibleCount = 3)
-            const upcomingCount = Math.min(count - 1, 3);
-            const listContainer = bottomChildren[0];
-            const cards = getChildren(listContainer);
-            assert.strictEqual(cards.length, upcomingCount, `Expected ${upcomingCount} upcoming cards for ${count} classes`);
-
-            // Verify each card layout stability
-            cards.forEach((card, idx) => {
-              assert.strictEqual(card.props.style.flexDirection, 'row');
-              assert.strictEqual(card.props.style.alignItems, 'center');
-              assert.strictEqual(card.props.style.borderRadius, 28);
-              assert.strictEqual(String(card.key), String(idx), `Card at index ${idx} should have stable key=${idx}`);
-            });
-          }
+  describe('Challenger Stress Suite 2: Widget family tree stability', () => {
+    test('2.1 Every widget survives 0, 1, 2, 4, 10 and 50 classes', () => {
+      for (const count of [0, 1, 2, 4, 10, 50]) {
+        const snapshot = snapshotOf(count, count);
+        for (const [name, Component] of FAMILY) {
+          const tree = Component({ snapshot, widgetInfo: { width: 280, height: 220 } });
+          assert.strictEqual(typeOf(tree), 'FlexWidget', `${name} lost its card root at ${count} classes`);
+          assert.strictEqual(tree.props.style.flex, 1);
+          assert.strictEqual(tree.props.style.width, 'match_parent');
+          assert(requiredHeight(tree) <= 220, `${name} overflowed at ${count} classes`);
+          assert(textNodes(tree).length > 0, `${name} rendered no text at ${count} classes`);
         }
       }
     });
 
-    test('2.2 Wave SVG Path Fill Stability Across Layout Trees', () => {
-      const classes = buildMockClasses(3);
+    test('2.2 A list never draws more rows than the data has', () => {
+      for (const count of [1, 2, 3, 4, 5, 9]) {
+        const snapshot = snapshotOf(count, count);
+        const tree = FinScholarWidget({ snapshot, widgetInfo: { width: 300, height: 400 } });
+        const rows = collect(
+          tree,
+          (n) =>
+            n.props?.style?.flexDirection === 'row' &&
+            n.props?.style?.width === 'match_parent' &&
+            typeof n.props?.style?.height === 'number'
+        );
+        // The header and the hero's status line share the row shape, so the
+        // bound is loose; what matters is that it never invents a class.
+        assert(
+          rows.length <= Math.max(1, snapshot.upcoming.length) + 2,
+          `Drew ${rows.length} rows for ${snapshot.upcoming.length} classes`
+        );
+      }
+    });
 
-      const widget = FinScholarWidget({ classes, isDark: false });
-      const middleSection = getChildren(widget)[1];
-      const svgWave = getChildren(middleSection).find(c => c.type === SvgWidget || c.type?.name === 'SvgWidget');
-      assert(svgWave, 'SvgWidget wave must exist');
-      assert(svgWave.props.svg.includes('fill="#ffffff"'), 'Wave fill must be #ffffff');
+    test('2.3 Row keys are stable so a redraw does not shuffle the list', () => {
+      const snapshot = snapshotOf(6, 6);
+      for (const [name, Component] of FAMILY) {
+        const first = Component({ snapshot, widgetInfo: { width: 300, height: 340 } });
+        const second = Component({ snapshot, widgetInfo: { width: 300, height: 340 } });
+        const keysOf = (tree) => collect(tree, (n) => n.key != null).map((n) => n.key);
+        assert.deepStrictEqual(keysOf(first), keysOf(second), `${name} produced unstable keys`);
+      }
     });
   });
 
-  describe('Challenger Stress Suite 3: Dark Mode Toggling & Theme Tokens', () => {
-    test('3.1 Theme Token Parity & Contract Completeness', () => {
+  describe('Challenger Stress Suite 3: Theme toggling', () => {
+    test('3.1 Theme token parity & contract completeness', () => {
       const light = getThemeTokens(false);
       const dark = getThemeTokens(true);
 
@@ -202,105 +219,60 @@ export function runEmpiricalStressHarness(describe, test) {
       }
     });
 
-    test('3.2 High-Frequency Toggle Loop (10,000 iterations)', () => {
-      const classes = [
-        { courseName: 'CS 101', room: 'R101', timeStr: '9:00 AM', timeRemainingStr: 'In progress', isOngoing: true },
-        { courseName: 'MATH 201', room: 'R202', timeStr: '11:00 AM', timeRemainingStr: 'In 2h', isOngoing: false },
-        { courseName: 'PHYS 301', room: 'Lab 3', timeStr: '1:00 PM', timeRemainingStr: 'In 4h', isOngoing: false },
-      ];
+    test('3.2 High-frequency toggle loop keeps every widget deterministic', () => {
+      const snapshot = snapshotOf(6, 6);
+      const lightSurface = getWidgetPalette(false).surface;
+      const darkSurface = getWidgetPalette(true).surface;
 
-      for (let i = 0; i < 10_000; i++) {
+      for (let i = 0; i < 2000; i++) {
         const isDark = i % 2 === 0;
-        const widget = FinScholarWidget({ classes, isDark });
-        const [topSection, middleSection, bottomSection] = getChildren(widget);
-
-        // Verify root background
-        const expectedRootBg = isDark ? '#0f172a' : '#6366f1';
-        assert.strictEqual(widget.props.style.backgroundColor, expectedRootBg);
-
-        // Verify bottom background
-        const expectedBottomBg = isDark ? '#0f172a' : '#ffffff';
-        assert.strictEqual(bottomSection.props.style.backgroundColor, expectedBottomBg);
-
-        // Verify wave fill matches bottom background exactly
-        const expectedWaveFill = isDark ? 'fill="#0f172a"' : 'fill="#ffffff"';
-        const waveSvg = getChildren(middleSection).find(c => c.type === SvgWidget || c.type?.name === 'SvgWidget');
-        assert(waveSvg.props.svg.includes(expectedWaveFill), `Wave SVG fill mismatch at iteration ${i}`);
-
-        // Verify top panel title & colors
-        const nextPanel = getChildren(topSection)[1];
-        const panelTitle = getChildren(nextPanel)[1];
-        assert.strictEqual(panelTitle.props.style.color, isDark ? '#f8fafc' : '#ffffff');
-
-        // Verify upcoming card tokens
-        const cards = getChildren(getChildren(bottomSection)[0]);
-        assert.strictEqual(cards.length, 2);
-        const card0 = cards[0];
-        assert.strictEqual(card0.props.style.backgroundColor, isDark ? '#1e293b' : '#f1f5f9');
+        for (const [name, Component] of FAMILY) {
+          const tree = Component({ snapshot, isDark, widgetInfo: { width: 280, height: 220 } });
+          assert.strictEqual(
+            tree.props.style.backgroundColor,
+            isDark ? darkSurface : lightSurface,
+            `${name} drew the wrong surface at iteration ${i}`
+          );
+        }
       }
     });
 
-    test('3.3 Empty State High-Frequency Toggle Loop (10,000 iterations)', () => {
-      for (let i = 0; i < 10_000; i++) {
+    test('3.3 Empty-state toggle loop stays on-palette', () => {
+      const blank = emptySnapshot(NOW);
+      for (let i = 0; i < 2000; i++) {
         const isDark = i % 2 === 0;
-        const emptyWidget = FinScholarWidget({ classes: [], isDark });
-        const expectedBg = isDark ? '#0f172a' : '#6366f1';
-        assert.strictEqual(emptyWidget.props.style.backgroundColor, expectedBg);
-        assert.strictEqual(emptyWidget.props.style.backgroundGradient.from, expectedBg);
-
-        const children = getChildren(emptyWidget);
-        const titleText = children[1];
-        const subtitleText = children[2];
-        assert.strictEqual(titleText.props.style.color, isDark ? '#f8fafc' : '#ffffff');
-        assert.strictEqual(subtitleText.props.style.color, isDark ? '#94a3b8' : 'rgba(255, 255, 255, 0.85)');
+        const palette = getWidgetPalette(isDark);
+        const tree = FinScholarWidget({ snapshot: blank, isDark, widgetInfo: { width: 280, height: 220 } });
+        assert.strictEqual(tree.props.style.backgroundColor, palette.surface);
+        assert.strictEqual(tree.props.style.backgroundGradient.to, palette.surfaceTo);
+        assert(texts(tree).includes('No classes coming up'));
       }
     });
   });
 
-  describe('Challenger Stress Suite 4: Responsive Geometry Breakpoint Matrix & Zero-Clipping Stress', () => {
-    const testHeights = [0, 1, 40, 50, 100, 109, 110, 130, 150, 159, 160, 180, 200, 239, 240, 250, 320, 480, 600, 1000];
-    const testWidths = [0, 50, 100, 180, 250, 320, 360, 480, 720, 1080];
-    const fullClasses = [
-      { courseName: 'CS 101 - Intro', room: 'R101', timeStr: '8:00 AM', timeRemainingStr: 'In progress', isOngoing: true },
-      { courseName: 'MATH 201 - Calc', room: 'R201', timeStr: '10:00 AM', timeRemainingStr: 'In 2h', isOngoing: false },
-      { courseName: 'PHYS 301 - Lab', room: 'R301', timeStr: '1:00 PM', timeRemainingStr: 'In 5h', isOngoing: false },
-      { courseName: 'ENG 401 - Lit', room: 'R401', timeStr: '3:00 PM', timeRemainingStr: 'In 7h', isOngoing: false },
-      { courseName: 'HIST 101 - World', room: 'R501', timeStr: '5:00 PM', timeRemainingStr: 'In 9h', isOngoing: false },
-    ];
+  describe('Challenger Stress Suite 4: Geometry breakpoints & zero clipping', () => {
+    test('4.1 Multi-dimensional breakpoint matrix', () => {
+      const heights = [40, 60, 95, 96, 110, 130, 149, 150, 180, 200, 229, 230, 250, 320, 400, 600];
+      const widths = [110, 140, 180, 200, 240, 280, 320, 360, 480];
+      const snapshot = snapshotOf(9, 9);
 
-    test('4.1 Multi-Dimensional Breakpoint Matrix (200 geometry combinations)', () => {
-      for (const h of testHeights) {
-        for (const w of testWidths) {
-          const widgetInfo = { width: w, height: h };
-          const widget = FinScholarWidget({ classes: fullClasses, isDark: false, widgetInfo });
-
-          assert(widget, `Widget must render for height=${h} width=${w}`);
-          const [topSection, waveSection, bottomSection] = getChildren(widget);
-          const bottomContent = getChildren(bottomSection)[0];
-
-          if (h < 110) {
-            // visibleCount = 0 -> Renders empty message
-            const emptyTextNode = getChildren(bottomContent)[0];
-            assert.strictEqual(emptyTextNode.props.text, 'No other classes today', `Expected empty message at height ${h}`);
-          } else if (h < 160) {
-            // visibleCount = 1 -> Exactly 1 upcoming card
-            const cards = getChildren(bottomContent);
-            assert.strictEqual(cards.length, 1, `Expected 1 card at height ${h}`);
-          } else if (h < 240) {
-            // visibleCount = 2 -> Exactly 2 upcoming cards
-            const cards = getChildren(bottomContent);
-            assert.strictEqual(cards.length, 2, `Expected 2 cards at height ${h}`);
-          } else {
-            // visibleCount = 3 -> Exactly 3 upcoming cards (capped from 4)
-            const cards = getChildren(bottomContent);
-            assert.strictEqual(cards.length, 3, `Expected 3 cards at height ${h}`);
+      for (const [name, Component, minWidth, minHeight] of FAMILY) {
+        for (const height of heights) {
+          for (const width of widths) {
+            if (height < minHeight || width < minWidth) continue;
+            const tree = Component({ snapshot, widgetInfo: { width, height } });
+            assert(tree, `${name} must render at ${width}x${height}`);
+            assert(requiredHeight(tree) <= height, `${name} clipped at ${width}x${height}`);
+            const metrics = getMetrics({ width, height });
+            assert.strictEqual(tree.props.style.padding, metrics.gutter, `${name} padding drifted at ${width}x${height}`);
           }
         }
       }
     });
 
-    test('4.2 Malformed & Edge-Case widgetInfo Boundaries (NaN, null, undefined, negative)', () => {
-      const edgeWidgetInfos = [
+    test('4.2 Malformed widgetInfo falls back to a drawable default', () => {
+      const snapshot = snapshotOf(6, 6);
+      const edgeInfos = [
         undefined,
         null,
         {},
@@ -309,155 +281,136 @@ export function runEmpiricalStressHarness(describe, test) {
         { width: '300', height: '250' },
         { width: 0, height: 0 },
         { width: Infinity, height: Infinity },
+        { width: [], height: {} },
       ];
 
-      for (const info of edgeWidgetInfos) {
-        const widget = FinScholarWidget({ classes: fullClasses, isDark: true, widgetInfo: info });
-        assert(widget, `Widget should render safely for edge widgetInfo: ${JSON.stringify(info)}`);
-        assert.strictEqual(widget.props.style.flex, 1);
-
-        const [topSection, waveSection, bottomSection] = getChildren(widget);
-        const bottomContent = getChildren(bottomSection)[0];
-
-        // If height is numeric 0 or negative (< 110), visibleCount is 0; otherwise falls back to default 250 (3 cards)
-        if (typeof info?.height === 'number' && !isNaN(info.height) && info.height < 110) {
-          assert.strictEqual(getChildren(bottomContent)[0].props.text, 'No other classes today');
-        } else {
-          const cards = getChildren(bottomContent);
-          assert.strictEqual(cards.length, 3, `Expected default 3 cards for widgetInfo: ${JSON.stringify(info)}`);
+      for (const info of edgeInfos) {
+        for (const [name, Component] of FAMILY) {
+          const tree = Component({ snapshot, isDark: true, widgetInfo: info });
+          assert(tree, `${name} should render for widgetInfo: ${JSON.stringify(info)}`);
+          assert.strictEqual(tree.props.style.flex, 1);
+          const metrics = getMetrics(info);
+          assert(requiredHeight(tree) <= metrics.height, `${name} overflowed its fallback box`);
         }
       }
     });
 
-    test('4.3 Zero Vertical Element Clipping & Strict Sub-Component Heights', () => {
-      const widget = FinScholarWidget({ classes: fullClasses, widgetInfo: { width: 180, height: 250 } });
-      const [topSection, waveSection, bottomSection] = getChildren(widget);
+    test('4.3 No child is ever bigger than the card it sits in', () => {
+      const snapshot = snapshotOf(6, 6);
+      for (const size of [
+        { width: 140, height: 120 },
+        { width: 250, height: 200 },
+        { width: 320, height: 400 },
+      ]) {
+        const metrics = getMetrics(size);
+        assert(metrics.gutter >= 10 && metrics.gutter <= 14, `gutter ${metrics.gutter} out of range`);
+        assert(metrics.radius >= 18 && metrics.radius <= 28, `radius ${metrics.radius} out of range`);
 
-      // Top section height constraints
-      const topPadding = (topSection.props.style.paddingTop || 0) + (topSection.props.style.paddingBottom || 0);
-      assert(topPadding <= 14, `Top padding ${topPadding} exceeds budget`);
-
-      // Header icon circle
-      const headerRow = getChildren(topSection)[0];
-      const iconCircle = getChildren(headerRow)[0];
-      assert(iconCircle.props.style.height <= 30, `Icon circle height ${iconCircle.props.style.height} exceeds budget`);
-
-      // Next class panel
-      const nextPanel = getChildren(topSection)[1];
-      const panelPadding = (nextPanel.props.style.paddingVertical || 0) * 2;
-      assert(panelPadding <= 20, `Next class panel padding ${panelPadding} exceeds budget`);
-
-      // Wave divider
-      assert.strictEqual(waveSection.props.style.height, 14, 'Wave divider height must be exactly 14');
-
-      // Bottom cards
-      const cards = getChildren(getChildren(bottomSection)[0]);
-      assert.strictEqual(cards.length, 3);
-      for (const card of cards) {
-        assert(card.props.style.padding <= 6, 'Card padding must be <= 6');
-        assert(card.props.style.marginBottom <= 5, 'Card marginBottom must be <= 5');
-        const [avatar, middle, badge] = getChildren(card);
-        assert.strictEqual(avatar.props.style.height, 28, 'Avatar height must be 28');
-        assert.strictEqual(badge.props.style.height, 28, 'Badge height must be 28');
+        for (const [name, Component] of FAMILY) {
+          const tree = Component({ snapshot, widgetInfo: size });
+          for (const node of collect(tree, () => true)) {
+            const style = node.props?.style ?? {};
+            if (typeof style.height === 'number') {
+              assert(style.height <= size.height, `${name}: a child is ${style.height}dp inside a ${size.height}dp card`);
+            }
+            if (typeof style.width === 'number') {
+              assert(style.width <= size.width, `${name}: a child is ${style.width}dp inside a ${size.width}dp card`);
+            }
+          }
+        }
       }
     });
 
-    test('4.4 Typography MaxLines Guarantee across all TextWidgets', () => {
-      const widget = FinScholarWidget({ classes: fullClasses });
-      const [topSection, waveSection, bottomSection] = getChildren(widget);
-
-      const nextPanel = getChildren(topSection)[1];
-      const [statusBadge, activeTitle, activeSub] = getChildren(nextPanel);
-      assert.strictEqual(activeTitle.props.maxLines, 1, 'Active title must have maxLines=1');
-      assert.strictEqual(activeSub.props.maxLines, 1, 'Active sub must have maxLines=1');
-
-      const cards = getChildren(getChildren(bottomSection)[0]);
-      for (const card of cards) {
-        const middle = getChildren(card)[1];
-        const [title, sub] = getChildren(middle);
-        const badge = getChildren(card)[2];
-        const badgeText = getChildren(badge)[0];
-
-        assert.strictEqual(title.props.maxLines, 1, 'Card title must have maxLines=1');
-        assert.strictEqual(sub.props.maxLines, 1, 'Card sub must have maxLines=1');
-        assert.strictEqual(badgeText.props.maxLines, 1, 'Badge text must have maxLines=1');
+    test('4.4 Every text node is single line and unscaled, at every size', () => {
+      const snapshot = snapshotOf(9, 9);
+      for (const size of [
+        { width: 180, height: 110 },
+        { width: 280, height: 220 },
+        { width: 320, height: 400 },
+      ]) {
+        for (const [name, Component] of FAMILY) {
+          for (const node of textNodes(Component({ snapshot, widgetInfo: size }))) {
+            assert.strictEqual(node.props.maxLines, 1, `${name}: "${node.props.text}" may wrap`);
+            assert.strictEqual(node.props.allowFontScaling, false, `${name}: "${node.props.text}" would rescale`);
+            assert(typeof node.props.text === 'string', `${name}: a non-string reached a TextWidget`);
+          }
+        }
       }
     });
   });
 
-  describe('Challenger Stress Suite 5: Extreme Class List Scaling & Input Fuzzing', () => {
-    test('5.1 Scaling up to 10,000 Classes', () => {
-      const hugeClasses = Array.from({ length: 10_000 }, (_, i) => ({
-        courseName: `Course ${i} - Title ${i}`,
-        room: `Room ${i}`,
-        timeStr: `${(i % 12) + 1}:00 PM`,
-        timeRemainingStr: `In ${i}h`,
-        isOngoing: i === 0,
-      }));
+  describe('Challenger Stress Suite 5: Extreme input scaling & fuzzing', () => {
+    test('5.1 Ten thousand classes still draw one card, quickly', () => {
+      const snapshot = snapshotOf(10000, 0);
+      const started = performance.now();
+      const tree = FinScholarWidget({ snapshot, widgetInfo: { width: 300, height: 300 } });
+      const elapsed = performance.now() - started;
 
-      const t0 = performance.now();
-      const widget = FinScholarWidget({ classes: hugeClasses, widgetInfo: { width: 300, height: 300 } });
-      const elapsed = performance.now() - t0;
-
-      assert(widget, 'Widget must render for 10,000 classes');
-      assert(elapsed < 100, `Rendering 10,000 classes took ${elapsed.toFixed(2)}ms (expected < 100ms)`);
-
-      const [topSection, waveSection, bottomSection] = getChildren(widget);
-      const cards = getChildren(getChildren(bottomSection)[0]);
-      assert.strictEqual(cards.length, 3, 'Must safely cap upcoming classes at 3 regardless of input length');
+      assert(tree, 'Widget must render for a 10,000-class timetable');
+      assert(elapsed < 100, `Rendering took ${elapsed.toFixed(2)}ms`);
+      assert(snapshot.upcoming.length <= 6, 'The snapshot caps the list long before the renderer sees it');
+      assert(requiredHeight(tree) <= 300);
     });
 
-    test('5.2 Massive Malformed & Adversarial Array Fuzzing (1,000 items)', () => {
-      const malformedItems = [
+    test('5.2 Adversarial ledgers never take a widget down', () => {
+      const malformed = [
         null,
         undefined,
         12345,
         'random_string',
         true,
-        false,
         [],
         {},
-        { courseName: null, room: undefined, timeStr: null, timeRemainingStr: '', isOngoing: false },
-        { courseName: '   \t\n   ', room: '   ', timeStr: '   ', timeRemainingStr: '   ', isOngoing: false },
-        { courseName: '<svg><script>alert("xss")</script></svg>', room: '🔥 Room', timeStr: '12:00 PM', timeRemainingStr: 'In 1h', isOngoing: false },
-        { courseName: 'A'.repeat(50_000), room: 'B'.repeat(10_000), timeStr: '1:00 PM', timeRemainingStr: 'In 3h', isOngoing: true },
-        { courseName: '👨‍👩‍👧‍👦 Family Studies', room: '🏛️ Hall', timeStr: '2:00 PM', timeRemainingStr: 'In 4h', isOngoing: false },
+        { years: null },
+        { years: [{ semesters: [{ classes: 'nope', subjects: 'nope' }] }] },
+        { years: [{ id: 'y1', semesters: [{ id: 's1', classes: [{ name: 'A'.repeat(50000), day: 3, startHour: 8 }] }] }] },
+        { years: [{ id: 'y1', semesters: [{ id: 's1', classes: [{ name: '<script>alert(1)</script>', day: 3, startHour: 8 }] }] }] },
+        { years: [{ id: 'y1', semesters: [{ id: 's1', subjects: [{ requirements: [{ title: 'x'.repeat(20000), status: 'pending' }] }] }] }] },
       ];
 
-      // Build 1,000-item fuzzed array
-      const fuzzedList = [];
-      for (let i = 0; i < 1000; i++) {
-        fuzzedList.push(malformedItems[i % malformedItems.length]);
+      for (const ledger of malformed) {
+        const snapshot = buildWidgetSnapshot(ledger, { yearId: 'y1', semId: 's1', now: NOW });
+        for (const [name, Component] of FAMILY) {
+          const tree = Component({ snapshot, widgetInfo: { width: 280, height: 220 } });
+          assert(tree, `${name} failed on a malformed ledger`);
+          assert.strictEqual(tree.props.style.flex, 1);
+          for (const value of texts(tree)) {
+            assert(value.length <= 200, `${name} passed a ${value.length}-char string to a bitmap`);
+          }
+        }
       }
-
-      const widget = FinScholarWidget({ classes: fuzzedList });
-      assert(widget, 'Widget must render without exception on heavily corrupted class list');
-      assert.strictEqual(widget.props.style.flex, 1);
     });
 
-    test('5.3 Unicode Grapheme Cluster & Multilingual Stress (100 complex strings)', () => {
-      const complexStrings = [
-        { input: 'CS 101', expected: 'C' },
-        { input: 'math 201', expected: 'M' },
-        { input: '   physics 301', expected: 'P' },
-        { input: '', expected: 'C' },
-        { input: '   ', expected: 'C' },
-        { input: null, expected: 'C' },
-        { input: undefined, expected: 'C' },
-        { input: '🎨 ART 101', expected: '🎨' },
-        { input: '🇵🇭 HIST 101', expected: '🇵🇭' },
-        { input: '👨‍🎓 GRAD 500', expected: '👨‍🎓' },
-        { input: '👍🏽 PE 200', expected: '👍🏽' },
-        { input: '🚀 ADV-CS', expected: '🚀' },
-        { input: 'こんにちは', expected: 'こ' },
-        { input: 'مرحبا', expected: 'م' },
-        { input: '✨ Quantum Computing', expected: '✨' },
-        { input: '123 Computer Science', expected: '1' },
-      ];
+    test('5.3 Every widget renders inside its own frame budget', () => {
+      const snapshot = buildDemoSnapshot(NOW);
+      for (const [name, Component] of FAMILY) {
+        const started = performance.now();
+        for (let i = 0; i < 500; i++) {
+          Component({ snapshot, isDark: i % 2 === 0, widgetInfo: { width: 300, height: 300 } });
+        }
+        const perRender = (performance.now() - started) / 500;
+        assert(perRender < 2, `${name} takes ${perRender.toFixed(3)}ms per render`);
+      }
+    });
 
-      for (const item of complexStrings) {
-        const grapheme = getFirstGrapheme(item.input);
-        assert.strictEqual(grapheme, item.expected, `getFirstGrapheme('${item.input}') failed: expected '${item.expected}', got '${grapheme}'`);
+    test('5.4 Unicode and multilingual class names pass through intact', () => {
+      const names = [
+        'CS 101',
+        '🎨 ART 101',
+        '🇵🇭 HIST 101',
+        'こんにちは',
+        'مرحبا',
+        'C++ / C# / .NET 9.0 (Advanced)',
+      ];
+      for (const name of names) {
+        const ledger = ledgerOf(1, 0);
+        ledger.years[0].semesters[0].classes[0].name = name;
+        const snapshot = buildWidgetSnapshot(ledger, { yearId: 'y1', semId: 's1', now: NOW });
+        const tree = FinScholarWidget({ snapshot, widgetInfo: { width: 300, height: 240 } });
+        assert(
+          texts(tree).some((t) => t === snapshot.upcoming[0].courseName),
+          `"${name}" did not survive to the widget`
+        );
       }
     });
   });

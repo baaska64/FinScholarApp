@@ -37,11 +37,18 @@ const startTime = Date.now();
 
 function createHarness() {
   let currentSuiteName = '';
+  // Suites register synchronously but a test body may be async. Everything is
+  // queued onto one chain and awaited in order, so an async test's assertions
+  // actually run, and its result prints under its own suite heading instead of
+  // resolving into the void after the summary.
+  let chain = Promise.resolve();
 
   const describe = (suiteName, suiteFn) => {
     totalSuites++;
     currentSuiteName = suiteName;
-    console.log(`\n${BOLD}${CYAN}=== ${suiteName} ===${RESET}`);
+    chain = chain.then(() => {
+      console.log(`\n${BOLD}${CYAN}=== ${suiteName} ===${RESET}`);
+    });
     try {
       suiteFn();
       passedSuites++;
@@ -52,23 +59,29 @@ function createHarness() {
 
   const test = (testName, testFn) => {
     totalTests++;
-    try {
-      testFn();
-      passedTests++;
-      console.log(`  ${GREEN}✓${RESET} ${testName}`);
-    } catch (err) {
-      failedTests++;
-      failures.push({ suite: currentSuiteName, test: testName, error: err });
-      console.log(`  ${RED}✖${RESET} ${testName}`);
-      console.log(`    ${RED}${err.message}${RESET}`);
-      if (err.stack) {
-        const stackLines = err.stack.split('\n').slice(1, 4).join('\n    ');
-        console.log(`    ${YELLOW}${stackLines}${RESET}`);
+    const suiteName = currentSuiteName;
+    chain = chain.then(async () => {
+      try {
+        await testFn();
+        passedTests++;
+        console.log(`  ${GREEN}✓${RESET} ${testName}`);
+      } catch (err) {
+        failedTests++;
+        failures.push({ suite: suiteName, test: testName, error: err });
+        console.log(`  ${RED}✖${RESET} ${testName}`);
+        console.log(`    ${RED}${err.message}${RESET}`);
+        if (err.stack) {
+          const stackLines = err.stack.split('\n').slice(1, 4).join('\n    ');
+          console.log(`    ${YELLOW}${stackLines}${RESET}`);
+        }
       }
-    }
+    });
   };
 
-  return { describe, test };
+  /** Resolves once every queued suite and test has run. */
+  const flush = () => chain;
+
+  return { describe, test, flush };
 }
 
 async function run() {
@@ -160,10 +173,22 @@ async function run() {
     const { runGradeTierTests } = await import('../__tests__/grade-tiers.test.js');
     runGradeTierTests(harness.describe, harness.test);
 
+    const { runQuickEditTests } = await import('../__tests__/quick-edit.test.js');
+    runQuickEditTests(harness.describe, harness.test);
+
+    const { runReleaseTests } = await import('../__tests__/release.test.js');
+    runReleaseTests(harness.describe, harness.test);
+
+    const { runCalendarTests } = await import('../__tests__/calendar.test.js');
+    runCalendarTests(harness.describe, harness.test);
+
   } catch (err) {
     console.error(`\n${RED}Fatal runner error:${RESET}`, err);
     process.exit(1);
   }
+
+  // Drain the queue before reporting: async bodies finish here.
+  await harness.flush();
 
   const durationMs = Date.now() - startTime;
 

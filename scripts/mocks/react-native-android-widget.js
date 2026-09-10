@@ -1,8 +1,16 @@
 export let lastWidgetUpdateConfig = null;
+/** Every config from the current handler run — the app draws five widgets per update. */
+export const widgetUpdateConfigs = [];
 
 export const requestWidgetUpdate = (config) => {
   lastWidgetUpdateConfig = config;
+  widgetUpdateConfigs.push(config);
   return Promise.resolve(config);
+};
+
+export const resetWidgetUpdates = () => {
+  lastWidgetUpdateConfig = null;
+  widgetUpdateConfigs.length = 0;
 };
 
 export const FlexWidget = (props) => ({ type: 'FlexWidget', props, children: props.children });
@@ -15,6 +23,7 @@ export const ListWidget = (props) => ({ type: 'ListWidget', props, children: pro
 
 export default {
   requestWidgetUpdate,
+  resetWidgetUpdates,
   FlexWidget,
   TextWidget,
   ImageWidget,

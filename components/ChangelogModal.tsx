@@ -1,19 +1,64 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, Modal, TouchableOpacity, ScrollView, Dimensions, StyleSheet, ImageBackground } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, Modal, TouchableOpacity, ScrollView, Pressable } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
-import { triggerHaptic } from './tasks/utils';
 import Constants from 'expo-constants';
+import { useColorScheme } from 'nativewind';
+import { getTheme, getTints, Radius, Typography } from '@/constants/Theme';
+import { CHANGELOG, LATEST_RELEASE, releaseFor, type ChangelogEntry } from '@/constants/changelog';
+import { triggerHaptic } from './tasks/utils';
 import { OnboardingService } from '../services/OnboardingService';
 
-const SCREEN_HEIGHT = Dimensions.get('window').height;
 const CHANGELOG_KEY = '@changelog_last_seen_version';
-const CURRENT_VERSION = Constants.expoConfig?.version || '1.0.7';
+const CURRENT_VERSION = Constants.expoConfig?.version || LATEST_RELEASE.version;
 
+/**
+ * Lets Settings reopen the sheet on demand, the same imperative shape
+ * `AlertService` uses. Without it "What's New" is a one-shot popup you can
+ * never get back to — which is exactly where release notes go to die.
+ */
+class ChangelogManager {
+  private listener: ((open: boolean) => void) | null = null;
+
+  setListener(listener: (open: boolean) => void) {
+    this.listener = listener;
+  }
+
+  open() {
+    this.listener?.(true);
+  }
+}
+
+export const ChangelogService = new ChangelogManager();
+
+/**
+ * "What's New" — the release notes sheet.
+ *
+ * Shows itself once per version, and can be reopened from Settings → Help.
+ * Deliberately built on the app's own tokens rather than the glass/blur
+ * treatment it used to have: that version was dark-only, so in light mode it
+ * dropped a black slab over the app, and its stacked drop shadows were the
+ * floating-template look the rest of the app moved away from.
+ */
 export default function ChangelogModal() {
   const [visible, setVisible] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === 'dark';
+  const theme = getTheme(isDark);
+  const tints = getTints(isDark);
+  const insets = useSafeAreaInsets();
 
+  const release = releaseFor(CURRENT_VERSION);
+  const older = CHANGELOG.filter((entry) => entry.version !== release.version);
+
+  useEffect(() => {
+    ChangelogService.setListener(setVisible);
+    return () => ChangelogService.setListener(() => {});
+  }, []);
+
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const checkVersion = async () => {
       try {
@@ -33,119 +78,240 @@ export default function ChangelogModal() {
       }
     };
 
-    setTimeout(checkVersion, 800);
+    // Let the first screen settle before covering it.
+    timer.current = setTimeout(checkVersion, 800);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
   }, []);
 
-  const handleClose = async () => {
+  const handleClose = useCallback(async () => {
     triggerHaptic('success');
     setVisible(false);
+    setExpanded(false);
     try {
       await AsyncStorage.setItem(CHANGELOG_KEY, CURRENT_VERSION);
     } catch (e) {
       console.error('Error saving changelog version', e);
     }
-  };
+  }, []);
 
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="slide">
-      <View className="flex-1 justify-end bg-black/60">
-        <TouchableOpacity className="absolute inset-0" onPress={handleClose} activeOpacity={1} />
-        
-        <View className="w-full rounded-t-[32px] overflow-hidden" style={{ maxHeight: SCREEN_HEIGHT * 0.85 }}>
-          <ImageBackground 
-            source={require('../assets/images/GlassBg.png')} 
-            style={{ width: '100%' }}
-            imageStyle={{ height: SCREEN_HEIGHT, top: undefined, bottom: 0 }}
-            resizeMode="cover"
+    <Modal visible transparent animationType="slide" statusBarTranslucent onRequestClose={handleClose}>
+      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: theme.overlay }}>
+        <Pressable
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+          onPress={handleClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close what's new"
+        />
+
+        <View
+          accessibilityViewIsModal
+          style={{
+            backgroundColor: theme.background,
+            borderTopLeftRadius: Radius['4xl'],
+            borderTopRightRadius: Radius['4xl'],
+            borderTopWidth: 1,
+            borderColor: theme.cardBorder,
+            maxHeight: '86%',
+          }}
+        >
+          {/* Grab handle — the sheet is dismissible by tapping outside, and this
+              is the only thing that says so before you try. */}
+          <View style={{ alignItems: 'center', paddingTop: 10, paddingBottom: 4 }}>
+            <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: theme.cardBorder }} />
+          </View>
+
+          <ScrollView
+            contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 20 }}
+            showsVerticalScrollIndicator={false}
           >
-            <BlurView intensity={90} tint="dark" style={{ width: '100%' }}>
-              <ScrollView contentContainerStyle={{ padding: 28, paddingTop: 40, paddingBottom: 110 }} showsVerticalScrollIndicator={false}>
-                
-                {/* Header Section */}
-                <View className="items-center mb-8">
-                  <View className="w-16 h-16 rounded-[20px] items-center justify-center bg-indigo-500/20 border border-indigo-400/30 mb-4 shadow-lg shadow-indigo-500/20">
-                    <Ionicons name="sparkles" size={30} color="#a5b4fc" />
-                  </View>
-                  <Text style={[styles.textShadow, { fontFamily: 'Nunito_900Black', fontSize: 32, color: 'white', textAlign: 'center', marginBottom: 4 }]}>
-                    What's New
-                  </Text>
-                  <Text style={[styles.textShadow, { fontFamily: 'Nunito_600SemiBold', fontSize: 16, color: '#c7d2fe', textAlign: 'center', marginBottom: 4 }]}>
-                    FinScholar v{CURRENT_VERSION} is here!
-                  </Text>
-                </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+              <View
+                style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: Radius.lg,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: tints.schedule.fill,
+                  borderWidth: 1,
+                  borderColor: tints.schedule.line,
+                  marginRight: 12,
+                }}
+              >
+                <Ionicons name="sparkles" size={21} color={tints.schedule.ink} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ ...Typography.title, color: theme.text }}>What's New</Text>
+                <Text style={{ ...Typography.caption, color: theme.textSecondary, marginTop: 1 }}>
+                  Version {release.version} · {release.date}
+                </Text>
+              </View>
+            </View>
 
-                {/* Features List */}
-                <View className="bg-black/40 rounded-[28px] p-6 mb-8 border border-white/10">
-                  <ChangelogItem 
-                    icon="albums" 
-                    color="#818cf8"
-                    title="Flash Study UI Overhaul" 
-                    desc="A completely redesigned dashboard for your decks with a gorgeous new UI." 
-                    isLast={false}
-                  />
-                  <ChangelogItem 
-                    icon="trophy" 
-                    color="#fbbf24"
-                    title="Gamification & Streaks" 
-                    desc="Earn XP and keep your daily streak alive by reviewing your flashcards every day!" 
-                    isLast={false}
-                  />
-                  <ChangelogItem 
-                    icon="game-controller" 
-                    color="#2dd4bf"
-                    title="Speed Match Game" 
-                    desc="Race against the clock in the new Speed Match mini-game for your flashcard decks." 
-                    isLast={false}
-                  />
-                  <ChangelogItem 
-                    icon="options" 
-                    color="#34d399"
-                    title="Study Options" 
-                    desc="New SM-2 algorithm settings and daily review goals configurable in your profile." 
-                    isLast={true}
-                  />
-                </View>
+            <Text
+              style={{
+                ...Typography.bodyBold,
+                color: theme.textSecondary,
+                marginTop: 8,
+                marginBottom: 16,
+              }}
+            >
+              {release.headline}
+            </Text>
 
-                {/* Action Button */}
+            <ReleaseItems entry={release} theme={theme} tints={tints} isDark={isDark} />
+
+            {older.length > 0 && (
+              <>
                 <TouchableOpacity
-                  accessible={true}
+                  onPress={() => setExpanded((v) => !v)}
+                  activeOpacity={0.7}
                   accessibilityRole="button"
-                  onPress={handleClose}
-                  activeOpacity={0.8}
-                  className="py-[16px] rounded-full flex-row items-center justify-center shadow-lg bg-indigo-500 shadow-indigo-500/50 border border-indigo-400/50"
+                  accessibilityState={{ expanded }}
+                  accessibilityLabel={expanded ? 'Hide earlier updates' : 'Show earlier updates'}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    paddingVertical: 14,
+                    marginTop: 6,
+                  }}
                 >
-                  <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 18, color: '#ffffff', letterSpacing: 0.5 }}>Awesome!</Text>
+                  <Text style={{ ...Typography.captionBold, color: theme.textSecondary, marginRight: 6 }}>
+                    {expanded ? 'Hide earlier updates' : 'Earlier updates'}
+                  </Text>
+                  <Ionicons
+                    name={expanded ? 'chevron-up' : 'chevron-down'}
+                    size={15}
+                    color={theme.textSecondary}
+                  />
                 </TouchableOpacity>
 
-              </ScrollView>
-            </BlurView>
-          </ImageBackground>
+                {expanded &&
+                  older.map((entry) => (
+                    <View key={entry.version} style={{ marginBottom: 18 }}>
+                      <Text
+                        style={{
+                          ...Typography.label,
+                          color: theme.textTertiary,
+                          letterSpacing: 0.8,
+                          textTransform: 'uppercase',
+                          marginBottom: 8,
+                        }}
+                      >
+                        Version {entry.version} · {entry.date}
+                      </Text>
+                      <ReleaseItems entry={entry} theme={theme} tints={tints} isDark={isDark} />
+                    </View>
+                  ))}
+              </>
+            )}
+          </ScrollView>
+
+          {/* Pinned, not scrolled. The old sheet kept its only button at the
+              bottom of the scroll, so on a short screen you had to scroll a list
+              you had already read just to get out. */}
+          <View
+            style={{
+              paddingHorizontal: 20,
+              paddingTop: 12,
+              paddingBottom: Math.max(insets.bottom, 14),
+              borderTopWidth: 1,
+              borderColor: theme.cardBorder,
+              backgroundColor: theme.surface,
+            }}
+          >
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss what's new"
+              onPress={handleClose}
+              activeOpacity={0.85}
+              style={{
+                paddingVertical: 15,
+                borderRadius: Radius.full,
+                alignItems: 'center',
+                backgroundColor: theme.primary,
+                borderBottomWidth: 2,
+                borderColor: isDark ? 'rgba(0,0,0,0.35)' : theme.primaryDark,
+              }}
+            >
+              {/* Dark `primary` is a light indigo meant as an accent on a dark
+                  page — white on it measures 2.98:1, under AA for 16px bold.
+                  Bright fill takes dark ink; the deep light-mode fill takes white. */}
+              <Text style={{ ...Typography.bodyBold, color: isDark ? theme.textInverse : '#ffffff' }}>
+                Got it
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </Modal>
   );
 }
 
-function ChangelogItem({ icon, title, desc, color, isLast }: any) {
+function ReleaseItems({
+  entry,
+  theme,
+  tints,
+  isDark,
+}: {
+  entry: ChangelogEntry;
+  theme: ReturnType<typeof getTheme>;
+  tints: ReturnType<typeof getTints>;
+  isDark: boolean;
+}) {
   return (
-    <View className={`flex-row items-start ${isLast ? '' : 'mb-6'}`}>
-      <View style={{ backgroundColor: `${color}25` }} className="w-12 h-12 rounded-2xl items-center justify-center mr-4 border border-white/5">
-        <Ionicons name={icon as any} size={22} color={color} />
-      </View>
-      <View className="flex-1 pt-0.5">
-        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: 'white', marginBottom: 2 }}>{title}</Text>
-        <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 14, color: '#cbd5e1', lineHeight: 20 }}>{desc}</Text>
-      </View>
+    <View
+      style={{
+        backgroundColor: isDark ? 'rgba(0,0,0,0.18)' : theme.surfaceSecondary,
+        borderRadius: Radius['2xl'],
+        borderWidth: 1,
+        borderColor: theme.cardBorder,
+        padding: 16,
+      }}
+    >
+      {entry.items.map((item, idx) => {
+        const tint = tints[item.tint];
+        return (
+          <View
+            key={item.title}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'flex-start',
+              marginBottom: idx === entry.items.length - 1 ? 0 : 16,
+            }}
+          >
+            <View
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: Radius.md,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: tint.fill,
+                borderWidth: 1,
+                borderColor: tint.line,
+                marginRight: 12,
+              }}
+            >
+              <Ionicons name={item.icon as any} size={18} color={tint.ink} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ ...Typography.captionBold, fontSize: 15, lineHeight: 20, color: theme.text }}>
+                {item.title}
+              </Text>
+              <Text style={{ ...Typography.caption, color: theme.textSecondary, marginTop: 2 }}>
+                {item.desc}
+              </Text>
+            </View>
+          </View>
+        );
+      })}
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  textShadow: {
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 1.5 },
-    textShadowRadius: 3,
-  }
-});

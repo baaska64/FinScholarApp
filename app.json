@@ -2,7 +2,7 @@
   "expo": {
     "name": "FinScholarApp",
     "slug": "FinScholarApp",
-    "version": "1.0.7",
+    "version": "1.1.0",
     "orientation": "default",
     "icon": "./assets/images/FinScholarAppLogo.png",
     "scheme": "finscholarapp",
@@ -27,7 +27,7 @@
         "com.android.vending.BILLING"
       ],
       "package": "com.lalex.finscholar",
-      "versionCode": 23
+      "versionCode": 24
     },
     "web": {
       "bundler": "metro",
@@ -63,14 +63,74 @@
       [
         "react-native-android-widget",
         {
+          "fonts": [
+            "./assets/fonts/Nunito_400Regular.ttf",
+            "./assets/fonts/Nunito_700Bold.ttf",
+            "./assets/fonts/Nunito_800ExtraBold.ttf"
+          ],
           "widgets": [
             {
               "name": "FinScholarWidget",
-              "label": "FinScholar Schedule",
+              "label": "FinScholar · Up Next",
+              "description": "The class you are in or heading to, plus what follows.",
               "minWidth": "110dp",
-              "minHeight": "180dp",
-              "targetCellWidth": 2,
+              "minHeight": "110dp",
+              "targetCellWidth": 3,
+              "targetCellHeight": 2,
+              "maxResizeWidth": "320dp",
+              "maxResizeHeight": "320dp",
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "FinScholarAgendaWidget",
+              "label": "FinScholar · Today",
+              "description": "Every class on today's timetable, with what is left to go.",
+              "minWidth": "180dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
               "targetCellHeight": 3,
+              "maxResizeWidth": "320dp",
+              "maxResizeHeight": "400dp",
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "FinScholarDeadlinesWidget",
+              "label": "FinScholar · Deadlines",
+              "description": "Unfinished tasks, soonest due first, overdue in red.",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 3,
+              "targetCellHeight": 2,
+              "maxResizeWidth": "320dp",
+              "maxResizeHeight": "400dp",
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "FinScholarFocusWidget",
+              "label": "FinScholar · Next Class",
+              "description": "A single strip: what is next, where, and how long you have.",
+              "minWidth": "180dp",
+              "minHeight": "40dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 1,
+              "maxResizeWidth": "320dp",
+              "maxResizeHeight": "110dp",
+              "resizeMode": "horizontal",
+              "updatePeriodMillis": 1800000
+            },
+            {
+              "name": "FinScholarStatsWidget",
+              "label": "FinScholar · Semester Pulse",
+              "description": "Grade, attendance, open tasks and how far through the term you are.",
+              "minWidth": "110dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 3,
+              "targetCellHeight": 2,
+              "maxResizeWidth": "320dp",
+              "maxResizeHeight": "250dp",
               "resizeMode": "horizontal|vertical",
               "updatePeriodMillis": 1800000
             }

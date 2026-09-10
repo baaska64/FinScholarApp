@@ -1453,7 +1453,7 @@ export default function ScheduleScreen() {
                         <Image source={require('../../assets/images/FinSights.png')} className="w-20 h-20 mb-4" resizeMode="cover" />
                         <Text className={`text-xl font-bold mb-2 ${isDark ? 'text-white' : 'text-slate-800'}`}>Check My Work!</Text>
                         <Text className={`text-center mb-6 leading-5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                            I've extracted your schedule, but AI can sometimes be slightly off with exact time blocks. Please review the schedule carefully.
+                            I've extracted your schedule, but AI can sometimes be slightly off with exact time blocks. In Quick Edit, hold a block and drag it to the right day and time.
                         </Text>
                         <TouchableOpacity 
                             onPress={() => { setShowAiWarning(false); setIsQuickEditMode(true); }}
@@ -1524,30 +1524,39 @@ export default function ScheduleScreen() {
  */
 function EmptyScheduleCard({ isDark, theme }: { isDark: boolean; theme: any }) {
     return (
-        <View style={{
-            flex: 1, alignItems: 'center', justifyContent: 'center',
-            paddingHorizontal: 28, paddingVertical: 32,
-            borderRadius: Radius['3xl'],
-            backgroundColor: isDark ? 'rgba(49, 46, 129, 0.25)' : '#eef2ff',
-            borderWidth: 1, borderColor: isDark ? 'rgba(99, 102, 241, 0.3)' : '#c7d2fe',
-        }}>
+        // The card sizes to its content and is centred in whatever space is left,
+        // rather than stretching: a full-height tinted slab reads as a broken
+        // screen next to the surface-coloured cards above it.
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             <View style={{
-                width: 74, height: 74, borderRadius: 37, marginBottom: 14,
-                alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-                backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e0e7ff',
+                width: '100%', maxWidth: 340, alignItems: 'center',
+                paddingHorizontal: 26, paddingVertical: 30,
+                borderRadius: Radius['3xl'],
+                backgroundColor: theme.surface,
+                borderWidth: 1, borderColor: theme.cardBorder,
+                ...(isDark ? {} : (Shadows.sm as object)),
             }}>
-                <Image
-                    source={require('../../assets/images/confused.png')}
-                    style={{ width: 84, height: 84, transform: [{ translateY: 6 }] }}
-                    resizeMode="cover"
-                />
+                <View style={{
+                    width: 88, height: 88, borderRadius: 44, marginBottom: 16,
+                    alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: isDark ? 'rgba(129, 140, 248, 0.12)' : '#eef2ff',
+                    borderWidth: 1, borderColor: isDark ? 'rgba(129, 140, 248, 0.22)' : '#e0e7ff',
+                }}>
+                    {/* The PNG is transparent, so it needs no plate behind it —
+                        `contain` also keeps Fin's question marks inside the halo. */}
+                    <Image
+                        source={require('../../assets/images/confused.png')}
+                        style={{ width: 68, height: 68 }}
+                        resizeMode="contain"
+                    />
+                </View>
+                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 17, marginBottom: 6, color: theme.text }}>
+                    Fin is confused! 🤔
+                </Text>
+                <Text style={{ textAlign: 'center', fontFamily: 'Nunito_400Regular', fontSize: 13, lineHeight: 19, color: theme.textSecondary }}>
+                    There are no classes here yet. Scan a photo of your timetable, or add classes by hand with the buttons above.
+                </Text>
             </View>
-            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 17, marginBottom: 6, color: isDark ? '#a5b4fc' : '#3730a3' }}>
-                Fin is confused! 🤔
-            </Text>
-            <Text style={{ textAlign: 'center', fontFamily: 'Nunito_400Regular', fontSize: 13, lineHeight: 19, color: isDark ? 'rgba(199, 210, 254, 0.8)' : '#4338ca' }}>
-                There are no classes here yet. Scan a photo of your timetable or add classes by hand using the buttons below.
-            </Text>
         </View>
     );
 }

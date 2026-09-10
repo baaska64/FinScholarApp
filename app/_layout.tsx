@@ -142,6 +142,7 @@ function RootLayoutNav() {
           </SpotlightProvider>
           <CustomAlertProvider />
           <ChangelogModal />
+          <UpdateWarningModal />
         </SemesterProvider>
       </SyncProvider>
     </ThemeProvider>

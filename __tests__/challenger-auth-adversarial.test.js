@@ -128,8 +128,11 @@ async function executeGoogleSignInFlow({
       errorString.toLowerCase().includes('developer error') ||
       errorString.toLowerCase().includes('developer_error');
 
+    // Only a real string reaches AlertService: Play Services can surface an
+    // error whose `message` is itself an object, and handing that to the
+    // dialog renders an empty body.
     const genericErrorMessage =
-      (typeof error === 'string' ? error : error?.message) ||
+      (typeof error === 'string' ? error : typeof error?.message === 'string' ? error.message : '') ||
       'An unexpected error occurred during Google Sign-In.';
 
     if (isErrorWithCode(error)) {

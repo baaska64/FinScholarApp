@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, Modal, TextInput, ScrollView, Animated } from 'react-native';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { View, Text, TouchableOpacity, Modal, TextInput, ScrollView, Animated, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../services/supabaseClient';
 import { router } from 'expo-router';
@@ -8,13 +8,18 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SyncService } from '@/services/SyncService';
 import { AlertService } from '@/components/CustomAlert';
+import { ChangelogService } from '@/components/ChangelogModal';
 import { WidgetPreview } from 'react-native-android-widget';
-import { FinScholarWidget } from '../../widget/FinScholarWidget';
+import { WIDGET_GALLERY, renderWidgetPreview } from '../../widget/WidgetTaskHandler';
+import { buildDemoSnapshot } from '../../widget/widgetData';
 import { getTheme, Typography, Radius, Shadows } from '@/constants/Theme';
 import { OnboardingService } from '@/services/OnboardingService';
 import { useSpotlight } from '@/components/spotlight/SpotlightProvider';
 import { ALL_TOUR_KEYS, MAIN_TOUR, TOUR_KEYS } from '@/constants/tours';
 import { useTabBarHeight } from '@/components/CustomTabBar';
+import Constants from 'expo-constants';
+
+const APP_VERSION = Constants.expoConfig?.version ?? '';
 
 /** A single settings row */
 const SettingsRow = ({ icon, iconColor, label, onPress, chevron = true, isDark, theme }: any) => {
@@ -59,6 +64,11 @@ export default function ProfileScreen() {
     const theme = getTheme(isDark);
     const tabBarHeight = useTabBarHeight();
     const [showWidgetPreview, setShowWidgetPreview] = useState(false);
+    const [widgetPage, setWidgetPage] = useState(0);
+    // One snapshot for the whole gallery — the previews are illustrative, so they
+    // show a full day rather than whatever this student happens to have booked.
+    const demoSnapshot = useMemo(() => buildDemoSnapshot(), []);
+    const galleryPageWidth = Math.round(Dimensions.get('window').width * 0.92);
     const [showThresholdSettings, setShowThresholdSettings] = useState(false);
     const [thresholds, setThresholds] = useState({ high: 21, medium: 10, low: 5 });
     const [data, setData] = useState<any>(null);
@@ -194,7 +204,7 @@ export default function ProfileScreen() {
                             <SettingsRow
                                 icon="apps"
                                 iconColor={isDark ? '#f472b6' : '#ec4899'}
-                                label="Widget Setup"
+                                label="Home Screen Widgets"
                                 onPress={() => setShowWidgetPreview(true)}
                                 isDark={isDark}
                                 theme={theme}
@@ -266,6 +276,15 @@ export default function ProfileScreen() {
                                 iconColor={isDark ? '#34d399' : '#10b981'}
                                 label="Show Getting Started Checklist"
                                 onPress={handleRestoreChecklist}
+                                isDark={isDark}
+                                theme={theme}
+                            />
+                            <View style={{ height: 1, backgroundColor: theme.cardBorder, marginHorizontal: 16 }} />
+                            <SettingsRow
+                                icon="gift-outline"
+                                iconColor={isDark ? '#f472b6' : '#db2777'}
+                                label={APP_VERSION ? `What's New in v${APP_VERSION}` : "What's New"}
+                                onPress={() => ChangelogService.open()}
                                 isDark={isDark}
                                 theme={theme}
                             />
@@ -377,48 +396,85 @@ export default function ProfileScreen() {
                 </View>
             </Modal>
 
-            {/* Widget Preview Modal */}
-            <Modal visible={showWidgetPreview} transparent animationType="fade">
+            {/* Widget gallery — one page per widget, previewed at the size a
+                home-screen cell actually gives it. */}
+            <Modal
+                visible={showWidgetPreview}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowWidgetPreview(false)}
+            >
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' }}>
                     <View style={{
-                        backgroundColor: theme.card, padding: 28, borderRadius: 28, width: '88%', alignItems: 'center',
+                        backgroundColor: theme.card, paddingVertical: 24, borderRadius: 28, width: '92%',
                         borderWidth: 1, borderColor: theme.cardBorder,
                     }}>
-                        <Text style={{ ...Typography.heading, color: theme.text }}>Widget Preview</Text>
-                        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 13, color: theme.textSecondary, textAlign: 'center', marginTop: 8, marginBottom: 24 }}>
-                            This is how your upcoming classes will appear on your homescreen!
+                        <Text style={{ ...Typography.heading, color: theme.text, textAlign: 'center' }}>Home Screen Widgets</Text>
+                        <Text style={{
+                            fontFamily: 'Nunito_400Regular', fontSize: 13, color: theme.textSecondary,
+                            textAlign: 'center', marginTop: 8, paddingHorizontal: 24,
+                        }}>
+                            Swipe to browse. Each one updates itself as your day moves along.
                         </Text>
 
-                        <WidgetPreview
-                            renderWidget={() => <FinScholarWidget classes={[{
-                                courseName: 'CSIT227',
-                                timeStr: '7:30 AM',
-                                room: 'NGE108',
-                                timeRemainingStr: 'In progress',
-                                isOngoing: true,
-                            }, {
-                                courseName: 'CSIT228',
-                                timeStr: '10:00 AM',
-                                room: 'NGE205',
-                                timeRemainingStr: 'In 2h 30m',
-                                isOngoing: false,
-                            }]} />}
-                            width={320}
-                            height={210}
-                        />
+                        <ScrollView
+                            horizontal
+                            pagingEnabled
+                            showsHorizontalScrollIndicator={false}
+                            onMomentumScrollEnd={(e) =>
+                                setWidgetPage(Math.round(e.nativeEvent.contentOffset.x / galleryPageWidth))
+                            }
+                            style={{ marginTop: 20 }}
+                        >
+                            {WIDGET_GALLERY.map((item) => (
+                                <View key={item.name} style={{ width: galleryPageWidth, alignItems: 'center', paddingHorizontal: 20 }}>
+                                    <WidgetPreview
+                                        renderWidget={(info) => renderWidgetPreview(item.name, demoSnapshot, info, isDark)}
+                                        width={item.previewWidth}
+                                        height={item.previewHeight}
+                                    />
+                                    <Text style={{
+                                        fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, marginTop: 18,
+                                    }}>
+                                        {item.title}
+                                    </Text>
+                                    <Text style={{
+                                        fontFamily: 'Nunito_400Regular', fontSize: 12.5, color: theme.textSecondary,
+                                        textAlign: 'center', marginTop: 4,
+                                    }}>
+                                        {item.description}
+                                    </Text>
+                                </View>
+                            ))}
+                        </ScrollView>
+
+                        <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 18 }}>
+                            {WIDGET_GALLERY.map((item, idx) => (
+                                <View
+                                    key={item.name}
+                                    style={{
+                                        width: idx === widgetPage ? 18 : 6, height: 6, borderRadius: 3, marginHorizontal: 3,
+                                        backgroundColor: idx === widgetPage ? theme.primary : theme.cardBorder,
+                                    }}
+                                />
+                            ))}
+                        </View>
 
                         <View style={{
-                            marginTop: 24, backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
-                            padding: 16, borderRadius: 16,
+                            marginTop: 20, marginHorizontal: 20, backgroundColor: isDark ? theme.surfaceSecondary : '#f1f5f9',
+                            padding: 14, borderRadius: 16,
                         }}>
-                            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 13, color: theme.text, textAlign: 'center' }}>
-                                💡 To add this to your home screen, long-press on an empty space and select "Widgets".
+                            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12.5, color: theme.text, textAlign: 'center' }}>
+                                💡 Long-press an empty spot on your home screen, tap "Widgets", then look for FinScholar.
                             </Text>
                         </View>
 
                         <TouchableOpacity
                             onPress={() => setShowWidgetPreview(false)}
-                            style={{ marginTop: 24, backgroundColor: '#38bdf8', paddingVertical: 12, paddingHorizontal: 32, borderRadius: 16 }}
+                            style={{
+                                marginTop: 20, marginHorizontal: 20, backgroundColor: theme.primary,
+                                paddingVertical: 13, borderRadius: 16, alignItems: 'center',
+                            }}
                         >
                             <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 15, color: '#fff' }}>Got it!</Text>
                         </TouchableOpacity>
