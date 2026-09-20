@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SyncService } from '@/services/SyncService';
 import Tabs from '@/components/ledger/Tabs';
 import MonthGrid from '@/components/calendar/MonthGrid';
+import MonthStrip from '@/components/calendar/MonthStrip';
 import DayPanel from '@/components/calendar/DayPanel';
 import AgendaList, { AgendaEmpty } from '@/components/calendar/AgendaList';
 import EventSheet, { type EventDraft } from '@/components/calendar/EventSheet';
@@ -29,6 +30,7 @@ import {
     addMonths,
     collectCalendarItems,
     filterItems,
+    formatDateKeyLong,
     getClassesForDate,
     getTermProgress,
     groupByDateKey,
@@ -57,11 +59,17 @@ type AgendaRange = 'upcoming' | 'past';
  * other tabs. It now reads classes and task deadlines out of the same ledger
  * and merges all three into one dated stream (`utils/calendarModel.ts`).
  *
- * Structurally it is a fixed-height column like the schedule tab, not a long
- * scroll: app bar, controls, term strip, then the month grid with the selected
- * day's agenda underneath it. Previously the grid sat below a header, a
- * full-width term selector, an import banner and a term-dates card — roughly
- * 260pt of chrome before the calendar itself.
+ * Structurally: two fixed bands of chrome — an app bar and one control bar that
+ * carries the view switch, search, filters and the term strip — then the body.
+ * The original screen stacked a header, a full-width term selector, an import
+ * banner and a term-dates card before the calendar even started, roughly 260pt
+ * of chrome.
+ *
+ * **The month body is one scrolling page**: month header, grid and the selected
+ * day's timeline share a single `ScrollView`. It was first a fixed column with
+ * the grid pinned above a separately-scrolling panel, and on a real phone that
+ * stranded the day's content behind the floating tab bar with nowhere to scroll
+ * to. Nothing inside that page may own a nested vertical scroll.
  */
 export default function CalendarScreen() {
     const { colorScheme } = useColorScheme();
@@ -88,6 +96,8 @@ export default function CalendarScreen() {
 
     const [viewMode, setViewMode] = useState<ViewMode>('month');
     const [agendaRange, setAgendaRange] = useState<AgendaRange>('upcoming');
+    /** Measured height of the month page's viewport, for sizing the grid. */
+    const [viewportHeight, setViewportHeight] = useState(0);
 
     const [showSearch, setShowSearch] = useState(false);
     const [query, setQuery] = useState('');
@@ -204,6 +214,16 @@ export default function CalendarScreen() {
 
     const termLabel = currentYear && currentSem ? `${currentYear.name} · ${currentSem.name}` : 'this term';
     const filtersActive = activeTypes.length > 0 || scope === 'term' || !showTasks || !showClasses;
+
+    /**
+     * How much of the page the lattice gets.
+     *
+     * ~72% of the viewport minus the month header and pill strip, so the grid
+     * fills the first screen — a month view should be the page, not a widget —
+     * while the day's header and first row stay just visible underneath,
+     * showing there is more to scroll to.
+     */
+    const gridHeight = viewportHeight > 0 ? Math.max(280, viewportHeight * 0.72 - 92) : undefined;
 
     /**
      * Memoised so the sheet's "reset the form when it opens" effect does not
@@ -753,7 +773,15 @@ export default function CalendarScreen() {
                          */
                         <ScrollView
                             showsVerticalScrollIndicator={false}
-                            contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}
+                            contentContainerStyle={{ paddingBottom: tabBarHeight + 84 }}
+                            // The viewport height is what the grid sizes against
+                            // so it fills the first screen the way a calendar
+                            // app's month view does, with the day's timeline
+                            // waiting just below the fold.
+                            onLayout={e => {
+                                const h = e.nativeEvent.layout.height;
+                                if (Math.abs(h - viewportHeight) > 1) setViewportHeight(h);
+                            }}
                         >
                             {/* Month header */}
                             <View
@@ -761,13 +789,13 @@ export default function CalendarScreen() {
                                     flexDirection: 'row',
                                     alignItems: 'center',
                                     paddingHorizontal: GUTTER,
-                                    paddingTop: 12,
-                                    paddingBottom: 4,
+                                    paddingTop: 10,
+                                    paddingBottom: 8,
                                 }}
                             >
                                 <Text
                                     accessibilityRole="header"
-                                    style={{ flex: 1, fontFamily: 'Nunito_900Black', fontSize: 19, color: theme.text, letterSpacing: -0.4 }}
+                                    style={{ flex: 1, fontFamily: 'Nunito_900Black', fontSize: 20, color: theme.text, letterSpacing: -0.4 }}
                                 >
                                     {monthAnchor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
                                 </Text>
@@ -777,17 +805,17 @@ export default function CalendarScreen() {
                                     selectedKey !== toDateKey(today)) && (
                                     <TouchableOpacity
                                         onPress={goToday}
+                                        activeOpacity={0.7}
                                         accessibilityRole="button"
                                         accessibilityLabel="Jump to today"
                                         style={{
-                                            paddingHorizontal: 11,
-                                            height: 28,
+                                            paddingHorizontal: 12,
+                                            height: 30,
                                             justifyContent: 'center',
                                             borderRadius: Radius.full,
                                             borderWidth: 1,
                                             borderColor: theme.cardBorder,
                                             backgroundColor: theme.surface,
-                                            marginRight: 6,
                                         }}
                                     >
                                         <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: theme.primary }}>
@@ -795,48 +823,31 @@ export default function CalendarScreen() {
                                         </Text>
                                     </TouchableOpacity>
                                 )}
-
-                                <TouchableOpacity
-                                    onPress={() => setMonthAnchor(m => addMonths(m, -1))}
-                                    accessibilityRole="button"
-                                    accessibilityLabel="Previous month"
-                                    style={{ ...iconButton, width: 28, height: 28 }}
-                                >
-                                    <Ionicons name="chevron-back" size={15} color={theme.textSecondary} />
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    onPress={() => setMonthAnchor(m => addMonths(m, 1))}
-                                    accessibilityRole="button"
-                                    accessibilityLabel="Next month"
-                                    style={{ ...iconButton, width: 28, height: 28, marginLeft: 4 }}
-                                >
-                                    <Ionicons name="chevron-forward" size={15} color={theme.textSecondary} />
-                                </TouchableOpacity>
                             </View>
 
-                            <View style={{ paddingHorizontal: GUTTER - 4 }}>
-                                <MonthGrid
-                                    month={monthAnchor}
-                                    today={today}
-                                    selectedKey={selectedKey}
-                                    itemsByDate={itemsByDate}
-                                    termStartKey={termProgress.startKey}
-                                    termEndKey={termProgress.endKey}
-                                    onSelectDate={selectDate}
-                                    onChangeMonth={delta => setMonthAnchor(m => addMonths(m, delta))}
-                                />
+                            {/* Month pills. They replace a pair of chevrons: two
+                                arrows move one month at a time and say nothing
+                                about where you are in the term. */}
+                            <View style={{ paddingHorizontal: GUTTER, paddingBottom: 10 }}>
+                                <MonthStrip anchor={monthAnchor} today={today} onSelect={setMonthAnchor} />
                             </View>
 
-                            <View
-                                style={{
-                                    height: 1,
-                                    backgroundColor: theme.cardBorder,
-                                    marginTop: 10,
-                                    marginBottom: 12,
-                                }}
+                            {/* Full bleed — the lattice runs to both screen
+                                edges, which is what makes it read as a calendar
+                                rather than a date picker in a box. */}
+                            <MonthGrid
+                                month={monthAnchor}
+                                today={today}
+                                selectedKey={selectedKey}
+                                itemsByDate={itemsByDate}
+                                termStartKey={termProgress.startKey}
+                                termEndKey={termProgress.endKey}
+                                height={gridHeight}
+                                onSelectDate={selectDate}
+                                onChangeMonth={delta => setMonthAnchor(m => addMonths(m, delta))}
                             />
 
-                            <View style={{ paddingHorizontal: GUTTER }}>
+                            <View style={{ paddingHorizontal: GUTTER, paddingTop: 14 }}>
                                 <DayPanel
                                     dateKey={selectedKey}
                                     today={today}
@@ -942,48 +953,23 @@ export default function CalendarScreen() {
                                         </TouchableOpacity>
                                     </>
                                 ) : (
-                                    <>
-                                        <TouchableOpacity
-                                            onPress={() => setSelectMode(true)}
-                                            accessibilityRole="button"
-                                            accessibilityLabel="Select events to delete"
-                                            style={{
-                                                paddingHorizontal: 12,
-                                                height: 28,
-                                                justifyContent: 'center',
-                                                borderRadius: Radius.full,
-                                                borderWidth: 1,
-                                                borderColor: theme.cardBorder,
-                                            }}
-                                        >
-                                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: theme.textSecondary }}>
-                                                Select
-                                            </Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            onPress={() => {
-                                                setSelectedKey(toDateKey(today));
-                                                setEventSheet({ open: true, editing: null });
-                                            }}
-                                            accessibilityRole="button"
-                                            accessibilityLabel="Add an event"
-                                            style={{
-                                                flexDirection: 'row',
-                                                alignItems: 'center',
-                                                paddingHorizontal: 12,
-                                                height: 28,
-                                                borderRadius: Radius.full,
-                                                backgroundColor: theme.primary,
-                                                borderBottomWidth: 2,
-                                                borderBottomColor: isDark ? '#5b62c9' : '#3730a3',
-                                            }}
-                                        >
-                                            <Ionicons name="add" size={14} color="#ffffff" />
-                                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: '#ffffff', marginLeft: 2 }}>
-                                                Event
-                                            </Text>
-                                        </TouchableOpacity>
-                                    </>
+                                    <TouchableOpacity
+                                        onPress={() => setSelectMode(true)}
+                                        accessibilityRole="button"
+                                        accessibilityLabel="Select events to delete"
+                                        style={{
+                                            paddingHorizontal: 12,
+                                            height: 28,
+                                            justifyContent: 'center',
+                                            borderRadius: Radius.full,
+                                            borderWidth: 1,
+                                            borderColor: theme.cardBorder,
+                                        }}
+                                    >
+                                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: theme.textSecondary }}>
+                                            Select
+                                        </Text>
+                                    </TouchableOpacity>
                                 )}
                             </View>
 
@@ -999,7 +985,7 @@ export default function CalendarScreen() {
                                 onEditEvent={item => setEventSheet({ open: true, editing: item })}
                                 onDeleteEvent={item => confirmDelete([item])}
                                 onPressTask={openTask}
-                                bottomPadding={tabBarHeight + 20}
+                                bottomPadding={tabBarHeight + 84}
                                 ListEmptyComponent={
                                     <AgendaEmpty
                                         title={
@@ -1020,6 +1006,43 @@ export default function CalendarScreen() {
                         </View>
                     )}
                 </>
+            )}
+
+            {/* ── Add event ────────────────────────────────────────────────
+                A floating button rather than a pill in the day header and a
+                second one in the agenda toolbar. The month view scrolls now, so
+                a header button scrolls away exactly when a student has browsed
+                to the day they want to add something to. It sits above the
+                floating tab bar, and both lists reserve room for it. */}
+            {hasTerms && activeSemId && !selectMode && (
+                <TouchableOpacity
+                    onPress={() => {
+                        if (viewMode === 'agenda') setSelectedKey(toDateKey(today));
+                        setEventSheet({ open: true, editing: null });
+                    }}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                        viewMode === 'agenda'
+                            ? 'Add an event today'
+                            : `Add an event on ${formatDateKeyLong(selectedKey)}`
+                    }
+                    style={{
+                        position: 'absolute',
+                        right: 16,
+                        bottom: tabBarHeight + 12,
+                        width: 54,
+                        height: 54,
+                        borderRadius: Radius.full,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: theme.primary,
+                        borderBottomWidth: 3,
+                        borderBottomColor: isDark ? '#5b62c9' : '#3730a3',
+                    }}
+                >
+                    <Ionicons name="add" size={27} color="#ffffff" />
+                </TouchableOpacity>
             )}
 
             {/* ── Sheets ───────────────────────────────────────────────────── */}

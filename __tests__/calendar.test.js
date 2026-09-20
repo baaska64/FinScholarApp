@@ -1,11 +1,13 @@
 import assert from 'node:assert';
+import { readFileSync, readdirSync } from 'node:fs';
 import {
   EVENT_TYPE_LABELS,
   EVENT_TYPE_ORDER,
   addMonths,
   appDayIndex,
-  buildDayMark,
+  buildDayChips,
   buildMonthMatrix,
+  chunkWeeks,
   collectCalendarItems,
   daysBetweenKeys,
   filterItems,
@@ -514,48 +516,116 @@ export function runCalendarTests(describe, test) {
   });
 
   describe('Calendar Suite 7: What a day cell shows', () => {
-    test('CAL7.1 Distinct event types become dots, tasks become a bar', () => {
-      const items = collectCalendarItems(makeLedger(), ACTIVE);
-      const oct14 = groupByDateKey(items)['2025-10-14'];
-      const mark = buildDayMark(oct14);
-      assert.strictEqual(mark.eventCount, 2);
-      assert.strictEqual(mark.taskCount, 2);
-      assert.deepStrictEqual([...mark.types].sort(), ['finals', 'holiday']);
-      assert.strictEqual(mark.overflow, 0, 'both events are spoken for by a dot');
-    });
-
-    test('CAL7.2 Repeat types collapse to one dot without inventing overflow', () => {
-      const items = [
-        { kind: 'event', type: 'finals', id: 'a', title: 'A', dateKey: 'x', minutes: null },
-        { kind: 'event', type: 'finals', id: 'b', title: 'B', dateKey: 'x', minutes: null },
-        { kind: 'event', type: 'finals', id: 'c', title: 'C', dateKey: 'x', minutes: null },
-      ];
-      const mark = buildDayMark(items);
-      assert.deepStrictEqual(mark.types, ['finals']);
-      assert.strictEqual(mark.eventCount, 3);
-      assert.strictEqual(mark.overflow, 0, 'one dot already stands for all three');
-    });
-
-    test('CAL7.3 A fourth distinct type overflows rather than crowding the cell', () => {
-      const items = ['finals', 'holiday', 'org_event', 'enrollment', 'drop_deadline'].map((type, i) => ({
+    const chipItems = (n, prefix = 'Item') =>
+      Array.from({ length: n }, (_, i) => ({
         kind: 'event',
-        type,
+        type: 'finals',
         id: String(i),
-        title: String(i),
-        dateKey: 'x',
+        title: `${prefix} ${i}`,
+        dateKey: '2025-10-14',
         minutes: null,
       }));
-      const mark = buildDayMark(items);
-      assert.strictEqual(mark.types.length, 3, 'a 44pt cell holds three dots');
-      assert.strictEqual(mark.overflow, 2);
+
+    test('CAL7.1 A cell that fits everything shows every chip and no count', () => {
+      const { chips, overflow } = buildDayChips(chipItems(2));
+      assert.deepStrictEqual(chips.map(c => c.title), ['Item 0', 'Item 1']);
+      assert.strictEqual(overflow, 0);
     });
 
-    test('CAL7.4 An empty day is empty', () => {
-      const mark = buildDayMark([]);
-      assert.deepStrictEqual(mark.types, []);
-      assert.strictEqual(mark.eventCount, 0);
-      assert.strictEqual(mark.taskCount, 0);
-      assert.strictEqual(mark.overflow, 0);
+    test('CAL7.2 Overflowing spends the LAST slot on the count, not a chip', () => {
+      // Three items in two slots is one chip plus "+2" — the count has to
+      // include the item whose slot it took, or the cell lies about the day.
+      const { chips, overflow } = buildDayChips(chipItems(3));
+      assert.deepStrictEqual(chips.map(c => c.title), ['Item 0']);
+      assert.strictEqual(overflow, 2);
+      assert.strictEqual(chips.length + overflow, 3, 'nothing is unaccounted for');
+    });
+
+    test('CAL7.3 Every count from 0 to 10 accounts for exactly the whole day', () => {
+      for (let limit = 1; limit <= 4; limit++) {
+        for (let n = 0; n <= 10; n++) {
+          const { chips, overflow } = buildDayChips(chipItems(n), limit);
+          assert.ok(chips.length <= limit, `at most ${limit} chips`);
+          assert.strictEqual(chips.length + overflow, n, `limit ${limit}, ${n} items`);
+        }
+      }
+    });
+
+    test('CAL7.4 Chips keep the day order, so the earliest thing is shown', () => {
+      const items = collectCalendarItems(makeLedger(), ACTIVE);
+      const oct14 = groupByDateKey(items)['2025-10-14'];
+      const { chips, overflow } = buildDayChips(oct14, 2);
+      // Oct 14 holds two all-day events and two timed tasks; all-day sorts
+      // first, so the visible chip is the first of those.
+      assert.strictEqual(oct14.length, 4);
+      assert.deepStrictEqual(chips.map(c => c.title), ['Founders Day']);
+      assert.strictEqual(overflow, 3);
+    });
+
+    test('CAL7.5 An empty day is empty, and the input is never mutated', () => {
+      assert.deepStrictEqual(buildDayChips([]), { chips: [], overflow: 0 });
+      const items = chipItems(3);
+      const snapshot = items.map(i => i.id);
+      buildDayChips(items);
+      assert.deepStrictEqual(items.map(i => i.id), snapshot);
+    });
+  });
+
+  describe('Calendar Suite 7b: The grid is seven columns wide', () => {
+    test('CAL7b.1 chunkWeeks always yields rows of exactly seven', () => {
+      // The grid renders one row per week with seven flexed children. When it
+      // was a single wrap container the cells lost their width and ELEVEN
+      // landed on a row under seven weekday headers.
+      for (let year = 2025; year <= 2027; year++) {
+        for (let month = 0; month < 12; month++) {
+          const weeks = chunkWeeks(trimTrailingWeeks(buildMonthMatrix(year, month)));
+          assert.ok(weeks.length >= 4 && weeks.length <= 6, `${year}-${month + 1} spans 4-6 weeks`);
+          weeks.forEach(week => assert.strictEqual(week.length, 7));
+        }
+      }
+    });
+
+    test('CAL7b.2 Each row starts on a Monday and ends on a Sunday', () => {
+      const weeks = chunkWeeks(trimTrailingWeeks(buildMonthMatrix(2026, 8)));
+      weeks.forEach(week => {
+        assert.strictEqual(appDayIndex(parseDateKey(week[0].key)), 0, 'row opens on Monday');
+        assert.strictEqual(appDayIndex(parseDateKey(week[6].key)), 6, 'row closes on Sunday');
+      });
+    });
+
+    test('CAL7b.3 Chunking loses nothing', () => {
+      const cells = trimTrailingWeeks(buildMonthMatrix(2026, 1));
+      const flat = chunkWeeks(cells).flat();
+      assert.deepStrictEqual(flat.map(c => c.key), cells.map(c => c.key));
+      assert.deepStrictEqual(chunkWeeks([]), []);
+    });
+  });
+
+  describe('Calendar Suite 7c: Pressables carry object styles, not callbacks', () => {
+    const dir = new URL('../components/calendar/', import.meta.url);
+    const sources = readdirSync(dir)
+      .filter(f => f.endsWith('.tsx'))
+      .map(f => [f, readFileSync(new URL(f, dir), 'utf8')]);
+
+    test('CAL7c.1 No calendar component passes a function to a style prop', () => {
+      // This project patches react-native-css-interop (NativeWind v4), whose
+      // wrapper remaps `style` and drops a `({ pressed }) => ({...})` callback.
+      // It shipped twice: the month cells lost their `flex` and `height`, so
+      // eleven of them wrapped onto a row under seven weekday headers, and the
+      // rows collapsed to the height of their digits. Press feedback belongs on
+      // `TouchableOpacity`'s `activeOpacity`.
+      const offenders = sources
+        .filter(([, src]) => /style=\{\(/.test(src))
+        .map(([name]) => name);
+      assert.deepStrictEqual(offenders, [], `function styles found in: ${offenders.join(', ')}`);
+    });
+
+    test('CAL7c.2 The month grid never lays itself out with flexWrap', () => {
+      const [, grid] = sources.find(([name]) => name === 'MonthGrid.tsx');
+      // The doc comment names `flexWrap` to warn against it, so match the style
+      // property itself rather than the prose.
+      assert.ok(!/flexWrap\s*:/.test(grid), 'the grid must be explicit week rows of seven flexed cells');
+      assert.ok(/chunkWeeks/.test(grid), 'the grid builds its rows with chunkWeeks');
     });
   });
 

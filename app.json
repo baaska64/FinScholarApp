@@ -39,16 +39,15 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/FinScholarAppLogo.png",
+          "image": "./assets/images/SplashIcon.png",
           "resizeMode": "contain",
-          "backgroundColor": "#f8fafc",
+          "backgroundColor": "#3991f6",
           "dark": {
-            "image": "./assets/images/FinScholarAppLogo.png",
+            "image": "./assets/images/SplashIcon.png",
             "resizeMode": "contain",
-            "backgroundColor": "#0f172a"
+            "backgroundColor": "#3991f6"
           },
-          "imageWidth": 128,
-          "imageHeight": 128
+          "imageWidth": 240
         }
       ],
       [

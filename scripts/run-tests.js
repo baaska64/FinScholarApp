@@ -182,6 +182,9 @@ async function run() {
     const { runCalendarTests } = await import('../__tests__/calendar.test.js');
     runCalendarTests(harness.describe, harness.test);
 
+    const { runTasksTests } = await import('../__tests__/tasks.test.js');
+    runTasksTests(harness.describe, harness.test);
+
   } catch (err) {
     console.error(`\n${RED}Fatal runner error:${RESET}`, err);
     process.exit(1);

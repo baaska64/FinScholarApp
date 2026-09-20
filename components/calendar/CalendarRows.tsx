@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Pressable, TouchableOpacity } from 'react-native';
+import { View, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
 import { getTheme, getTints, getClassColor, Radius } from '@/constants/Theme';
@@ -141,18 +141,22 @@ function TimelineRow({
 
     if (!onPress && !onLongPress) return body;
 
+    // `TouchableOpacity` + `activeOpacity`, never a function `style`: this
+    // project patches react-native-css-interop, whose wrapper drops a
+    // `({ pressed }) => ({...})` callback, and a dropped style takes the
+    // element's layout with it.
     return (
-        <Pressable
+        <TouchableOpacity
             onPress={onPress}
             onLongPress={onLongPress}
+            activeOpacity={0.6}
             accessibilityRole="button"
             accessibilityLabel={accessibilityLabel}
             accessibilityHint={accessibilityHint}
             accessibilityState={selectable ? { selected: !!selected } : undefined}
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
         >
             {body}
-        </Pressable>
+        </TouchableOpacity>
     );
 }
 
@@ -377,13 +381,14 @@ export function AllDayChip({
     ].filter(Boolean).join(' · ');
 
     return (
-        <Pressable
+        <TouchableOpacity
             onPress={selectable ? onToggleSelect : onPress}
             onLongPress={!selectable && onToggleSelect ? onToggleSelect : undefined}
+            activeOpacity={0.6}
             accessibilityRole="button"
             accessibilityLabel={`All day: ${item.title}, ${meta}`}
             accessibilityState={selectable ? { selected: !!selected } : undefined}
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1, marginBottom: 6 })}
+            style={{ marginBottom: 6 }}
         >
             <View
                 style={{
@@ -458,7 +463,7 @@ export function AllDayChip({
                     </TouchableOpacity>
                 )}
             </View>
-        </Pressable>
+        </TouchableOpacity>
     );
 }
 

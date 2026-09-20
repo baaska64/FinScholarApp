@@ -16,6 +16,7 @@ import Animated, {
   withSequence,
   withRepeat,
   interpolate,
+  interpolateColor,
   Easing,
   runOnJS,
 } from 'react-native-reanimated';
@@ -40,8 +41,12 @@ export default function AnimatedSplash({ onFinish, ready = true }: AnimatedSplas
   const exitStarted = useRef(false);
   const introDoneAt = useRef(Date.now() + MIN_VISIBLE_MS);
   // ─── Shared values ────────────────────────────────────────────
-  const mascotScale = useSharedValue(0.3);
-  const mascotOpacity = useSharedValue(0);
+  // The native splash already showed Fin on this exact indigo, so the mascot
+  // starts on screen and only settles. Springing it from 0.3 / opacity 0 made
+  // it blink out and pop back the instant the native splash handed over — the
+  // same fault `app/welcome.tsx` fixed by springing its mascot from 0.94.
+  const mascotScale = useSharedValue(0.94);
+  const mascotOpacity = useSharedValue(1);
   const mascotFloat = useSharedValue(0);
 
   const titleOpacity = useSharedValue(0);
@@ -67,19 +72,34 @@ export default function AnimatedSplash({ onFinish, ready = true }: AnimatedSplas
   // Bottom accent bar
   const barWidth = useSharedValue(0);
 
+  /**
+   * 0 = the launch icon's blue, 1 = the app's indigo.
+   *
+   * The native splash paints `#3991f6` so the app icon's own background melts
+   * into it — that is what makes the first frame look like the icon rather than
+   * a logo pasted onto a coloured card. This screen therefore has to *start*
+   * there, or the hand-off is a hard cut between two different blues. It cannot
+   * simply stay there either: at 16px the subtitle only reaches ~2.3:1 on that
+   * light blue, against ~4.4:1 on indigo. So it begins matched and settles into
+   * the brand colour, which is both seamless and legible.
+   */
+  const bgMorph = useSharedValue(0);
+
   useEffect(() => {
     // ─── Step 1: Decorative blobs scale in (immediate) ──────────
     blob1Scale.value = withSpring(1, { damping: 8, stiffness: 40 });
     blob2Scale.value = withDelay(100, withSpring(1, { damping: 8, stiffness: 40 }));
     blob3Scale.value = withDelay(200, withSpring(1, { damping: 8, stiffness: 40 }));
 
-    // ─── Step 2: Mascot bounces in (200ms) ──────────────────────
-    mascotOpacity.value = withDelay(120, withTiming(1, { duration: 260 }));
-    mascotScale.value = withDelay(120, withSpring(1, {
-      damping: 7,
-      stiffness: 100,
+    // ─── Step 1b: Ease off the icon's blue onto the brand indigo ─
+    bgMorph.value = withDelay(180, withTiming(1, { duration: 520, easing: Easing.inOut(Easing.quad) }));
+
+    // ─── Step 2: Mascot settles into place (no delay, no pop) ───
+    mascotScale.value = withSpring(1, {
+      damping: 12,
+      stiffness: 120,
       mass: 0.9,
-    }));
+    });
 
     // ─── Step 3: Gentle float loop ──────────────────────────────
     setTimeout(() => {
@@ -148,6 +168,9 @@ export default function AnimatedSplash({ onFinish, ready = true }: AnimatedSplas
   // ─── Animated styles ──────────────────────────────────────────
   const containerStyle = useAnimatedStyle(() => ({
     opacity: overallOpacity.value,
+    // Overrides `styles.container`'s static fill; must stay in sync with the
+    // `expo-splash-screen` backgroundColor in app.json at the 0 end.
+    backgroundColor: interpolateColor(bgMorph.value, [0, 1], ['#3991f6', '#4f46e5']),
     transform: [{ translateY: overallLift.value }, { scale: overallScale.value }],
   }));
 

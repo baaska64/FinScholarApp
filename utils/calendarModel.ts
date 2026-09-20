@@ -254,6 +254,25 @@ export function trimTrailingWeeks(cells: MonthCell[]): MonthCell[] {
     return cells.slice(0, end);
 }
 
+/**
+ * Cuts a flat cell list into rows of seven.
+ *
+ * The grid renders one `View` per week with seven `flex: 1` children rather
+ * than a single `flexWrap` container. That is not a style preference: a wrapped
+ * container needs each cell to carry a width, and the percentage `flexBasis`
+ * fallback used while the container was still being measured did not resolve in
+ * Yoga — cells collapsed to their content and **eleven** landed on a row that
+ * had seven weekday headers above it. Seven flexed children in an explicit row
+ * cannot be wrong, and need no measurement.
+ */
+export function chunkWeeks(cells: MonthCell[]): MonthCell[][] {
+    const weeks: MonthCell[][] = [];
+    for (let i = 0; i < cells.length; i += 7) {
+        weeks.push(cells.slice(i, i + 7));
+    }
+    return weeks;
+}
+
 // ─── Reading the ledger ───────────────────────────────────────────────────────
 
 export interface CollectOptions {
@@ -541,41 +560,26 @@ export function pastItems(items: CalendarItem[], today: Date = new Date()): Cale
 }
 
 /**
- * What the month grid draws under a day number: up to three event-type colours,
- * plus whether the day also carries task deadlines, plus the count that did not
- * fit. Three dots is the ceiling because a 44pt cell cannot legibly hold more.
+ * What a month cell shows: named chips, plus the count that did not fit.
+ *
+ * The grid used to draw coloured dots. A dot says "something happens here" and
+ * nothing else, so answering "what is on the 14th?" always cost a tap. Chips
+ * carry the title — truncated hard in a 48pt cell, but "Midte…" is still an
+ * answer where a dot is only a question.
+ *
+ * When the day overflows, the **last slot is spent on the count** rather than
+ * on another chip, which is the rule every calendar grid uses: two items show
+ * two chips, three items show one chip and "+2".
  */
-export interface DayMark {
-    types: EventTypeKey[];
-    taskCount: number;
-    eventCount: number;
+export interface DayChips {
+    chips: CalendarItem[];
     overflow: number;
 }
 
-export function buildDayMark(items: CalendarItem[]): DayMark {
-    const types: EventTypeKey[] = [];
-    let eventCount = 0;
-    let taskCount = 0;
+export function buildDayChips(items: CalendarItem[], limit = 2): DayChips {
+    if (items.length === 0 || limit < 1) return { chips: [], overflow: items.length };
+    if (items.length <= limit) return { chips: [...items], overflow: 0 };
 
-    items.forEach(item => {
-        if (item.kind === 'task') {
-            taskCount++;
-            return;
-        }
-        eventCount++;
-        const t = item.type || 'custom';
-        if (!types.includes(t)) types.push(t);
-    });
-
-    const shown = types.slice(0, 3);
-    // Dots stand for distinct types, so overflow counts the events those three
-    // dots do not already speak for — not "everything past the third item".
-    const represented = items.filter(i => i.kind === 'event' && shown.includes(i.type || 'custom')).length;
-
-    return {
-        types: shown,
-        taskCount,
-        eventCount,
-        overflow: Math.max(0, eventCount - represented),
-    };
+    const shown = limit - 1;
+    return { chips: items.slice(0, shown), overflow: items.length - shown };
 }

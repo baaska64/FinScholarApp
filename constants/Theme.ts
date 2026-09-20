@@ -228,3 +228,68 @@ export function getTints(isDark: boolean) {
 export function getTheme(isDark: boolean) {
   return isDark ? Colors.dark : Colors.light;
 }
+
+// ─── Brand ────────────────────────────────────────────────────────────────────
+
+/**
+ * The azure the app is actually branded in — Fin sits on a `#3991f6` field in
+ * the launcher icon and on the splash screen, and until now that blue appeared
+ * nowhere inside the app.
+ *
+ * This is deliberately *not* `primary`. `primary` is the indigo every other
+ * screen is wired through; repainting it would restyle the whole app. These
+ * tokens carry identity instead of state, and are spent where the product
+ * should feel like FinScholar rather than like a generic tracker: the
+ * dashboard's header, its highlights, its accents.
+ *
+ * `base` is the icon's literal azure and is what the washes are mixed from.
+ * `heroFrom`/`heroTo` are deliberately a few steps deeper: white on the raw
+ * `#3991f6` measures 2.8:1, and the band carries 10–12px labels. `#2470e0` is
+ * the same hue family and clears 4.7:1, so every piece of white type on the
+ * band — not just the greeting — is legible, and the gradient only gets darker
+ * from there. Do not lighten `heroFrom` back toward the icon value.
+ */
+export const Brand = {
+  light: {
+    base: '#3991f6',
+    heroFrom: '#2470e0',
+    heroTo: '#123f8f',
+    /** Sheen and bubbles painted over the gradient. */
+    glow: '#7fc0ff',
+    /**
+     * Translucent wells that sit *on* the band. Sized for icons and tracks,
+     * which only owe 3:1 as graphical objects — small white text goes straight
+     * on the band, never on a well, because a light well lifts the local
+     * background out of contrast.
+     */
+    well: 'rgba(255,255,255,0.16)',
+    wellStrong: 'rgba(255,255,255,0.26)',
+    wellLine: 'rgba(255,255,255,0.32)',
+    onHero: '#ffffff',
+    onHeroMuted: 'rgba(255,255,255,0.88)',
+    /** Pale wash for brand-tinted panels sitting on the page, not on the band. */
+    wash: '#e9f2fe',
+    washLine: '#cde2fc',
+    ink: '#125aad',
+    solid: '#2e86f0',
+  },
+  dark: {
+    base: '#5aa6fb',
+    heroFrom: '#27508f',
+    heroTo: '#142a54',
+    glow: '#5f9de0',
+    well: 'rgba(255,255,255,0.10)',
+    wellStrong: 'rgba(255,255,255,0.18)',
+    wellLine: 'rgba(255,255,255,0.18)',
+    onHero: '#ffffff',
+    onHeroMuted: 'rgba(255,255,255,0.82)',
+    wash: 'rgba(90,166,251,0.13)',
+    washLine: 'rgba(90,166,251,0.28)',
+    ink: '#8fc3fd',
+    solid: '#4a97f5',
+  },
+};
+
+export function getBrand(isDark: boolean) {
+  return isDark ? Brand.dark : Brand.light;
+}

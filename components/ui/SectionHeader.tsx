@@ -18,6 +18,12 @@ interface SectionHeaderProps {
    * the cards beneath them, so the eye can find a section by colour alone.
    */
   railColor?: string;
+  /**
+   * Colour of the trailing action. Defaults to `primary`; the dashboard passes
+   * the brand azure so its links belong to the header above them rather than
+   * introducing a second blue.
+   */
+  actionColor?: string;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -34,11 +40,13 @@ export default function SectionHeader({
   onAction,
   actionIcon,
   railColor,
+  actionColor,
   style,
 }: SectionHeaderProps) {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const theme = getTheme(isDark);
+  const action = actionColor || theme.primary;
 
   return (
     <View
@@ -95,12 +103,12 @@ export default function SectionHeader({
           style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 2 }}
         >
           {actionIcon && (
-            <Ionicons name={actionIcon} size={14} color={theme.primary} style={{ marginRight: 3 }} />
+            <Ionicons name={actionIcon} size={14} color={action} style={{ marginRight: 3 }} />
           )}
-          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.primary }}>
+          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: action }}>
             {actionLabel || 'View all'}
           </Text>
-          <Ionicons name="chevron-forward" size={14} color={theme.primary} style={{ marginLeft: 1 }} />
+          <Ionicons name="chevron-forward" size={14} color={action} style={{ marginLeft: 1 }} />
         </TouchableOpacity>
       )}
     </View>

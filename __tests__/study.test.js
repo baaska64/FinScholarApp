@@ -313,9 +313,13 @@ export function runStudyRedesignTests(describe, test) {
     });
 
     test('3.3 updateStudyStats manages streaks across consecutive days', () => {
-      const today = new Date().toISOString().split('T')[0];
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().split('T')[0];
+      // Local dates, not `toISOString()` — that is UTC, and `updateStudyStats`
+      // keys streaks off `getLocalDateString`. The two disagree for the whole
+      // window between local midnight and the UTC offset (08:00 in GMT+8),
+      // which made this suite fail every night rather than being a real bug.
+      const today = getLocalDateString(new Date());
+      const yesterday = getLocalDateString(new Date(Date.now() - 24 * 60 * 60 * 1000));
+      const twoDaysAgo = getLocalDateString(new Date(Date.now() - 48 * 60 * 60 * 1000));
 
       // Case A: First study session
       const stats0 = { lastStudyDate: '', currentStreak: 0, masteredToday: 0 };
@@ -346,7 +350,8 @@ export function runStudyRedesignTests(describe, test) {
     });
 
     test('3.4 getWeekDaysActivity produces 7-day Mon-Sun activity array with flags', () => {
-      const today = new Date().toISOString().split('T')[0];
+      // Local, for the same reason as 3.3.
+      const today = getLocalDateString(new Date());
       const weeklyHistory = [today];
       const days = getWeekDaysActivity(weeklyHistory, today);
 

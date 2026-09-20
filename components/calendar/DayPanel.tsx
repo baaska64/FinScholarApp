@@ -1,8 +1,7 @@
 import React from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { View, Text } from 'react-native';
 import { useColorScheme } from 'nativewind';
-import { getTheme, Radius } from '@/constants/Theme';
+import { getTheme } from '@/constants/Theme';
 import {
     parseDateKey,
     relativeDayLabel,
@@ -101,55 +100,34 @@ export default function DayPanel({
 
     return (
         <View>
-            {/* Day header — the one place the full date is spelled out. */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', paddingBottom: 10 }}>
-                <View style={{ flex: 1, marginRight: 10 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
+            {/* Day header — the one place the full date is spelled out.
+                Adding lives on the screen's floating action button, so this
+                header carries no control of its own. */}
+            <View style={{ paddingBottom: 10 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
+                    <Text
+                        accessibilityRole="header"
+                        numberOfLines={1}
+                        style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, letterSpacing: -0.2 }}
+                    >
+                        {date ? date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) : ''}
+                    </Text>
+                    {relative ? (
                         <Text
-                            accessibilityRole="header"
-                            numberOfLines={1}
-                            style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, letterSpacing: -0.2 }}
+                            style={{
+                                fontFamily: 'Nunito_700Bold',
+                                fontSize: 11.5,
+                                marginLeft: 8,
+                                color: relative === 'Today' ? theme.primary : theme.textTertiary,
+                            }}
                         >
-                            {date ? date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) : ''}
+                            {relative}
                         </Text>
-                        {relative ? (
-                            <Text
-                                style={{
-                                    fontFamily: 'Nunito_700Bold',
-                                    fontSize: 11.5,
-                                    marginLeft: 8,
-                                    color: relative === 'Today' ? theme.primary : theme.textTertiary,
-                                }}
-                            >
-                                {relative}
-                            </Text>
-                        ) : null}
-                    </View>
-                    <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
-                        {summary}
-                    </Text>
+                    ) : null}
                 </View>
-
-                <TouchableOpacity
-                    onPress={onAddEvent}
-                    accessibilityRole="button"
-                    accessibilityLabel="Add an event on this day"
-                    style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        height: 32,
-                        paddingHorizontal: 12,
-                        borderRadius: Radius.full,
-                        backgroundColor: theme.primary,
-                        borderBottomWidth: 2,
-                        borderBottomColor: isDark ? '#5b62c9' : '#3730a3',
-                    }}
-                >
-                    <Ionicons name="add" size={15} color="#ffffff" />
-                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: '#ffffff', marginLeft: 3 }}>
-                        Event
-                    </Text>
-                </TouchableOpacity>
+                <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
+                    {summary}
+                </Text>
             </View>
 
             {isEmpty && (
