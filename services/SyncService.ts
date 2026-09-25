@@ -295,9 +295,15 @@ class SyncServiceClass {
         .single();
       const plan = planLedgerFetch(readRemoteStamp(stamp), localData?.last_updated || 0, lastSynced);
 
-      if (plan === 'up-to-date') {
+      if (plan === 'up-to-date' || plan === 'push-local') {
+        // The cloud still holds what this device last synced, so neither
+        // branch reads the remote ledger and it is never downloaded.
         this.initialSyncComplete = true;
-        this.setState('saved');
+        if (plan === 'push-local') {
+          await this.pushLocalChanges(localData);
+        } else {
+          this.setState('saved');
+        }
         this.syncInProgress = false;
         return;
       }

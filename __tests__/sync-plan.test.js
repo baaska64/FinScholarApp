@@ -108,13 +108,14 @@ export function runSyncPlanTests(describe, test) {
       assert.deepStrictEqual(readRemoteStamp(null), { kind: 'unknown' });
     });
 
-    test('SP1.2 Skips the download only when nothing changed on either side', () => {
+    test('SP1.2 Skips the download whenever the cloud has not changed since the last sync', () => {
       const found = (lastUpdated) => ({ kind: 'found', lastUpdated });
       assert.strictEqual(planLedgerFetch({ kind: 'missing' }, 500, 100), 'no-remote');
       assert.strictEqual(planLedgerFetch(found(100), 100, 100), 'up-to-date');
       assert.strictEqual(planLedgerFetch(found(100), 0, 100), 'up-to-date', 'no local ledger: sync() already left it alone');
-      assert.strictEqual(planLedgerFetch(found(100), 150, 100), 'download', 'local changed: the existing path decides');
+      assert.strictEqual(planLedgerFetch(found(100), 150, 100), 'push-local', 'only local changed: push it, no download');
       assert.strictEqual(planLedgerFetch(found(200), 100, 100), 'download', 'remote changed');
+      assert.strictEqual(planLedgerFetch(found(200), 150, 100), 'download', 'both changed: the conflict modal needs the remote ledger');
       assert.strictEqual(planLedgerFetch({ kind: 'unknown' }, 100, 100), 'download', 'probe failed: fall back to the existing path');
     });
 
@@ -123,6 +124,7 @@ export function runSyncPlanTests(describe, test) {
       assert.strictEqual(planLedgerFetch({ kind: 'found', lastUpdated: null }, 0, 0), 'download');
       assert.strictEqual(planLedgerFetch({ kind: 'found', lastUpdated: undefined }, 0, 0), 'download');
       assert.strictEqual(planLedgerFetch({ kind: 'found', lastUpdated: '100' }, 100, 100), 'download');
+      assert.strictEqual(planLedgerFetch({ kind: 'found', lastUpdated: null }, 500, 0), 'download', 'even when only local changed');
     });
 
     test('SP1.4 Never skips a download the old sync() would have used, across every state combination', () => {
@@ -130,6 +132,7 @@ export function runSyncPlanTests(describe, test) {
       const remotes = [null, {}, ...stamps.map((v) => ({ last_updated: v }))];
       const locals = [null, {}, ...stamps.map((v) => ({ last_updated: v }))];
       let checked = 0;
+      const skipped = { 'up-to-date': 0, 'push-local': 0 };
       for (const remote of remotes) {
         for (const local of locals) {
           for (const lastSynced of stamps) {
@@ -139,14 +142,18 @@ export function runSyncPlanTests(describe, test) {
             const plan = planLedgerFetch(stamp, local?.last_updated || 0, lastSynced);
             const legacy = legacySyncDecision(remote, local, lastSynced);
             const label = JSON.stringify({ remote, local, lastSynced, plan, legacy });
+            // Each skip lands in exactly the branch the full download would have taken.
             if (plan === 'up-to-date') assert.strictEqual(legacy, 'saved', label);
+            if (plan === 'push-local') assert.strictEqual(legacy, 'push-local', label);
             if (plan === 'no-remote') assert.strictEqual(legacy, 'no-remote', label);
             if (legacy === 'conflict' || legacy === 'download') assert.strictEqual(plan, 'download', label);
+            if (plan in skipped) skipped[plan]++;
             checked++;
           }
         }
       }
       assert.strictEqual(checked, 6 * 6 * 4);
+      assert.ok(skipped['up-to-date'] > 0 && skipped['push-local'] > 0, `both skips exercised: ${JSON.stringify(skipped)}`);
     });
   });
 
