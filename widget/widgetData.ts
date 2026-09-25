@@ -13,6 +13,7 @@
  */
 
 import { Calculator } from '../utils/calculator';
+import { readUngradedMode } from '../utils/gradeEntry';
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -526,9 +527,9 @@ function computeTerm(sem: any, now: Date): { pct: number; caption: string } {
   return { pct, caption: `Week ${Math.floor(daysPassed / 7) + 1} of ${Math.ceil(totalDays / 7)}` };
 }
 
-function computeGrade(sem: any, system: string): { value: string; caption: string } {
+function computeGrade(sem: any, system: string, ungraded: string = 'zero'): { value: string; caption: string } {
   try {
-    const res = Calculator.calculateSemester(sem, system);
+    const res = Calculator.calculateSemester(sem, system, ungraded);
     if (system === 'PERCENT') {
       return {
         value: res.percent > 0 ? `${res.percent.toFixed(1)}%` : '--',
@@ -609,7 +610,7 @@ export function buildWidgetSnapshot(ledger: any, options: SnapshotOptions = {}):
 
   const attendance = computeAttendance(sem, now);
   const term = computeTerm(sem, now);
-  const grade = computeGrade(sem, ledger?.settings?.gradingSystem || '1_IS_BEST');
+  const grade = computeGrade(sem, ledger?.settings?.gradingSystem || '1_IS_BEST', readUngradedMode(ledger?.settings));
 
   const allTasks = subjects.reduce((count: number, subject: any) => {
     const reqs = Array.isArray(subject?.requirements) ? subject.requirements : [];

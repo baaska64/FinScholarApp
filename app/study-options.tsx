@@ -9,7 +9,7 @@ import { SyncService } from '@/services/SyncService';
 import { getTheme, getTints, Radius } from '@/constants/Theme';
 import Card from '@/components/ui/Card';
 import AnimatedPressable from '@/components/ui/AnimatedPressable';
-import { DEFAULT_SR_SETTINGS, parseSteps, resolveSettings } from '@/components/study/scheduler';
+import { DEFAULT_SR_SETTINGS, parseSteps, resolveSettings, unburySiblings } from '@/components/study/scheduler';
 
 const RETENTION_CHOICES = [
   { value: 0.8, label: '80%', note: 'Relaxed' },
@@ -40,6 +40,7 @@ export default function StudyOptionsScreen() {
     learningSteps: '1 10',
     relearningSteps: '10',
     maximumInterval: '36500',
+    burySiblings: false,
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +66,7 @@ export default function StudyOptionsScreen() {
           learningSteps: s.learningSteps,
           relearningSteps: s.relearningSteps,
           maximumInterval: String(s.maximumInterval),
+          burySiblings: s.burySiblings,
         });
       } catch (e) {
         console.error('Failed to load study options:', e);
@@ -93,7 +95,13 @@ export default function StudyOptionsScreen() {
         relearningSteps: form.relearningSteps.trim(),
         maximumInterval: Math.max(1, Math.floor(Number(form.maximumInterval) || 36500)),
         dailyGoal: goal,
+        burySiblings: form.burySiblings,
       };
+      // Turning holding off should show the held siblings today, not after
+      // tomorrow's rollover. Hand-buried cards stay buried.
+      if (!form.burySiblings) {
+        for (const d of ledger.flashcards.decks || []) if (Array.isArray(d?.cards)) d.cards = unburySiblings(d.cards);
+      }
       ledger.flashcards.stats = { ...(ledger.flashcards.stats || {}), dailyGoal: goal };
       await SyncService.pushLocalChanges(ledger);
       router.back();
@@ -247,6 +255,43 @@ export default function StudyOptionsScreen() {
               );
             })}
           </View>
+        </Card>
+
+        <Text style={{ ...microLabel, marginBottom: 8, marginLeft: 2 }}>Notes with several cards</Text>
+        <Card padding={14} radius={Radius['2xl']} style={{ marginBottom: 20 }}>
+          <TouchableOpacity
+            onPress={() => setForm((f) => ({ ...f, burySiblings: !f.burySiblings }))}
+            activeOpacity={0.7}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: form.burySiblings }}
+            accessibilityLabel="Space out cards from the same note"
+            style={{ flexDirection: 'row', alignItems: 'center' }}
+          >
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: theme.text }}>Space out cards from the same note</Text>
+              <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textTertiary, marginTop: 1, lineHeight: 16 }}>
+                A cloze with c1, c2 and c3 makes three cards. Off, you're quizzed on all three today. On, after you answer one the others wait until the next day, so one answer can't give away the next.
+              </Text>
+            </View>
+            <View
+              style={{
+                width: 46, height: 28, borderRadius: 14, padding: 3, justifyContent: 'center',
+                alignItems: form.burySiblings ? 'flex-end' : 'flex-start',
+                backgroundColor: form.burySiblings ? theme.primary : theme.surfaceSecondary,
+                borderWidth: 1, borderColor: form.burySiblings ? theme.primary : theme.cardBorder,
+              }}
+            >
+              <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#ffffff' }} />
+            </View>
+          </TouchableOpacity>
+          {form.burySiblings && (
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 12 }}>
+              <Ionicons name="information-circle-outline" size={15} color={theme.textTertiary} style={{ marginTop: 1 }} />
+              <Text style={{ flex: 1, fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, lineHeight: 16 }}>
+                A note with many cards, like an image with 10 boxes, will take several days to see in full.
+              </Text>
+            </View>
+          )}
         </Card>
 
         <Text style={{ ...microLabel, marginBottom: 8, marginLeft: 2 }}>Memory</Text>

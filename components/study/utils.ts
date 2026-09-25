@@ -507,6 +507,14 @@ export function getWeekDaysActivity(
 
 // ─── File Import Parser ───────────────────────────────────────────────────────
 
+/** Whether the single quote at `open` has an unescaped partner that ends its field. */
+function closesField(line: string, open: number): boolean {
+  for (let j = open + 1; j < line.length; j++) {
+    if (line[j] === "'" && line[j - 1] !== '\\' && /^\s*(,|$)/.test(line.slice(j + 1))) return true;
+  }
+  return false;
+}
+
 export function parseCsvLine(line: string): [string, string] | null {
   if (!line || typeof line !== 'string') return null;
   const tokens: string[] = [];
@@ -517,7 +525,12 @@ export function parseCsvLine(line: string): [string, string] | null {
     const char = line[i];
     const prevChar = i > 0 ? line[i - 1] : '';
 
-    if ((char === '"' || char === "'") && prevChar !== '\\') {
+    // Double quotes always delimit a field. A single quote only opens one when
+    // it has a partner that closes the field (before a comma or the end), so
+    // 'Newton's law', '…' still parses while a front like "'tis" or "'90s
+    // music" stays literal — it used to open a quote that never closed and the
+    // whole line vanished.
+    if ((char === '"' || (char === "'" && (quoteChar === "'" || closesField(line, i)))) && prevChar !== '\\') {
       if (!quoteChar && current.trim() === '') {
         quoteChar = char;
         continue;
@@ -566,9 +579,12 @@ export function parseImport(
       back = '';
 
     if (separator === 'tab' || (separator === 'auto' && line.includes('\t'))) {
+      // Front is column 1, back is the first non-empty column after it. Any
+      // further columns (Anki's tags, a spreadsheet's notes) are dropped rather
+      // than glued onto the back with invisible tabs.
       const [f, ...rest] = line.split('\t');
       front = f?.trim() || '';
-      back = rest.filter((t) => t.trim().length > 0).join('\t').trim();
+      back = (rest.find((t) => t.trim().length > 0) || '').trim();
     } else if (separator === 'pipe' || (separator === 'auto' && line.includes('|'))) {
       const [f, ...rest] = line.split('|');
       front = f ? f.trim().replace(/^Q:\s*/i, '').trim() : '';
@@ -612,6 +628,123 @@ export function parseImportNotes(
   }
   for (const c of parseImport(rest.join('\n'), separator)) out.push({ kind, front: c.front, back: c.back });
   return out;
+}
+
+export type ImportSeparator = 'comma' | 'pipe' | 'tab' | 'semicolon' | 'auto';
+
+const SEPARATOR_CHARS: Record<Exclude<ImportSeparator, 'auto'>, string> = { comma: ',', semicolon: ';', pipe: '|', tab: '\t' };
+
+/**
+ * A cloze line's text and its Extra (shown with the answer). Cloze sentences
+ * are full of commas, so splitting on the first comma would cut them in half:
+ *   - tab, | and ; start the Extra at the first one after the last `}}`, so a
+ *     separator inside the sentence before the blanks is left alone. Tab is
+ *     what Anki's plain-text export and a two-column spreadsheet paste give.
+ *   - a comma only splits when the sentence is double-quoted, the way a
+ *     spreadsheet's CSV export writes a cell. An unquoted comma line stays
+ *     one sentence, exactly as before Extra was supported.
+ */
+export function splitClozeLine(line: string, separator: ImportSeparator = 'auto'): { text: string; extra: string } {
+  const whole = { text: line.trim(), extra: '' };
+  const lastClose = line.lastIndexOf('}}');
+  const order: Exclude<ImportSeparator, 'auto'>[] = separator === 'auto' ? ['tab', 'pipe', 'semicolon', 'comma'] : [separator];
+  for (const sep of order) {
+    if (sep === 'comma') {
+      if (!line.trim().startsWith('"')) continue;
+      const parsed = parseCsvLine(line.trim());
+      if (parsed && /\{\{c\d+::/.test(parsed[0])) return { text: parsed[0].trim(), extra: parsed[1].trim() };
+      continue;
+    }
+    const ch = SEPARATOR_CHARS[sep];
+    const at = lastClose >= 0 ? line.indexOf(ch, lastClose + 2) : -1;
+    if (at >= 0) {
+      const text = line.slice(0, at).trim();
+      const extra = line.slice(at + 1).trim();
+      if (text) return { text, extra };
+    }
+  }
+  return whole;
+}
+
+export interface ImportAnalysis {
+  notes: { kind: 'basic' | 'reversed' | 'typein' | 'cloze'; front: string; back: string }[];
+  /** Cards the notes will make: two per Both ways note, one per distinct cloze number. */
+  cardCount: number;
+  /** Lines that could not become a card, with the 1-based line number and why. */
+  skipped: { line: number; text: string; reason: string }[];
+  /** Notes left out because the deck (or an earlier line) already has them. */
+  duplicates: number;
+  /** A "Front, Back" style header row was recognised and left out. */
+  headerSkipped: boolean;
+}
+
+const HEADER_FRONT = /^(front|question|term|word|q|prompt)$/i;
+const HEADER_BACK = /^(back|answer|definition|meaning|a|response)$/i;
+const importKey = (front: string, back: string) =>
+  `${front.trim().toLowerCase().replace(/\s+/g, ' ')}\u0000${back.trim().toLowerCase().replace(/\s+/g, ' ')}`;
+
+/**
+ * Everything the import sheet shows, from the raw text: the notes to add and
+ * an account of every line that will not become one. The old flow parsed
+ * silently — a line without a separator, a header row or a card already in
+ * the deck either vanished or was imported, and the student never knew.
+ */
+export function analyzeImport(
+  content: string,
+  separator: ImportSeparator = 'auto',
+  kind: 'basic' | 'reversed' | 'typein' = 'basic',
+  existing: { front?: string; back?: string }[] = []
+): ImportAnalysis {
+  const result: ImportAnalysis = { notes: [], cardCount: 0, skipped: [], duplicates: 0, headerSkipped: false };
+  if (!content || typeof content !== 'string') return result;
+
+  const seen = new Set(existing.map((c) => importKey(c?.front || '', c?.back || '')));
+  const lines = content.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').split('\n');
+  let firstData = true;
+
+  lines.forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith('//')) return;
+    const lineNo = i + 1;
+
+    let note: ImportAnalysis['notes'][number] | null = null;
+    if (/\{\{c\d+::/.test(line) && clozeNumbers(line).length > 0) {
+      const { text, extra } = splitClozeLine(line, separator);
+      note = { kind: 'cloze', front: text, back: extra };
+    } else {
+      const parsed = parseImport(line, separator)[0];
+      if (parsed) {
+        if (firstData && HEADER_FRONT.test(parsed.front) && HEADER_BACK.test(parsed.back)) {
+          result.headerSkipped = true;
+          firstData = false;
+          return;
+        }
+        note = { kind, front: parsed.front, back: parsed.back };
+      } else {
+        const hasSep = separator === 'auto'
+          ? /[\t|;,]/.test(line)
+          : line.includes(SEPARATOR_CHARS[separator]);
+        result.skipped.push({
+          line: lineNo,
+          text: line,
+          reason: hasSep ? 'The front or the back is empty' : separator === 'auto' ? 'No separator between front and back' : `No ${separator === 'tab' ? 'tab' : `"${SEPARATOR_CHARS[separator]}"`} on this line`,
+        });
+      }
+    }
+    firstData = false;
+    if (!note) return;
+
+    const key = importKey(note.front, note.back);
+    if (seen.has(key)) {
+      result.duplicates++;
+      return;
+    }
+    seen.add(key);
+    result.notes.push(note);
+    result.cardCount += note.kind === 'reversed' ? 2 : note.kind === 'cloze' ? Math.max(1, new Set(clozeNumbers(note.front)).size) : 1;
+  });
+
+  return result;
 }
 
 // ─── Exam Prep Scheduling Algorithm (Cepeda et al. 2008) ──────────────────────

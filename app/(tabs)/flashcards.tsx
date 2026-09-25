@@ -10,6 +10,7 @@ import {
   Image,
   Share,
   PixelRatio,
+  Platform,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -30,6 +31,7 @@ import AnimatedPressable from '@/components/ui/AnimatedPressable';
 import KeyboardSheet from '@/components/ui/KeyboardSheet';
 import SectionHeader from '@/components/ui/SectionHeader';
 import HeroBackdrop from '@/components/dashboard/HeroBackdrop';
+import GoalRing from '@/components/study/GoalRing';
 import SpotlightTarget from '@/components/spotlight/SpotlightTarget';
 import { useScreenTour } from '@/components/spotlight/useScreenTour';
 import { SPOTLIGHT_IDS, TOUR_KEYS, STUDY_TOUR } from '@/constants/tours';
@@ -65,7 +67,8 @@ import {
   trueRetention,
   isStreakLive,
   getLocalDateString,
-  parseImportNotes,
+  analyzeImport,
+  ImportSeparator,
   // scheduler
   answerCard,
   AnswerResult,
@@ -73,6 +76,8 @@ import {
   pickNext,
   sessionRemaining,
   burySiblings,
+  unburySiblings,
+  resolveSettings,
   bumpDaily,
   cardState,
   deckDueCounts,
@@ -105,6 +110,7 @@ import {
   kindLabel,
   NOTE_KINDS,
   SAMPLE_NOTES,
+  notePreview,
 } from '@/components/study';
 import { queueTints, queueOnBand } from '@/components/study/studyTheme';
 import DeckList from '@/components/study/DeckList';
@@ -113,6 +119,9 @@ import AnswerBar from '@/components/study/AnswerBar';
 import NoteEditorSheet from '@/components/study/NoteEditorSheet';
 import StatsSheet from '@/components/study/StatsSheet';
 import FaceText from '@/components/study/FaceText';
+import OcclusionImage from '@/components/study/OcclusionImage';
+import { maskStates } from '@/components/study/occlusion';
+import { deleteImage } from '@/components/study/imageStore';
 
 export { Flashcard, FlashcardDeck, SessionCard, DeckNode, NodeStats, SRSettings, FlashcardStats };
 export { buildDeckTree, getNodeStats, collectCards, DEFAULT_SR_SETTINGS };
@@ -123,14 +132,12 @@ const FONT_SCALE = PixelRatio.getFontScale();
 /** Page gutter, matched to the dashboard and schedule tabs. */
 const GUTTER = 14;
 /**
- * The brand band, sized like the dashboard's so the two headers read as one
- * family. It grows with the font scale because the stat card is lifted into
- * it by a fixed amount — at a large text size a fixed band would run the
- * due-count straight into the card.
+ * How far the page sheet is pulled up over the brand band. The dashboard
+ * floats a stat card on a domed band; the study tab instead ends its band
+ * flat and slides the whole page over it, so the two headers share a colour
+ * without sharing a silhouette.
  */
-const HERO_H = Math.round(176 * Math.max(1, Math.min(FONT_SCALE, 1.4)));
-const HERO_CURVE = 26;
-const STAT_LIFT = 48;
+const SHEET_LIFT = 26;
 
 type DetailFilter = 'all' | 'new' | 'learning' | 'due' | 'suspended' | 'flagged' | 'leech';
 type PracticeAction = 'quiz' | 'match' | 'exam' | 'custom';
@@ -240,6 +247,8 @@ export default function FlashcardsScreen() {
   const [activePath, setActivePath] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
+  /** Measured height of the home band; its height follows its content, so the backdrop is sized to it. */
+  const [bandH, setBandH] = useState(0);
 
   // First visit only: point at the create button, once the deck list is up.
   useScreenTour(TOUR_KEYS.study, STUDY_TOUR, !loading && view === 'decks');
@@ -294,11 +303,11 @@ export default function FlashcardsScreen() {
   const [showImport, setShowImport] = useState(false);
   const [importDeckId, setImportDeckId] = useState<string | null>(null);
   const [importText, setImportText] = useState('');
-  const [importSeparator, setImportSeparator] = useState<'comma' | 'semicolon' | 'pipe' | 'tab'>('comma');
+  const [importSeparator, setImportSeparator] = useState<ImportSeparator>('auto');
   const [importKind, setImportKind] = useState<'basic' | 'reversed' | 'typein'>('basic');
   const [importFileName, setImportFileName] = useState('');
   const [importLoading, setImportLoading] = useState(false);
-  const [parsedImport, setParsedImport] = useState<{ kind: NoteKind; front: string; back: string }[]>([]);
+  const [showImportHelp, setShowImportHelp] = useState(false);
   const [examPath, setExamPath] = useState<string | null>(null);
   const [examDate, setExamDate] = useState(new Date(Date.now() + 7 * 86400000));
   const [examShowPicker, setExamShowPicker] = useState(false);
@@ -328,7 +337,25 @@ export default function FlashcardsScreen() {
       const raw = await AsyncStorage.getItem('grade_ledger_v2_data');
       if (raw) {
         const ledger = JSON.parse(raw);
-        const list: FlashcardDeck[] = Array.isArray(ledger.flashcards?.decks) ? ledger.flashcards.decks : [];
+        let list: FlashcardDeck[] = Array.isArray(ledger.flashcards?.decks) ? ledger.flashcards.decks : [];
+        // Sibling burying used to be on by default, so a ledger can still
+        // hold c2/c3 back until tomorrow. With it off, free those now; the
+        // write's own reload finds nothing left to release, so it settles.
+        if (!resolveSettings(ledger.flashcards?.settings).burySiblings) {
+          let released = false;
+          const next = list.map((d) => {
+            if (!Array.isArray(d?.cards) || !d.cards.some((c) => c?.buriedUntil)) return d;
+            const cards = unburySiblings(d.cards);
+            if (cards.every((c, i) => c === d.cards[i])) return d;
+            released = true;
+            return { ...d, cards };
+          });
+          if (released) {
+            list = next;
+            ledger.flashcards.decks = next;
+            SyncService.pushLocalChanges(ledger).catch((e: any) => console.error('Failed to release buried siblings:', e));
+          }
+        }
         decksRef.current = list;
         setDecks(list);
         if (ledger.flashcards?.settings) setSrSettings({ ...DEFAULT_SR_SETTINGS, ...ledger.flashcards.settings });
@@ -390,10 +417,36 @@ export default function FlashcardsScreen() {
       });
   }, [srSettings]);
 
+  /**
+   * Deletes stored pictures that a change left unreferenced. Called only from
+   * the destructive handlers (delete note, bulk delete, delete deck, a note
+   * saved with a replaced picture) — never from `persist`, which also runs on
+   * every answer and whose undo snapshot could bring a note back.
+   */
+  const releaseImages = (before: FlashcardDeck[], after: FlashcardDeck[]) => {
+    const ids = (list: FlashcardDeck[]) => new Set(list.flatMap((d) => (d?.cards || []).map((c) => c?.occlusion?.imageId).filter(Boolean) as string[]));
+    const kept = ids(after);
+    ids(before).forEach((id) => {
+      if (!kept.has(id)) deleteImage(id);
+    });
+  };
+
   useFocusEffect(
     useCallback(() => {
       loadDecks();
     }, [loadDecks])
+  );
+
+  // Every answer is a save, so pushes to the server are throttled; leaving the
+  // tab sends what the session queued. It waits behind the writes already
+  // chained, but is not chained itself — a slow network must not hold up the
+  // next answer's local write.
+  useFocusEffect(
+    useCallback(() => () => {
+      writeChain.current
+        .then(() => SyncService.flushPendingPush())
+        .catch((e) => console.error('Failed to flush study sync:', e));
+    }, [])
   );
 
   useEffect(() => {
@@ -570,7 +623,10 @@ export default function FlashcardsScreen() {
           style: 'destructive',
           onPress: () => {
             const ids = new Set(list.map((d) => d.id));
-            persist(decksRef.current.filter((d) => !ids.has(d.id)));
+            const before = decksRef.current;
+            const after = before.filter((d) => !ids.has(d.id));
+            persist(after);
+            releaseImages(before, after);
             if (activePath && activePath.startsWith(node.fullPath)) {
               setActivePath(null);
               setView('decks');
@@ -603,6 +659,7 @@ export default function FlashcardsScreen() {
                         lastReview: _l,
                         introducedOn: _i,
                         buriedUntil: _b,
+                        buriedReason: _br,
                         leech: _le,
                         ...rest
                       } = c;
@@ -671,7 +728,8 @@ export default function FlashcardsScreen() {
 
   const handleExportDeck = async (node: DeckNode) => {
     const list = collectDecksFromNode(node);
-    const notes = list.flatMap((d) => groupNotes(d.cards || []));
+    // Image notes cannot travel as text; they stay out of the export.
+    const notes = list.flatMap((d) => groupNotes(d.cards || [])).filter((n) => n.kind !== 'occlusion');
     if (notes.length === 0) {
       AlertService.alert('No cards', 'There are no cards to export in this deck or folder.');
       return;
@@ -726,6 +784,7 @@ export default function FlashcardsScreen() {
       x.id === deck.id ? { ...x, cards: editing ? replaceNote(x.cards || [], editing.noteId, cards) : [...(x.cards || []), ...cards] } : x
     );
     persist(nd);
+    if (editing) releaseImages(d, nd);
     setLastKind(draft.kind);
     if (!editing) setLastDeckId(deck.id);
     if (editing) {
@@ -747,10 +806,14 @@ export default function FlashcardsScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          const nd = decksRef.current.map((d) =>
+          const before = decksRef.current;
+          const nd = before.map((d) =>
             d.id === deckId ? { ...d, cards: (d.cards || []).filter((c) => noteIdOf(c) !== note.noteId) } : d
           );
           persist(nd);
+          // Undoing an answer must not resurrect a deleted note without its picture.
+          setUndo(null);
+          releaseImages(before, nd);
           setNoteEditor((prev) => ({ ...prev, visible: false }));
           if (session?.current && note.cards.some((c) => c.id === session.current!.cardId)) advanceSession(session, nd);
         },
@@ -790,7 +853,11 @@ export default function FlashcardsScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          persist(mapSelected(() => null));
+          const before = decksRef.current;
+          const after = mapSelected(() => null);
+          persist(after);
+          setUndo(null);
+          releaseImages(before, after);
           endSelection();
         },
       },
@@ -920,7 +987,7 @@ export default function FlashcardsScreen() {
       if (s.mode !== 'cram') {
         res = answerCard(card, g, srSettings, now, { examDate: examDaysLeft(deck, now) !== null ? deck.examDate : null });
         let cards = (deck.cards || []).map((c) => (c.id === card.id ? res!.card : c));
-        cards = burySiblings(cards, res.card, now);
+        if (resolveSettings(srSettings).burySiblings) cards = burySiblings(cards, res.card, now);
         nextDecks = d.map((x) => (x.id === deck.id ? bumpDaily({ ...deck, cards }, prevState, now) : x));
       }
 
@@ -1252,29 +1319,30 @@ export default function FlashcardsScreen() {
   const openImport = (deckId: string) => {
     setImportDeckId(deckId);
     setImportText('');
-    setParsedImport([]);
     setImportFileName('');
+    setShowImportHelp(false);
     setShowImport(true);
   };
 
+  // A picked file loads into the text box rather than being parsed once on
+  // the side: the old flow kept only the parse, so changing the card type or
+  // separator afterwards cleared it and the file's contents were gone.
   const handlePickFile = async () => {
     try {
       setImportLoading(true);
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['text/plain', 'text/csv', 'application/csv', '*/*'],
+        type: ['text/plain', 'text/csv', 'text/tab-separated-values', 'application/csv', '*/*'],
         copyToCacheDirectory: true,
       });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
-      setImportFileName(asset.name);
       const response = await fetch(asset.uri);
       const content = await response.text();
-      const notes = parseImportNotes(content, importSeparator, importKind);
-      if (notes.length === 0) AlertService.alert('No cards found', 'Make sure the separator matches the file.');
-      setParsedImport(notes);
+      setImportFileName(asset.name);
+      setImportText(content);
     } catch (e: any) {
       console.error('File Read Error:', e);
-      AlertService.alert('Error', `Could not read the file: ${e?.message || 'Unknown error'}`);
+      AlertService.alert('Could not read that file', `Save it as a plain .txt or .csv and try again. (${e?.message || 'Unknown error'})`);
     } finally {
       setImportLoading(false);
     }
@@ -1282,17 +1350,26 @@ export default function FlashcardsScreen() {
 
   const handleConfirmImport = () => {
     const deck = deckById(importDeckId);
-    if (!deck || parsedImport.length === 0) return;
+    if (!deck) return;
+    const analysis = analyzeImport(importText, importSeparator, importKind, deck.cards || []);
+    if (analysis.notes.length === 0) return;
     const now = Date.now();
     let added: Flashcard[] = [];
-    parsedImport.forEach((n, i) => {
+    analysis.notes.forEach((n, i) => {
       added = added.concat(buildNoteCards({ kind: n.kind, front: n.front, back: n.back }, [], generateId, now + i));
     });
     persist(decksRef.current.map((d) => (d.id === deck.id ? { ...d, cards: [...(d.cards || []), ...added] } : d)));
-    const count = parsedImport.length;
     setShowImport(false);
-    setParsedImport([]);
-    AlertService.alert('Imported', `${count} note${count !== 1 ? 's' : ''} (${added.length} card${added.length !== 1 ? 's' : ''}) added to "${deck.name}".`);
+    setImportText('');
+    setImportFileName('');
+    const extras = [
+      analysis.duplicates ? `${analysis.duplicates} duplicate${analysis.duplicates !== 1 ? 's' : ''} left out` : '',
+      analysis.skipped.length ? `${analysis.skipped.length} line${analysis.skipped.length !== 1 ? 's' : ''} skipped` : '',
+    ].filter(Boolean).join(', ');
+    AlertService.alert(
+      'Imported',
+      `${added.length} card${added.length !== 1 ? 's' : ''} added to "${deck.name}".${extras ? ` (${extras}.)` : ''} They join as new cards and come up at your daily new-card pace.`
+    );
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1398,39 +1475,50 @@ export default function FlashcardsScreen() {
       { key: 'exam', icon: 'calendar-outline', label: 'Exam prep', hint: 'Ready by a date', tint: tints.danger },
       { key: 'custom', icon: 'flash-outline', label: 'Custom', hint: 'Ahead or cram', tint: tints.schedule },
     ];
+    // Two rows of two, icon beside the words: the dashboard's quick actions are
+    // one row of stacked tiles, and this toolbelt should not read as a copy.
+    const rows = [tiles.slice(0, 2), tiles.slice(2, 4)];
     return (
-      <View style={{ flexDirection: 'row', gap: 10 }}>
-        {tiles.map((t) => (
-          <TouchableOpacity
-            key={t.key}
-            onPress={() => (node ? runPractice(t.key, node) : launchFromHome(t.key))}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel={`${t.label}, ${t.hint}`}
-            style={{ flex: 1, alignItems: 'center' }}
-          >
-            <View
-              style={{
-                width: '100%',
-                height: 52,
-                borderRadius: 20,
-                marginBottom: 7,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: t.tint.fill,
-                borderWidth: 1,
-                borderColor: t.tint.line,
-              }}
-            >
-              <Ionicons name={t.icon} size={20} color={t.tint.ink} />
-            </View>
-            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: theme.text }}>
-              {t.label}
-            </Text>
-            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 9.5, color: theme.textTertiary, marginTop: 1 }}>
-              {t.hint}
-            </Text>
-          </TouchableOpacity>
+      <View style={{ gap: 10 }}>
+        {rows.map((row, ri) => (
+          <View key={ri} style={{ flexDirection: 'row', gap: 10 }}>
+            {row.map((t) => (
+              <TouchableOpacity
+                key={t.key}
+                onPress={() => (node ? runPractice(t.key, node) : launchFromHome(t.key))}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`${t.label}, ${t.hint}`}
+                style={{
+                  flex: 1,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 10,
+                  paddingVertical: 10,
+                  paddingLeft: 10,
+                  paddingRight: 8,
+                  borderRadius: Radius.xl,
+                  backgroundColor: theme.surface,
+                  borderWidth: 1,
+                  borderColor: theme.cardBorder,
+                  borderBottomWidth: 2,
+                  borderBottomColor: theme.lip,
+                }}
+              >
+                <View style={{ width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: t.tint.fill }}>
+                  <Ionicons name={t.icon} size={18} color={t.tint.ink} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: theme.text }}>
+                    {t.label}
+                  </Text>
+                  <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, marginTop: 1 }}>
+                    {t.hint}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
         ))}
       </View>
     );
@@ -1464,29 +1552,19 @@ export default function FlashcardsScreen() {
       ? buildDeckTree(decks.filter((d) => d && (d.name.toLowerCase().includes(q) || (d.subject || '').toLowerCase().includes(q))))
       : tree;
 
-    const statTiles = [
+    const momentum = [
       {
         key: 'streak',
         icon: 'flame' as const,
-        value: `${streak}`,
-        label: 'Day streak',
+        value: `${streak}-day streak`,
         caption: studiedToday ? 'Done today' : streak > 0 ? 'Study to keep it' : 'Start one today',
         tint: tints.tasks,
       },
       {
-        key: 'goal',
-        icon: 'checkmark-done' as const,
-        value: `${Math.min(reviewedToday, 999)}/${goal}`,
-        label: 'Daily goal',
-        caption: reviewedToday >= goal ? 'Goal reached' : `${goal - reviewedToday} to go`,
-        tint: tints.attendance,
-      },
-      {
         key: 'retention',
         icon: 'pulse' as const,
-        value: retention === null ? '—' : `${Math.round(retention * 100)}%`,
-        label: 'Retention',
-        caption: retention === null ? 'No reviews yet' : 'Last 30 days',
+        value: retention === null ? 'No retention yet' : `${Math.round(retention * 100)}% retention`,
+        caption: retention === null ? 'Review to see it' : 'Last 30 days',
         tint: tints.schedule,
       },
     ];
@@ -1515,11 +1593,10 @@ export default function FlashcardsScreen() {
     return (
       <SafeAreaView edges={['left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
         {/* ══ App bar, on the band ═══════════════════════════════════════════
-            The study tab opens the way the dashboard does: an azure band that
-            runs under the status bar, carrying the one number that matters —
-            how much is due today — with the headline stats on a card that
-            straddles its edge. The two tabs a student opens most now read as
-            the same app. */}
+            The study tab shares the dashboard's azure band so the two read as
+            one app, but not its layout: the band ends flat with the page pulled
+            over it as a sheet, the daily goal is a ring beside the due count,
+            and Study is one full-width button — no floating stat card. */}
         <View style={{ backgroundColor: brand.heroFrom, paddingTop: insets.top, zIndex: 10 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10, gap: 8 }}>
             <View style={{ flex: 1 }}>
@@ -1555,139 +1632,114 @@ export default function FlashcardsScreen() {
             keyboardShouldPersistTaps="handled"
           >
             {/* ══ Today, in the band ══ */}
-            <View style={{ height: decks.length > 0 ? HERO_H : 110 }}>
+            <View
+              onLayout={(e) => {
+                const h = Math.round(e.nativeEvent.layout.height);
+                if (h !== bandH) setBandH(h);
+              }}
+              style={{ paddingHorizontal: GUTTER + 4, paddingTop: 6, paddingBottom: SHEET_LIFT + 20 }}
+            >
               <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-                <HeroBackdrop width={SCREEN_WIDTH} height={decks.length > 0 ? HERO_H : 110} curve={HERO_CURVE} isDark={isDark} />
+                {bandH > 0 && <HeroBackdrop width={SCREEN_WIDTH} height={bandH} curve={0} motif="cards" isDark={isDark} />}
               </View>
-              <View style={{ paddingHorizontal: GUTTER + 4, paddingTop: 6 }}>
-                {decks.length === 0 ? (
-                  <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, lineHeight: 20, color: brand.onHeroMuted, maxWidth: 300 }}>
-                    Flashcards that schedule themselves — review each card right before you would forget it.
-                  </Text>
-                ) : (
-                  <>
-                    <Text style={{ ...microLabel, color: brand.onHeroMuted }}>{allDue > 0 ? 'Due today' : 'All caught up'}</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-                      <View style={{ flex: 1 }}>
-                        {allDue > 0 ? (
-                          <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 38, color: brand.onHero, letterSpacing: -1.2 }}>
-                            {allDue}
-                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15, color: brand.onHeroMuted, letterSpacing: 0 }}>
-                              {' '}card{allDue !== 1 ? 's' : ''} · ~{estMin} min
-                            </Text>
-                          </Text>
-                        ) : (
-                          <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: brand.onHero, letterSpacing: -0.4, marginTop: 4 }}>
-                            {totalCards === 0
-                              ? 'Add cards to begin'
-                              : nextDue < Infinity
-                              ? `Next review ${relativeDue(nextDue, clock)}`
-                              : 'Nothing scheduled'}
-                          </Text>
-                        )}
-                      </View>
+              {decks.length === 0 ? (
+                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, lineHeight: 20, color: brand.onHeroMuted, maxWidth: 300 }}>
+                  Flashcards that schedule themselves — review each card right before you would forget it.
+                </Text>
+              ) : (
+                <>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ ...microLabel, color: brand.onHeroMuted }}>{allDue > 0 ? 'Due today' : 'All caught up'}</Text>
                       {allDue > 0 ? (
-                        <AnimatedPressable
-                          onPress={() => startSession(null)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Study now, ${allDue} cards`}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            gap: 6,
-                            paddingHorizontal: 18,
-                            height: 44,
-                            borderRadius: Radius.full,
-                            backgroundColor: '#ffffff',
-                            borderBottomWidth: 3,
-                            borderBottomColor: 'rgba(0,0,0,0.18)',
-                          }}
-                        >
-                          <Ionicons name="play" size={16} color={brand.heroTo} />
-                          <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 15, color: brand.heroTo }}>Study</Text>
-                        </AnimatedPressable>
-                      ) : totalCards > 0 ? (
-                        <TouchableOpacity
-                          onPress={() => setCustomPath(null)}
-                          activeOpacity={0.75}
-                          accessibilityRole="button"
-                          accessibilityLabel="Custom study"
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            gap: 5,
-                            paddingHorizontal: 14,
-                            height: 38,
-                            borderRadius: Radius.full,
-                            backgroundColor: brand.well,
-                            borderWidth: 1,
-                            borderColor: brand.wellLine,
-                          }}
-                        >
-                          <Ionicons name="flash-outline" size={14} color={brand.onHero} />
-                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: brand.onHero }}>Custom</Text>
-                        </TouchableOpacity>
-                      ) : null}
+                        <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 38, color: brand.onHero, letterSpacing: -1.2, marginTop: 2 }}>
+                          {allDue}
+                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15, color: brand.onHeroMuted, letterSpacing: 0 }}>
+                            {' '}card{allDue !== 1 ? 's' : ''} · ~{estMin} min
+                          </Text>
+                        </Text>
+                      ) : (
+                        <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: brand.onHero, letterSpacing: -0.4, marginTop: 6 }}>
+                          {totalCards === 0
+                            ? 'Add cards to begin'
+                            : nextDue < Infinity
+                            ? `Next review ${relativeDue(nextDue, clock)}`
+                            : 'Nothing scheduled'}
+                        </Text>
+                      )}
+                      {allDue > 0 && (
+                        <View style={{ marginTop: 4 }}>
+                          <QueueCounts c={allCounts} size={12} onBand />
+                        </View>
+                      )}
                     </View>
-                    {allDue > 0 && (
-                      <View style={{ marginTop: 6 }}>
-                        <QueueCounts c={allCounts} size={12} onBand />
-                      </View>
-                    )}
-                  </>
-                )}
-              </View>
+                    <TouchableOpacity onPress={() => setShowStats(true)} activeOpacity={0.75} accessibilityRole="button" accessibilityHint="Opens statistics">
+                      <GoalRing done={reviewedToday} goal={goal} track={brand.wellStrong} fill="#ffffff" ink={brand.onHero} inkMuted={brand.onHeroMuted} />
+                    </TouchableOpacity>
+                  </View>
+
+                  {allDue > 0 ? (
+                    <AnimatedPressable
+                      onPress={() => startSession(null)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Study now, ${allDue} cards`}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        marginTop: 16,
+                        height: 48,
+                        borderRadius: Radius.xl,
+                        backgroundColor: '#ffffff',
+                        borderBottomWidth: 3,
+                        borderBottomColor: 'rgba(0,0,0,0.18)',
+                      }}
+                    >
+                      <Ionicons name="play" size={17} color={brand.heroTo} />
+                      <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: brand.heroTo }}>Study now</Text>
+                    </AnimatedPressable>
+                  ) : totalCards > 0 ? (
+                    <TouchableOpacity
+                      onPress={() => setCustomPath(null)}
+                      activeOpacity={0.75}
+                      accessibilityRole="button"
+                      accessibilityLabel="Custom study"
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        marginTop: 16,
+                        height: 44,
+                        borderRadius: Radius.xl,
+                        backgroundColor: brand.well,
+                        borderWidth: 1,
+                        borderColor: brand.wellLine,
+                      }}
+                    >
+                      <Ionicons name="flash-outline" size={15} color={brand.onHero} />
+                      <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: brand.onHero }}>Custom study</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              )}
             </View>
 
-            {/* ══ Momentum, straddling the band ══ */}
-            {decks.length > 0 && (
-              <View style={{ paddingHorizontal: GUTTER, marginTop: -STAT_LIFT, marginBottom: 20 }}>
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'stretch',
-                    backgroundColor: theme.surface,
-                    borderRadius: Radius['3xl'],
-                    borderWidth: 1,
-                    borderColor: theme.cardBorder,
-                    borderBottomWidth: 2,
-                    borderBottomColor: theme.lip,
-                    paddingVertical: 13,
-                  }}
-                >
-                  {statTiles.map((tile, idx) => (
-                    <React.Fragment key={tile.key}>
-                      {idx > 0 && <View style={{ width: 1, marginVertical: 8, backgroundColor: theme.cardBorder }} />}
-                      <TouchableOpacity
-                        onPress={() => setShowStats(true)}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel={`${tile.label}: ${tile.value}. ${tile.caption}. Opens statistics.`}
-                        style={{ flex: 1, alignItems: 'center', paddingHorizontal: 6 }}
-                      >
-                        <View style={{ width: 28, height: 28, borderRadius: 10, marginBottom: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: tile.tint.fill }}>
-                          <Ionicons name={tile.icon} size={15} color={tile.tint.ink} />
-                        </View>
-                        <Text numberOfLines={1} adjustsFontSizeToFit style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: theme.text, letterSpacing: -0.8 }}>
-                          {tile.value}
-                        </Text>
-                        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={{ ...microLabel, letterSpacing: 0.4, marginTop: 3 }}>
-                          {tile.label}
-                        </Text>
-                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: tile.tint.ink, marginTop: 3 }}>
-                          {tile.caption}
-                        </Text>
-                      </TouchableOpacity>
-                    </React.Fragment>
-                  ))}
-                </View>
-              </View>
-            )}
-
-            <View style={{ paddingHorizontal: GUTTER }}>
+            {/* ══ The page, as a sheet pulled over the band ══ */}
+            <View
+              style={{
+                marginTop: -SHEET_LIFT,
+                paddingTop: 18,
+                paddingHorizontal: GUTTER,
+                backgroundColor: theme.background,
+                borderTopLeftRadius: Radius['4xl'],
+                borderTopRightRadius: Radius['4xl'],
+              }}
+            >
               {decks.length === 0 ? (
                 /* ══ First run ══ */
-                <Card padding={0} radius={Radius['3xl']} style={{ overflow: 'hidden', marginTop: 12 }}>
+                <Card padding={0} radius={Radius['3xl']} style={{ overflow: 'hidden' }}>
                   <View style={{ alignItems: 'center', paddingTop: 20, paddingBottom: 12, backgroundColor: brand.wash, borderBottomWidth: 1, borderBottomColor: brand.washLine }}>
                     <Image source={require('../../assets/images/studying.png')} style={{ width: 118, height: 118 }} resizeMode="contain" />
                   </View>
@@ -1726,7 +1778,46 @@ export default function FlashcardsScreen() {
                 </Card>
               ) : (
                 <>
-                  <View style={{ paddingHorizontal: 2, marginBottom: 24 }}>
+                  {/* ══ Momentum ══ */}
+                  <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
+                    {momentum.map((m) => (
+                      <TouchableOpacity
+                        key={m.key}
+                        onPress={() => setShowStats(true)}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${m.value}. ${m.caption}. Opens statistics.`}
+                        style={{
+                          flex: 1,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 9,
+                          paddingVertical: 9,
+                          paddingLeft: 9,
+                          paddingRight: 12,
+                          borderRadius: Radius.full,
+                          backgroundColor: m.tint.fill,
+                          borderWidth: 1,
+                          borderColor: m.tint.line,
+                        }}
+                      >
+                        <View style={{ width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surface }}>
+                          <Ionicons name={m.icon} size={15} color={m.tint.ink} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85} style={{ fontFamily: 'Nunito_900Black', fontSize: 13.5, color: theme.text }}>
+                            {m.value}
+                          </Text>
+                          <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: m.tint.ink }}>
+                            {m.caption}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={{ ...microLabel, marginBottom: 10, marginLeft: 2 }}>Practice</Text>
+                  <View style={{ marginBottom: 24 }}>
                     <ToolTiles node={null} />
                   </View>
 
@@ -2149,15 +2240,24 @@ export default function FlashcardsScreen() {
             </View>
           ) : (
             visible.map((n) => {
-              const first = n.cards.find((card) => !card.suspended) || n.cards[0];
+              // Buried siblings are out of today's queue, so they must not
+              // make the row say "Due now" — that label is what made a
+              // 3-card cloze look like it only ever quizzed c1.
+              const live = n.cards.filter((card) => !isSidelined(card, clock));
+              const held = n.cards.filter((card) => !card.suspended && isSidelined(card, clock)).length;
+              const first = live[0] || n.cards.find((card) => !card.suspended) || n.cards[0];
               const st = cardState(first);
               const allSuspended = n.cards.every((card) => card.suspended);
               const flagged = n.cards.some((card) => card.flagged);
               const leech = n.cards.some((card) => card.leech);
               const tint = st === 'new' ? qt.new : st === 'review' ? qt.review : qt.learn;
-              const soonest = Math.min(...n.cards.filter((card) => !card.suspended).map((card) => card.nextDue));
+              const soonest = Math.min(...live.map((card) => card.nextDue));
               const dueText =
-                allSuspended ? 'Suspended' : st === 'new' ? 'New' : soonest <= clock ? 'Due now' : new Date(soonest).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                allSuspended ? 'Suspended'
+                  : live.length === 0 ? 'Tomorrow'
+                  : live.some((card) => cardState(card) === 'new') ? 'New'
+                  : soonest <= clock ? 'Due now'
+                  : new Date(soonest).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
               const sel = selectedNotes.has(selKey(n));
               const kind = n.kind;
               return (
@@ -2201,6 +2301,11 @@ export default function FlashcardsScreen() {
                             {n.cards.length > 1 ? ` · ${n.cards.length} cards` : ''}
                           </Text>
                         )}
+                        {held > 0 && live.length > 0 && (
+                          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 10, color: theme.textTertiary }}>
+                            · {held} more tomorrow
+                          </Text>
+                        )}
                         {flagged && <Ionicons name="flag" size={11} color={tints.danger.solid} />}
                         {leech && (
                           <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 9.5, color: tints.tasks.ink }}>LEECH</Text>
@@ -2211,7 +2316,16 @@ export default function FlashcardsScreen() {
                           </Text>
                         )}
                       </View>
-                      {kind === 'cloze' ? (
+                      {kind === 'occlusion' && n.cards[0]?.occlusion ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                          <View style={{ width: 76 }}>
+                            <OcclusionImage data={n.cards[0].occlusion} states={maskStates({ ...n.cards[0].occlusion, mode: 'hideAll' }, -1, 'question')} isDark={isDark} maxHeight={56} />
+                          </View>
+                          <Text numberOfLines={2} style={{ flex: 1, fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text, lineHeight: 18 }}>
+                            {notePreview(n).title}
+                          </Text>
+                        </View>
+                      ) : kind === 'cloze' ? (
                         <FaceText
                           segments={clozeOverview(n.front)}
                           color={color}
@@ -2964,13 +3078,16 @@ export default function FlashcardsScreen() {
 
   const renderImportSheet = () => {
     const deck = deckById(importDeckId);
-    const preview = () => {
-      if (!importText.trim()) return;
-      const notes = parseImportNotes(importText, importSeparator, importKind);
-      if (notes.length === 0) AlertService.alert('No cards found', 'Check the formatting and the separator.');
-      setParsedImport(notes);
-    };
-    const cardCount = parsedImport.reduce((s, n) => s + (n.kind === 'reversed' ? 2 : n.kind === 'cloze' ? Math.max(1, (n.front.match(/\{\{c\d+::/g) || []).length) : 1), 0);
+    const analysis = analyzeImport(importText, importSeparator, importKind, deck?.cards || []);
+    const hasText = importText.trim().length > 0;
+    const kindInfo = NOTE_KINDS.find((k) => k.kind === importKind);
+    const mono = { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 12.5 } as const;
+
+    const optionChip = (active: boolean) => ({
+      flex: 1, minHeight: 40, paddingHorizontal: 6, borderRadius: Radius.md, alignItems: 'center' as const, justifyContent: 'center' as const,
+      backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary, borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
+    });
+
     return (
       <KeyboardSheet
         visible={showImport}
@@ -2980,84 +3097,83 @@ export default function FlashcardsScreen() {
         icon="cloud-upload-outline"
         tint={tints.tools}
         footer={
-          parsedImport.length > 0 ? (
-            <PrimaryButton label={`Import ${parsedImport.length} note${parsedImport.length !== 1 ? 's' : ''}`} onPress={handleConfirmImport} />
-          ) : importText.trim().length > 0 ? (
-            <PrimaryButton label="Preview" onPress={preview} />
-          ) : undefined
+          <PrimaryButton
+            label={
+              !hasText
+                ? 'Paste or upload your cards first'
+                : analysis.cardCount > 0
+                ? `Import ${analysis.cardCount} card${analysis.cardCount !== 1 ? 's' : ''}`
+                : 'Nothing to import yet'
+            }
+            onPress={handleConfirmImport}
+            disabled={analysis.cardCount === 0}
+          />
         }
       >
-        <Text style={{ ...microLabel, marginBottom: 8 }}>1 · Card type</Text>
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
-          {NOTE_KINDS.filter((k) => k.kind !== 'cloze').map((k) => {
-            const active = importKind === k.kind;
-            return (
-              <TouchableOpacity
-                key={k.kind}
-                onPress={() => {
-                  setImportKind(k.kind as any);
-                  setParsedImport([]);
-                }}
-                activeOpacity={0.75}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: active }}
-                style={{
-                  flex: 1, height: 40, borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 5,
-                  backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary, borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
-                }}
-              >
-                <Ionicons name={k.icon as any} size={13} color={active ? tints.tools.ink : theme.textSecondary} />
-                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: active ? tints.tools.ink : theme.textSecondary }}>{k.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
+        {/* ══ How it works — the one rule, shown as an example rather than
+            described, with the special cases one tap away. ══ */}
+        <View style={{ borderRadius: Radius.lg, marginBottom: 16, overflow: 'hidden', borderWidth: 1, borderColor: tints.tools.line }}>
+          <View style={{ padding: 12, backgroundColor: tints.tools.fill }}>
+            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 14, color: theme.text }}>One card per line: the front, a comma, then the back.</Text>
+            <View style={{ marginTop: 8, padding: 10, borderRadius: Radius.md, backgroundColor: theme.surface, borderWidth: 1, borderColor: tints.tools.line }}>
+              <Text style={{ ...mono, color: theme.text }}>
+                heart<Text style={{ color: tints.tools.ink, fontWeight: '900' }}>,</Text> pumps blood around the body{'\n'}
+                mitosis<Text style={{ color: tints.tools.ink, fontWeight: '900' }}>,</Text> cell division into two cells
+              </Text>
+            </View>
+            <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textSecondary, marginTop: 6 }}>
+              That makes 2 cards: "heart" on the front, "pumps blood around the body" on the back.
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => setShowImportHelp((v) => !v)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showImportHelp }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: theme.surface }}
+          >
+            <Ionicons name="help-circle-outline" size={15} color={tints.tools.ink} />
+            <Text style={{ flex: 1, fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: tints.tools.ink }}>Spreadsheets, fill-in-the-blank and other formats</Text>
+            <Ionicons name={showImportHelp ? 'chevron-up' : 'chevron-down'} size={15} color={tints.tools.ink} />
+          </TouchableOpacity>
+          {showImportHelp && (
+            <View style={{ paddingHorizontal: 12, paddingBottom: 12, gap: 10, backgroundColor: theme.surface }}>
+              {[
+                { icon: 'grid-outline' as const, title: 'From Excel or Google Sheets', body: 'Put fronts in column A and backs in column B, select both columns, copy and paste here. Or save as .csv and upload it. A "Front, Back" header row is ignored.' },
+                { icon: 'eye-off-outline' as const, title: 'Fill-in-the-blank (cloze)', body: 'Wrap the hidden part like {{c1::this}}. "The {{c1::heart}} has four chambers" becomes a card that hides "heart". Use {{c1::…}} and {{c2::…}} for two separate cards. No comma needed.' },
+                { icon: 'information-circle-outline' as const, title: 'Cloze with extra details', body: 'To show extra info only with the answer, put it after the sentence with a | (or a tab or ;):\nThe {{c1::heart}} has four chambers | Pumps about 5 L of blood a minute\nFrom a spreadsheet: sentence in column A, extra in column B. Using commas? Quote the sentence: "The {{c1::heart}}, not the lungs, pumps blood", Extra here' },
+                { icon: 'code-working-outline' as const, title: 'A comma inside the front', body: 'Put the front in double quotes: "Hello, world", a greeting. Commas in the back are fine as they are.' },
+                { icon: 'swap-horizontal-outline' as const, title: 'Semicolons, tabs or | instead', body: 'Leave the separator on Auto and each line is read with whichever one it uses. From Anki, export as "Notes in Plain Text".' },
+                { icon: 'chatbox-ellipses-outline' as const, title: 'Lines starting with # or //', body: 'Treated as notes to yourself and skipped.' },
+              ].map((tip) => (
+                <View key={tip.title} style={{ flexDirection: 'row', gap: 9 }}>
+                  <Ionicons name={tip.icon} size={15} color={theme.textSecondary} style={{ marginTop: 1 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text }}>{tip.title}</Text>
+                    <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, color: theme.textSecondary, marginTop: 1 }}>{tip.body}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
-        <Text style={{ ...microLabel, marginBottom: 8 }}>2 · What separates front from back?</Text>
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
-          {(['comma', 'semicolon', 'pipe', 'tab'] as const).map((sep) => {
-            const active = importSeparator === sep;
-            const glyph = sep === 'comma' ? ',' : sep === 'semicolon' ? ';' : sep === 'pipe' ? '|' : 'tab';
-            return (
-              <TouchableOpacity
-                key={sep}
-                onPress={() => {
-                  setImportSeparator(sep);
-                  setParsedImport([]);
-                }}
-                activeOpacity={0.75}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: active }}
-                accessibilityLabel={`Separate with ${sep}`}
-                style={{
-                  flex: 1, height: 44, borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center',
-                  backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary, borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
-                }}
-              >
-                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: sep === 'tab' ? 12 : 15, color: active ? tints.tools.ink : theme.textSecondary }}>{glyph}</Text>
-                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 9.5, color: active ? tints.tools.ink : theme.textTertiary }}>{sep}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <Text style={{ ...microLabel, marginBottom: 8 }}>3 · Paste your list</Text>
+        {/* ══ 1 · The cards ══ */}
+        <Text style={{ ...microLabel, marginBottom: 8 }}>1 · Paste your cards or upload a file</Text>
         <TextInput
           value={importText}
           onChangeText={(t) => {
             setImportText(t);
-            setParsedImport([]);
+            if (importFileName) setImportFileName('');
           }}
           multiline
-          placeholder={'Front, Back\nThe {{c1::heart}} has four chambers'}
+          placeholder={'heart, pumps blood around the body\nmitosis, cell division into two cells'}
           placeholderTextColor={theme.textTertiary}
-          accessibilityLabel="Paste cards to import"
-          style={{ ...fieldStyle, minHeight: 104, textAlignVertical: 'top', fontSize: 14, marginBottom: 6 }}
+          accessibilityLabel="Cards to import, one per line"
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={{ ...fieldStyle, minHeight: 120, maxHeight: 220, textAlignVertical: 'top', fontSize: 14, marginBottom: 8 }}
         />
-        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, marginBottom: 14, lineHeight: 15 }}>
-          One card per line. Lines with {'{{c1::…}}'} become cloze cards automatically.
-        </Text>
-
         <TouchableOpacity
           onPress={handlePickFile}
           disabled={importLoading}
@@ -3065,7 +3181,7 @@ export default function FlashcardsScreen() {
           accessibilityRole="button"
           accessibilityLabel="Upload a text or CSV file"
           style={{
-            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: Radius.lg, marginBottom: 16,
+            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: Radius.lg, marginBottom: 16,
             borderWidth: 1, borderStyle: 'dashed', borderColor: isDark ? '#3d4468' : '#cbd5e1',
           }}
         >
@@ -3073,34 +3189,140 @@ export default function FlashcardsScreen() {
             <ActivityIndicator color={theme.primary} />
           ) : (
             <>
-              <Ionicons name="document-attach-outline" size={18} color={theme.textSecondary} />
-              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>
-                {importFileName || 'Or upload a .txt or .csv file'}
+              <Ionicons name={importFileName ? 'document-text' : 'document-attach-outline'} size={17} color={theme.textSecondary} />
+              <Text numberOfLines={1} style={{ flexShrink: 1, fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>
+                {importFileName ? `${importFileName} loaded · tap to pick another` : 'Upload a .txt or .csv file instead'}
               </Text>
             </>
           )}
         </TouchableOpacity>
 
-        {parsedImport.length > 0 && (
+        {/* ══ 2 · What each line becomes ══ */}
+        <Text style={{ ...microLabel, marginBottom: 8 }}>2 · Make each line into</Text>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          {NOTE_KINDS.filter((k) => k.kind !== 'cloze' && k.kind !== 'occlusion').map((k) => {
+            const active = importKind === k.kind;
+            return (
+              <TouchableOpacity
+                key={k.kind}
+                onPress={() => setImportKind(k.kind as any)}
+                activeOpacity={0.75}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={`${k.label}. ${k.desc}`}
+                style={{ ...optionChip(active), flexDirection: 'row', gap: 5 }}
+              >
+                <Ionicons name={k.icon as any} size={13} color={active ? tints.tools.ink : theme.textSecondary} />
+                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: active ? tints.tools.ink : theme.textSecondary }}>{k.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 6, marginBottom: 16 }}>
+          {kindInfo?.desc}. Lines with {'{{c1::…}}'} always become fill-in-the-blank cards, with anything after a | kept as extra info for the answer.
+        </Text>
+
+        {/* ══ 3 · Separator ══ */}
+        <Text style={{ ...microLabel, marginBottom: 8 }}>3 · Between front and back</Text>
+        <View style={{ flexDirection: 'row', gap: 6, marginBottom: 6 }}>
+          {(['auto', 'comma', 'semicolon', 'tab', 'pipe'] as const).map((sep) => {
+            const active = importSeparator === sep;
+            const glyph = sep === 'auto' ? 'Auto' : sep === 'comma' ? ',' : sep === 'semicolon' ? ';' : sep === 'pipe' ? '|' : 'Tab';
+            return (
+              <TouchableOpacity
+                key={sep}
+                onPress={() => setImportSeparator(sep)}
+                activeOpacity={0.75}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={sep === 'auto' ? 'Detect the separator on each line' : `Separate with ${sep}`}
+                style={{ ...optionChip(active), flex: sep === 'auto' ? 1.4 : 1 }}
+              >
+                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: sep === 'auto' || sep === 'tab' ? 12.5 : 16, color: active ? tints.tools.ink : theme.textSecondary }}>{glyph}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginBottom: 16 }}>
+          {importSeparator === 'auto'
+            ? 'Auto reads each line with whichever of , ; tab or | it uses. Only change this if cards split in the wrong place.'
+            : `Only lines with ${importSeparator === 'tab' ? 'a tab' : `"${importSeparator === 'comma' ? ',' : importSeparator === 'semicolon' ? ';' : '|'}"`} between front and back will import.`}
+        </Text>
+
+        {/* ══ Result, live ══ */}
+        {hasText && (
           <>
-            <Text style={{ ...microLabel, marginBottom: 8 }}>
-              Preview · {parsedImport.length} note{parsedImport.length !== 1 ? 's' : ''} · {cardCount} card{cardCount !== 1 ? 's' : ''}
-            </Text>
-            {parsedImport.slice(0, 8).map((n, idx) => (
+            <Text style={{ ...microLabel, marginBottom: 8 }}>Preview</Text>
+            <View style={{ gap: 6, marginBottom: 10 }}>
+              <View style={{
+                flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderRadius: Radius.md,
+                backgroundColor: analysis.cardCount > 0 ? tints.attendance.fill : tints.danger.fill,
+                borderWidth: 1, borderColor: analysis.cardCount > 0 ? tints.attendance.line : tints.danger.line,
+              }}>
+                <Ionicons name={analysis.cardCount > 0 ? 'checkmark-circle' : 'alert-circle'} size={17} color={analysis.cardCount > 0 ? tints.attendance.ink : tints.danger.ink} />
+                <Text style={{ flex: 1, fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: analysis.cardCount > 0 ? tints.attendance.ink : tints.danger.ink }}>
+                  {analysis.cardCount > 0
+                    ? `${analysis.cardCount} card${analysis.cardCount !== 1 ? 's' : ''} ready${analysis.notes.length !== analysis.cardCount ? ` from ${analysis.notes.length} line${analysis.notes.length !== 1 ? 's' : ''}` : ''}`
+                    : 'No cards found yet. Check the example above.'}
+                </Text>
+              </View>
+
+              {analysis.headerSkipped && (
+                <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textSecondary, paddingHorizontal: 2 }}>
+                  The first line looked like a header ("Front, Back"), so it was left out.
+                </Text>
+              )}
+              {analysis.duplicates > 0 && (
+                <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textSecondary, paddingHorizontal: 2 }}>
+                  {analysis.duplicates} duplicate{analysis.duplicates !== 1 ? 's' : ''} left out: already in this deck or repeated in your list.
+                </Text>
+              )}
+              {analysis.skipped.length > 0 && (
+                <View style={{ padding: 10, borderRadius: Radius.md, backgroundColor: tints.tasks.fill, borderWidth: 1, borderColor: tints.tasks.line }}>
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: tints.tasks.ink, marginBottom: 4 }}>
+                    {analysis.skipped.length} line{analysis.skipped.length !== 1 ? 's' : ''} won't import
+                  </Text>
+                  {analysis.skipped.slice(0, 3).map((sk) => (
+                    <Text key={sk.line} numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, color: theme.textSecondary }}>
+                      <Text style={{ fontFamily: 'Nunito_800ExtraBold', color: theme.text }}>Line {sk.line}</Text> "{sk.text.length > 36 ? `${sk.text.slice(0, 36)}…` : sk.text}" · {sk.reason}
+                    </Text>
+                  ))}
+                  {analysis.skipped.length > 3 && (
+                    <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary, marginTop: 2 }}>…and {analysis.skipped.length - 3} more</Text>
+                  )}
+                </View>
+              )}
+            </View>
+
+            {analysis.notes.slice(0, 5).map((n, idx) => (
               <Card key={idx} variant="sunken" padding={11} radius={Radius.md} style={{ marginBottom: 6 }}>
                 {n.kind === 'cloze' ? (
-                  <FaceText segments={clozeOverview(n.front)} color={deck?.color || theme.primary} isDark={isDark} numberOfLines={2} style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.text }} />
-                ) : (
                   <>
-                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text }}>{n.front}</Text>
-                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 2 }}>{n.back}</Text>
+                    <FaceText segments={clozeOverview(n.front)} color={deck?.color || theme.primary} isDark={isDark} numberOfLines={2} style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.text }} />
+                    {n.back ? (
+                      <Text numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textSecondary, marginTop: 5 }}>
+                        <Text style={{ ...microLabel, fontSize: 8.5 }}>Extra  </Text>{n.back}
+                      </Text>
+                    ) : null}
                   </>
+                ) : (
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ ...microLabel, fontSize: 8.5 }}>Front</Text>
+                      <Text numberOfLines={2} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text, marginTop: 1 }}>{n.front}</Text>
+                    </View>
+                    <View style={{ width: 1, backgroundColor: theme.cardBorder }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ ...microLabel, fontSize: 8.5 }}>Back</Text>
+                      <Text numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12.5, color: theme.textSecondary, marginTop: 1 }}>{n.back}</Text>
+                    </View>
+                  </View>
                 )}
               </Card>
             ))}
-            {parsedImport.length > 8 && (
+            {analysis.notes.length > 5 && (
               <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, textAlign: 'center', paddingVertical: 6 }}>
-                …and {parsedImport.length - 8} more
+                …and {analysis.notes.length - 5} more
               </Text>
             )}
           </>
@@ -3352,7 +3574,10 @@ export default function FlashcardsScreen() {
           key: 'bury', icon: 'moon-outline', tint: tints.schedule, label: 'Bury until tomorrow', desc: 'Skip it today; it comes back tomorrow',
           onPress: () => {
             close();
-            patchCurrent((c) => ({ ...c, buriedUntil: studyDayKey(studyDayStart(Date.now(), 1)) }), true);
+            patchCurrent((c) => {
+              // Tagged so releasing sibling holds leaves a chosen burial be.
+              return { ...c, buriedUntil: studyDayKey(studyDayStart(Date.now(), 1)), buriedReason: 'manual' as const };
+            }, true);
           },
         })}
         {sheetRow({

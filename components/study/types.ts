@@ -5,7 +5,42 @@
  * one card; Reversed makes a card each way; Cloze makes one card per `{{cN::}}`
  * number; Type-in is Basic with the answer typed and checked.
  */
-export type NoteKind = 'basic' | 'reversed' | 'cloze' | 'typein';
+export type NoteKind = 'basic' | 'reversed' | 'cloze' | 'typein' | 'occlusion';
+
+/** One box or oval drawn over an image-occlusion note. Coordinates are 0-1 fractions of the image. */
+export interface OcclusionMask {
+  id: string;
+  shape: 'rect' | 'ellipse';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** What is under the mask. Optional; needed for "where is it?" cards. */
+  label?: string;
+  /** Masks sharing a group are hidden and asked together as one card. */
+  group: number;
+}
+
+/**
+ * An image-occlusion note's data, carried on every card of the note like the
+ * other kinds' fields. The picture itself is not in the ledger — only its id
+ * in the device image store — because the ledger is one JSON document pushed
+ * whole on every save.
+ */
+export interface OcclusionData {
+  imageId: string;
+  /** Pixel size of the stored image, for its aspect ratio. */
+  width: number;
+  height: number;
+  /**
+   * 'hideAll' covers every mask and asks one group (Anki's default: neighbours
+   * cannot give the answer away); 'hideOne' covers only the asked group.
+   */
+  mode: 'hideAll' | 'hideOne';
+  masks: OcclusionMask[];
+  /** Also make "where is it?" cards: show a label, tap its place on the image. */
+  locate?: boolean;
+}
 
 export type CardState = 'new' | 'learning' | 'review' | 'relearning';
 
@@ -34,8 +69,13 @@ export interface Flashcard {
 
   noteId?: string;
   kind?: NoteKind;
-  /** Reversed: 0 front→back, 1 back→front. Cloze: the cloze number. */
+  /**
+   * Reversed: 0 front→back, 1 back→front. Cloze: the cloze number.
+   * Occlusion: the mask group, or LOCATE_ORD_BASE + group for a "where is it?" card.
+   */
   ord?: number;
+  /** Image-occlusion notes only. */
+  occlusion?: OcclusionData;
   tags?: string[];
   createdAt?: number;
 
@@ -52,6 +92,12 @@ export interface Flashcard {
   suspended?: boolean;
   /** Hidden from queues until this study day begins. */
   buriedUntil?: string;
+  /**
+   * Why it is buried. 'sibling' when a card of the same note was answered,
+   * 'manual' from the review menu, so releasing sibling holds never undoes a
+   * burial the student chose.
+   */
+  buriedReason?: 'sibling' | 'manual';
   flagged?: boolean;
   /** Forgotten `LEECH_THRESHOLD` times — worth rewriting. */
   leech?: boolean;
@@ -113,6 +159,13 @@ export interface SRSettings {
   /** Review cards each deck shows per day. */
   reviewsPerDay?: number;
   maximumInterval?: number;
+  /**
+   * Hold a note's other cards back until tomorrow once one is answered (Anki's
+   * burying). Off by default, as in current Anki: with it on, a 3-blank cloze
+   * or a 10-box image takes days to introduce, which reads as cards going
+   * missing. `buildQueue` spreads siblings apart instead.
+   */
+  burySiblings?: boolean;
   studyTimeHour: number;
   studyTimeMinute: number;
 }

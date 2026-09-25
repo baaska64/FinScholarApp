@@ -97,8 +97,20 @@ export const Calculator = {
         return passingPercent + (ratio * (100 - passingPercent));
     },
     
-    calculateSubject: (subject, system, exclusions = null) => {
+    /**
+     * `ungraded` decides what a score that has not been entered yet is worth:
+     *   'zero'    — nothing (the default): the grade is what is banked so far.
+     *   'perfect' — full marks: the best grade still reachable.
+     *   'ignore'  — left out: the average of graded work only.
+     *   'project' — the student's graded average carried over the rest: the
+     *               grade they are on track for. Used for "on track for",
+     *               never offered as a setting.
+     * Floor, ceiling, pace and projection are returned whatever the mode, so a
+     * screen can show the range around the number it leads with.
+     */
+    calculateSubject: (subject, system, exclusions = null, ungraded = 'zero') => {
         let absoluteEarned = 0;
+        let absoluteGraded = 0;
         let emptyTargets = [];
         let absoluteAvailable = 0;
         let hasAnyInput = false;
@@ -180,6 +192,7 @@ export const Calculator = {
                         } else if (max > 0) {
                             let pct = (Number(node.score) || 0) / max;
                             absoluteEarned += (pct * nodeAbsWeight);
+                            absoluteGraded += nodeAbsWeight;
                         }
                     }
                 };
@@ -195,7 +208,18 @@ export const Calculator = {
             });
         });
 
-        const subjectPercent = totalPeriodWeightSum > 0 ? absoluteEarned : 0;
+        const floor = absoluteEarned;
+        const ceiling = absoluteEarned + absoluteAvailable;
+        const pace = absoluteGraded > 0 ? (absoluteEarned / absoluteGraded) * 100 : null;
+        const projected = pace === null ? null : absoluteEarned + absoluteAvailable * (pace / 100);
+
+        let subjectPercent = 0;
+        if (totalPeriodWeightSum > 0) {
+            if (ungraded === 'perfect') subjectPercent = ceiling;
+            else if (ungraded === 'ignore') subjectPercent = pace ?? 0;
+            else if (ungraded === 'project') subjectPercent = projected ?? 0;
+            else subjectPercent = floor;
+        }
         const gradeEq = Calculator.interpolateGrade(subjectPercent, Number(subject.passingPercent) || 60, system);
         
         return { 
@@ -205,7 +229,12 @@ export const Calculator = {
             absoluteEarned: absoluteEarned, 
             absoluteWeight: 100,
             emptyComponents: emptyTargets,
-            absoluteAvailable: absoluteAvailable
+            absoluteAvailable: absoluteAvailable,
+            absoluteGraded,
+            floor,
+            ceiling,
+            pace,
+            projected,
         };
     },
 
@@ -267,14 +296,17 @@ export const Calculator = {
         };
     },
 
-    calculateSemester: (semester, system) => {
+    calculateSemester: (semester, system, ungraded = 'zero') => {
         let totalUnits = 0;
         let totalPercent = 0;
         let totalEq = 0;
         const safeSubjects = semester.subjects || [];
         // Only include subjects where gradeTrackingEnabled is not explicitly false
         safeSubjects.filter(sub => sub.gradeTrackingEnabled !== false).forEach(sub => {
-            const res = Calculator.calculateSubject(sub, system);
+            const res = Calculator.calculateSubject(sub, system, null, ungraded);
+            // Outside 'zero', a subject with no scores has no grade to average:
+            // counting it as 100 (perfect) or 0 would swing the GWA on nothing.
+            if (ungraded !== 'zero' && !res.hasData) return;
             totalUnits += Number(sub.units) || 0;
             totalPercent += res.percent * (Number(sub.units) || 0);
             totalEq += res.equivalent * (Number(sub.units) || 0);
@@ -283,7 +315,7 @@ export const Calculator = {
         return { percent: totalPercent / totalUnits, equivalent: totalEq / totalUnits };
     },
 
-    calculateYear: (year, system) => {
+    calculateYear: (year, system, ungraded = 'zero') => {
         let totalUnits = 0;
         let totalPercent = 0;
         let totalEq = 0;
@@ -291,7 +323,8 @@ export const Calculator = {
         safeSems.forEach(sem => {
             const safeSubs = sem.subjects || [];
             safeSubs.filter(sub => sub.gradeTrackingEnabled !== false).forEach(sub => {
-                const res = Calculator.calculateSubject(sub, system);
+                const res = Calculator.calculateSubject(sub, system, null, ungraded);
+                if (ungraded !== 'zero' && !res.hasData) return;
                 totalUnits += Number(sub.units) || 0;
                 totalPercent += res.percent * (Number(sub.units) || 0);
                 totalEq += res.equivalent * (Number(sub.units) || 0);
@@ -301,14 +334,15 @@ export const Calculator = {
         return { percent: totalPercent / totalUnits, equivalent: totalEq / totalUnits };
     },
 
-    calculateCumulative: (years, system) => {
+    calculateCumulative: (years, system, ungraded = 'zero') => {
         let totalUnits = 0;
         let totalPercent = 0;
         let totalEq = 0;
         years.forEach(year => {
             (year.semesters || []).forEach(sem => {
                 (sem.subjects || []).filter(sub => sub.gradeTrackingEnabled !== false).forEach(sub => {
-                    const res = Calculator.calculateSubject(sub, system);
+                    const res = Calculator.calculateSubject(sub, system, null, ungraded);
+                    if (ungraded !== 'zero' && !res.hasData) return;
                     totalUnits += Number(sub.units) || 0;
                     totalPercent += res.percent * (Number(sub.units) || 0);
                     totalEq += res.equivalent * (Number(sub.units) || 0);

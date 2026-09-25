@@ -176,6 +176,15 @@ async function run() {
     const { runGradeTierTests } = await import('../__tests__/grade-tiers.test.js');
     runGradeTierTests(harness.describe, harness.test);
 
+    const { runGradeEntryTests } = await import('../__tests__/grade-entry.test.js');
+    runGradeEntryTests(harness.describe, harness.test);
+
+    const { runStudyImportTests } = await import('../__tests__/study-import.test.js');
+    runStudyImportTests(harness.describe, harness.test);
+
+    const { runStudyOcclusionTests } = await import('../__tests__/study-occlusion.test.js');
+    runStudyOcclusionTests(harness.describe, harness.test);
+
     const { runQuickEditTests } = await import('../__tests__/quick-edit.test.js');
     runQuickEditTests(harness.describe, harness.test);
 
@@ -187,6 +196,9 @@ async function run() {
 
     const { runTasksTests } = await import('../__tests__/tasks.test.js');
     runTasksTests(harness.describe, harness.test);
+
+    const { runSyncPlanTests } = await import('../__tests__/sync-plan.test.js');
+    runSyncPlanTests(harness.describe, harness.test);
 
   } catch (err) {
     console.error(`\n${RED}Fatal runner error:${RESET}`, err);
