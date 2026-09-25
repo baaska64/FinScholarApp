@@ -10,6 +10,7 @@ import {
   Image,
   Share,
   PixelRatio,
+  Platform,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -66,7 +67,8 @@ import {
   trueRetention,
   isStreakLive,
   getLocalDateString,
-  parseImportNotes,
+  analyzeImport,
+  ImportSeparator,
   // scheduler
   answerCard,
   AnswerResult,
@@ -295,11 +297,11 @@ export default function FlashcardsScreen() {
   const [showImport, setShowImport] = useState(false);
   const [importDeckId, setImportDeckId] = useState<string | null>(null);
   const [importText, setImportText] = useState('');
-  const [importSeparator, setImportSeparator] = useState<'comma' | 'semicolon' | 'pipe' | 'tab'>('comma');
+  const [importSeparator, setImportSeparator] = useState<ImportSeparator>('auto');
   const [importKind, setImportKind] = useState<'basic' | 'reversed' | 'typein'>('basic');
   const [importFileName, setImportFileName] = useState('');
   const [importLoading, setImportLoading] = useState(false);
-  const [parsedImport, setParsedImport] = useState<{ kind: NoteKind; front: string; back: string }[]>([]);
+  const [showImportHelp, setShowImportHelp] = useState(false);
   const [examPath, setExamPath] = useState<string | null>(null);
   const [examDate, setExamDate] = useState(new Date(Date.now() + 7 * 86400000));
   const [examShowPicker, setExamShowPicker] = useState(false);
@@ -1253,29 +1255,30 @@ export default function FlashcardsScreen() {
   const openImport = (deckId: string) => {
     setImportDeckId(deckId);
     setImportText('');
-    setParsedImport([]);
     setImportFileName('');
+    setShowImportHelp(false);
     setShowImport(true);
   };
 
+  // A picked file loads into the text box rather than being parsed once on
+  // the side: the old flow kept only the parse, so changing the card type or
+  // separator afterwards cleared it and the file's contents were gone.
   const handlePickFile = async () => {
     try {
       setImportLoading(true);
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['text/plain', 'text/csv', 'application/csv', '*/*'],
+        type: ['text/plain', 'text/csv', 'text/tab-separated-values', 'application/csv', '*/*'],
         copyToCacheDirectory: true,
       });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
-      setImportFileName(asset.name);
       const response = await fetch(asset.uri);
       const content = await response.text();
-      const notes = parseImportNotes(content, importSeparator, importKind);
-      if (notes.length === 0) AlertService.alert('No cards found', 'Make sure the separator matches the file.');
-      setParsedImport(notes);
+      setImportFileName(asset.name);
+      setImportText(content);
     } catch (e: any) {
       console.error('File Read Error:', e);
-      AlertService.alert('Error', `Could not read the file: ${e?.message || 'Unknown error'}`);
+      AlertService.alert('Could not read that file', `Save it as a plain .txt or .csv and try again. (${e?.message || 'Unknown error'})`);
     } finally {
       setImportLoading(false);
     }
@@ -1283,17 +1286,26 @@ export default function FlashcardsScreen() {
 
   const handleConfirmImport = () => {
     const deck = deckById(importDeckId);
-    if (!deck || parsedImport.length === 0) return;
+    if (!deck) return;
+    const analysis = analyzeImport(importText, importSeparator, importKind, deck.cards || []);
+    if (analysis.notes.length === 0) return;
     const now = Date.now();
     let added: Flashcard[] = [];
-    parsedImport.forEach((n, i) => {
+    analysis.notes.forEach((n, i) => {
       added = added.concat(buildNoteCards({ kind: n.kind, front: n.front, back: n.back }, [], generateId, now + i));
     });
     persist(decksRef.current.map((d) => (d.id === deck.id ? { ...d, cards: [...(d.cards || []), ...added] } : d)));
-    const count = parsedImport.length;
     setShowImport(false);
-    setParsedImport([]);
-    AlertService.alert('Imported', `${count} note${count !== 1 ? 's' : ''} (${added.length} card${added.length !== 1 ? 's' : ''}) added to "${deck.name}".`);
+    setImportText('');
+    setImportFileName('');
+    const extras = [
+      analysis.duplicates ? `${analysis.duplicates} duplicate${analysis.duplicates !== 1 ? 's' : ''} left out` : '',
+      analysis.skipped.length ? `${analysis.skipped.length} line${analysis.skipped.length !== 1 ? 's' : ''} skipped` : '',
+    ].filter(Boolean).join(', ');
+    AlertService.alert(
+      'Imported',
+      `${added.length} card${added.length !== 1 ? 's' : ''} added to "${deck.name}".${extras ? ` (${extras}.)` : ''} They join as new cards and come up at your daily new-card pace.`
+    );
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2979,13 +2991,16 @@ export default function FlashcardsScreen() {
 
   const renderImportSheet = () => {
     const deck = deckById(importDeckId);
-    const preview = () => {
-      if (!importText.trim()) return;
-      const notes = parseImportNotes(importText, importSeparator, importKind);
-      if (notes.length === 0) AlertService.alert('No cards found', 'Check the formatting and the separator.');
-      setParsedImport(notes);
-    };
-    const cardCount = parsedImport.reduce((s, n) => s + (n.kind === 'reversed' ? 2 : n.kind === 'cloze' ? Math.max(1, (n.front.match(/\{\{c\d+::/g) || []).length) : 1), 0);
+    const analysis = analyzeImport(importText, importSeparator, importKind, deck?.cards || []);
+    const hasText = importText.trim().length > 0;
+    const kindInfo = NOTE_KINDS.find((k) => k.kind === importKind);
+    const mono = { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 12.5 } as const;
+
+    const optionChip = (active: boolean) => ({
+      flex: 1, minHeight: 40, paddingHorizontal: 6, borderRadius: Radius.md, alignItems: 'center' as const, justifyContent: 'center' as const,
+      backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary, borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
+    });
+
     return (
       <KeyboardSheet
         visible={showImport}
@@ -2995,84 +3010,82 @@ export default function FlashcardsScreen() {
         icon="cloud-upload-outline"
         tint={tints.tools}
         footer={
-          parsedImport.length > 0 ? (
-            <PrimaryButton label={`Import ${parsedImport.length} note${parsedImport.length !== 1 ? 's' : ''}`} onPress={handleConfirmImport} />
-          ) : importText.trim().length > 0 ? (
-            <PrimaryButton label="Preview" onPress={preview} />
-          ) : undefined
+          <PrimaryButton
+            label={
+              !hasText
+                ? 'Paste or upload your cards first'
+                : analysis.cardCount > 0
+                ? `Import ${analysis.cardCount} card${analysis.cardCount !== 1 ? 's' : ''}`
+                : 'Nothing to import yet'
+            }
+            onPress={handleConfirmImport}
+            disabled={analysis.cardCount === 0}
+          />
         }
       >
-        <Text style={{ ...microLabel, marginBottom: 8 }}>1 · Card type</Text>
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
-          {NOTE_KINDS.filter((k) => k.kind !== 'cloze').map((k) => {
-            const active = importKind === k.kind;
-            return (
-              <TouchableOpacity
-                key={k.kind}
-                onPress={() => {
-                  setImportKind(k.kind as any);
-                  setParsedImport([]);
-                }}
-                activeOpacity={0.75}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: active }}
-                style={{
-                  flex: 1, height: 40, borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 5,
-                  backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary, borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
-                }}
-              >
-                <Ionicons name={k.icon as any} size={13} color={active ? tints.tools.ink : theme.textSecondary} />
-                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: active ? tints.tools.ink : theme.textSecondary }}>{k.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
+        {/* ══ How it works — the one rule, shown as an example rather than
+            described, with the special cases one tap away. ══ */}
+        <View style={{ borderRadius: Radius.lg, marginBottom: 16, overflow: 'hidden', borderWidth: 1, borderColor: tints.tools.line }}>
+          <View style={{ padding: 12, backgroundColor: tints.tools.fill }}>
+            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 14, color: theme.text }}>One card per line: the front, a comma, then the back.</Text>
+            <View style={{ marginTop: 8, padding: 10, borderRadius: Radius.md, backgroundColor: theme.surface, borderWidth: 1, borderColor: tints.tools.line }}>
+              <Text style={{ ...mono, color: theme.text }}>
+                heart<Text style={{ color: tints.tools.ink, fontWeight: '900' }}>,</Text> pumps blood around the body{'\n'}
+                mitosis<Text style={{ color: tints.tools.ink, fontWeight: '900' }}>,</Text> cell division into two cells
+              </Text>
+            </View>
+            <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textSecondary, marginTop: 6 }}>
+              That makes 2 cards: "heart" on the front, "pumps blood around the body" on the back.
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => setShowImportHelp((v) => !v)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showImportHelp }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: theme.surface }}
+          >
+            <Ionicons name="help-circle-outline" size={15} color={tints.tools.ink} />
+            <Text style={{ flex: 1, fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: tints.tools.ink }}>Spreadsheets, fill-in-the-blank and other formats</Text>
+            <Ionicons name={showImportHelp ? 'chevron-up' : 'chevron-down'} size={15} color={tints.tools.ink} />
+          </TouchableOpacity>
+          {showImportHelp && (
+            <View style={{ paddingHorizontal: 12, paddingBottom: 12, gap: 10, backgroundColor: theme.surface }}>
+              {[
+                { icon: 'grid-outline' as const, title: 'From Excel or Google Sheets', body: 'Put fronts in column A and backs in column B, select both columns, copy and paste here. Or save as .csv and upload it. A "Front, Back" header row is ignored.' },
+                { icon: 'eye-off-outline' as const, title: 'Fill-in-the-blank (cloze)', body: 'Wrap the hidden part like {{c1::this}}. "The {{c1::heart}} has four chambers" becomes a card that hides "heart". No comma needed.' },
+                { icon: 'code-working-outline' as const, title: 'A comma inside the front', body: 'Put the front in double quotes: "Hello, world", a greeting. Commas in the back are fine as they are.' },
+                { icon: 'swap-horizontal-outline' as const, title: 'Semicolons, tabs or | instead', body: 'Leave the separator on Auto and each line is read with whichever one it uses. From Anki, export as "Notes in Plain Text".' },
+                { icon: 'chatbox-ellipses-outline' as const, title: 'Lines starting with # or //', body: 'Treated as notes to yourself and skipped.' },
+              ].map((tip) => (
+                <View key={tip.title} style={{ flexDirection: 'row', gap: 9 }}>
+                  <Ionicons name={tip.icon} size={15} color={theme.textSecondary} style={{ marginTop: 1 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text }}>{tip.title}</Text>
+                    <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, color: theme.textSecondary, marginTop: 1 }}>{tip.body}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
-        <Text style={{ ...microLabel, marginBottom: 8 }}>2 · What separates front from back?</Text>
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
-          {(['comma', 'semicolon', 'pipe', 'tab'] as const).map((sep) => {
-            const active = importSeparator === sep;
-            const glyph = sep === 'comma' ? ',' : sep === 'semicolon' ? ';' : sep === 'pipe' ? '|' : 'tab';
-            return (
-              <TouchableOpacity
-                key={sep}
-                onPress={() => {
-                  setImportSeparator(sep);
-                  setParsedImport([]);
-                }}
-                activeOpacity={0.75}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: active }}
-                accessibilityLabel={`Separate with ${sep}`}
-                style={{
-                  flex: 1, height: 44, borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center',
-                  backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary, borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
-                }}
-              >
-                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: sep === 'tab' ? 12 : 15, color: active ? tints.tools.ink : theme.textSecondary }}>{glyph}</Text>
-                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 9.5, color: active ? tints.tools.ink : theme.textTertiary }}>{sep}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <Text style={{ ...microLabel, marginBottom: 8 }}>3 · Paste your list</Text>
+        {/* ══ 1 · The cards ══ */}
+        <Text style={{ ...microLabel, marginBottom: 8 }}>1 · Paste your cards or upload a file</Text>
         <TextInput
           value={importText}
           onChangeText={(t) => {
             setImportText(t);
-            setParsedImport([]);
+            if (importFileName) setImportFileName('');
           }}
           multiline
-          placeholder={'Front, Back\nThe {{c1::heart}} has four chambers'}
+          placeholder={'heart, pumps blood around the body\nmitosis, cell division into two cells'}
           placeholderTextColor={theme.textTertiary}
-          accessibilityLabel="Paste cards to import"
-          style={{ ...fieldStyle, minHeight: 104, textAlignVertical: 'top', fontSize: 14, marginBottom: 6 }}
+          accessibilityLabel="Cards to import, one per line"
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={{ ...fieldStyle, minHeight: 120, maxHeight: 220, textAlignVertical: 'top', fontSize: 14, marginBottom: 8 }}
         />
-        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, marginBottom: 14, lineHeight: 15 }}>
-          One card per line. Lines with {'{{c1::…}}'} become cloze cards automatically.
-        </Text>
-
         <TouchableOpacity
           onPress={handlePickFile}
           disabled={importLoading}
@@ -3080,7 +3093,7 @@ export default function FlashcardsScreen() {
           accessibilityRole="button"
           accessibilityLabel="Upload a text or CSV file"
           style={{
-            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: Radius.lg, marginBottom: 16,
+            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: Radius.lg, marginBottom: 16,
             borderWidth: 1, borderStyle: 'dashed', borderColor: isDark ? '#3d4468' : '#cbd5e1',
           }}
         >
@@ -3088,34 +3101,133 @@ export default function FlashcardsScreen() {
             <ActivityIndicator color={theme.primary} />
           ) : (
             <>
-              <Ionicons name="document-attach-outline" size={18} color={theme.textSecondary} />
-              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>
-                {importFileName || 'Or upload a .txt or .csv file'}
+              <Ionicons name={importFileName ? 'document-text' : 'document-attach-outline'} size={17} color={theme.textSecondary} />
+              <Text numberOfLines={1} style={{ flexShrink: 1, fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>
+                {importFileName ? `${importFileName} loaded · tap to pick another` : 'Upload a .txt or .csv file instead'}
               </Text>
             </>
           )}
         </TouchableOpacity>
 
-        {parsedImport.length > 0 && (
+        {/* ══ 2 · What each line becomes ══ */}
+        <Text style={{ ...microLabel, marginBottom: 8 }}>2 · Make each line into</Text>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          {NOTE_KINDS.filter((k) => k.kind !== 'cloze').map((k) => {
+            const active = importKind === k.kind;
+            return (
+              <TouchableOpacity
+                key={k.kind}
+                onPress={() => setImportKind(k.kind as any)}
+                activeOpacity={0.75}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={`${k.label}. ${k.desc}`}
+                style={{ ...optionChip(active), flexDirection: 'row', gap: 5 }}
+              >
+                <Ionicons name={k.icon as any} size={13} color={active ? tints.tools.ink : theme.textSecondary} />
+                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: active ? tints.tools.ink : theme.textSecondary }}>{k.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 6, marginBottom: 16 }}>
+          {kindInfo?.desc}. Lines with {'{{c1::…}}'} always become fill-in-the-blank cards.
+        </Text>
+
+        {/* ══ 3 · Separator ══ */}
+        <Text style={{ ...microLabel, marginBottom: 8 }}>3 · Between front and back</Text>
+        <View style={{ flexDirection: 'row', gap: 6, marginBottom: 6 }}>
+          {(['auto', 'comma', 'semicolon', 'tab', 'pipe'] as const).map((sep) => {
+            const active = importSeparator === sep;
+            const glyph = sep === 'auto' ? 'Auto' : sep === 'comma' ? ',' : sep === 'semicolon' ? ';' : sep === 'pipe' ? '|' : 'Tab';
+            return (
+              <TouchableOpacity
+                key={sep}
+                onPress={() => setImportSeparator(sep)}
+                activeOpacity={0.75}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={sep === 'auto' ? 'Detect the separator on each line' : `Separate with ${sep}`}
+                style={{ ...optionChip(active), flex: sep === 'auto' ? 1.4 : 1 }}
+              >
+                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: sep === 'auto' || sep === 'tab' ? 12.5 : 16, color: active ? tints.tools.ink : theme.textSecondary }}>{glyph}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginBottom: 16 }}>
+          {importSeparator === 'auto'
+            ? 'Auto reads each line with whichever of , ; tab or | it uses. Only change this if cards split in the wrong place.'
+            : `Only lines with ${importSeparator === 'tab' ? 'a tab' : `"${importSeparator === 'comma' ? ',' : importSeparator === 'semicolon' ? ';' : '|'}"`} between front and back will import.`}
+        </Text>
+
+        {/* ══ Result, live ══ */}
+        {hasText && (
           <>
-            <Text style={{ ...microLabel, marginBottom: 8 }}>
-              Preview · {parsedImport.length} note{parsedImport.length !== 1 ? 's' : ''} · {cardCount} card{cardCount !== 1 ? 's' : ''}
-            </Text>
-            {parsedImport.slice(0, 8).map((n, idx) => (
+            <Text style={{ ...microLabel, marginBottom: 8 }}>Preview</Text>
+            <View style={{ gap: 6, marginBottom: 10 }}>
+              <View style={{
+                flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderRadius: Radius.md,
+                backgroundColor: analysis.cardCount > 0 ? tints.attendance.fill : tints.danger.fill,
+                borderWidth: 1, borderColor: analysis.cardCount > 0 ? tints.attendance.line : tints.danger.line,
+              }}>
+                <Ionicons name={analysis.cardCount > 0 ? 'checkmark-circle' : 'alert-circle'} size={17} color={analysis.cardCount > 0 ? tints.attendance.ink : tints.danger.ink} />
+                <Text style={{ flex: 1, fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: analysis.cardCount > 0 ? tints.attendance.ink : tints.danger.ink }}>
+                  {analysis.cardCount > 0
+                    ? `${analysis.cardCount} card${analysis.cardCount !== 1 ? 's' : ''} ready${analysis.notes.length !== analysis.cardCount ? ` from ${analysis.notes.length} line${analysis.notes.length !== 1 ? 's' : ''}` : ''}`
+                    : 'No cards found yet. Check the example above.'}
+                </Text>
+              </View>
+
+              {analysis.headerSkipped && (
+                <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textSecondary, paddingHorizontal: 2 }}>
+                  The first line looked like a header ("Front, Back"), so it was left out.
+                </Text>
+              )}
+              {analysis.duplicates > 0 && (
+                <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textSecondary, paddingHorizontal: 2 }}>
+                  {analysis.duplicates} duplicate{analysis.duplicates !== 1 ? 's' : ''} left out: already in this deck or repeated in your list.
+                </Text>
+              )}
+              {analysis.skipped.length > 0 && (
+                <View style={{ padding: 10, borderRadius: Radius.md, backgroundColor: tints.tasks.fill, borderWidth: 1, borderColor: tints.tasks.line }}>
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: tints.tasks.ink, marginBottom: 4 }}>
+                    {analysis.skipped.length} line{analysis.skipped.length !== 1 ? 's' : ''} won't import
+                  </Text>
+                  {analysis.skipped.slice(0, 3).map((sk) => (
+                    <Text key={sk.line} numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, color: theme.textSecondary }}>
+                      <Text style={{ fontFamily: 'Nunito_800ExtraBold', color: theme.text }}>Line {sk.line}</Text> "{sk.text.length > 36 ? `${sk.text.slice(0, 36)}…` : sk.text}" · {sk.reason}
+                    </Text>
+                  ))}
+                  {analysis.skipped.length > 3 && (
+                    <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary, marginTop: 2 }}>…and {analysis.skipped.length - 3} more</Text>
+                  )}
+                </View>
+              )}
+            </View>
+
+            {analysis.notes.slice(0, 5).map((n, idx) => (
               <Card key={idx} variant="sunken" padding={11} radius={Radius.md} style={{ marginBottom: 6 }}>
                 {n.kind === 'cloze' ? (
                   <FaceText segments={clozeOverview(n.front)} color={deck?.color || theme.primary} isDark={isDark} numberOfLines={2} style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.text }} />
                 ) : (
-                  <>
-                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text }}>{n.front}</Text>
-                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 2 }}>{n.back}</Text>
-                  </>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ ...microLabel, fontSize: 8.5 }}>Front</Text>
+                      <Text numberOfLines={2} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text, marginTop: 1 }}>{n.front}</Text>
+                    </View>
+                    <View style={{ width: 1, backgroundColor: theme.cardBorder }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ ...microLabel, fontSize: 8.5 }}>Back</Text>
+                      <Text numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12.5, color: theme.textSecondary, marginTop: 1 }}>{n.back}</Text>
+                    </View>
+                  </View>
                 )}
               </Card>
             ))}
-            {parsedImport.length > 8 && (
+            {analysis.notes.length > 5 && (
               <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, textAlign: 'center', paddingVertical: 6 }}>
-                …and {parsedImport.length - 8} more
+                …and {analysis.notes.length - 5} more
               </Text>
             )}
           </>
