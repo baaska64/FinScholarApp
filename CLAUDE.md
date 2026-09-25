@@ -62,7 +62,7 @@ const nd = JSON.parse(JSON.stringify(data));
 const sem = nd.years?.find(y => y.id === activeYearId)?.semesters?.find(s => s.id === activeSemId);
 // ...mutate sem...
 setData(nd);
-SyncService.pushLocalChanges(nd);   // writes AsyncStorage AND pushes to Supabase
+SyncService.pushLocalChanges(nd);   // writes AsyncStorage AND queues a (throttled) push to Supabase
 ```
 
 `pushLocalChanges` already writes AsyncStorage; some call sites also call `AsyncStorage.setItem` first, which is redundant but harmless. Never mutate `data` in place — several screens re-read from AsyncStorage on focus and will clobber unsaved in-place edits.
@@ -73,6 +73,7 @@ SyncService.pushLocalChanges(nd);   // writes AsyncStorage AND pushes to Supabas
 
 - **Login is guarded.** `initialSyncComplete` blocks all remote pushes until the first `sync()` after `SIGNED_IN` finishes, so a guest's local ledger cannot silently overwrite an existing cloud ledger. Do not push around this guard.
 - **Conflicts are a UI state.** When local and remote both changed, state becomes `'conflict'` and `SyncProvider` shows a keep-local/keep-remote modal. `@last_synced_timestamp` is the arbiter.
+- **Pushes are throttled, downloads are probed.** The upsert runs at most once per 25 s (`utils/syncPlan.ts`), and it flushes on background, when the Study tab loses focus, and on logout. Anything that wipes the local ledger or ends the session must `await SyncService.flushPendingPush()` first. `sync()` reads `ledger_data->last_updated` before it downloads the ledger. `APP_CONTEXT.md` has the rationale.
 - **Auth is optional throughout.** The app is fully functional as a guest; `syncStatus` is just `'offline'`. Never gate a feature on `user` being non-null unless it genuinely needs the server.
 - Premium is `SyncService.getIsPremium()` (RevenueCat, cached in `@is_premium`) — that call, not a Supabase lookup, is the app-wide paywall gate.
 

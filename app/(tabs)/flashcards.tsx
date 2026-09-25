@@ -437,6 +437,18 @@ export default function FlashcardsScreen() {
     }, [loadDecks])
   );
 
+  // Every answer is a save, so pushes to the server are throttled; leaving the
+  // tab sends what the session queued. It waits behind the writes already
+  // chained, but is not chained itself — a slow network must not hold up the
+  // next answer's local write.
+  useFocusEffect(
+    useCallback(() => () => {
+      writeChain.current
+        .then(() => SyncService.flushPendingPush())
+        .catch((e) => console.error('Failed to flush study sync:', e));
+    }, [])
+  );
+
   useEffect(() => {
     const unsub = SyncService.subscribeDataChange(() => {
       loadDecks();

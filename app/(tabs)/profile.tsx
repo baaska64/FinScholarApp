@@ -127,6 +127,8 @@ export default function ProfileScreen() {
     }, []);
 
     async function handleLogout() {
+        // Pushes are throttled; send the queued ledger while there is still a session.
+        await SyncService.flushPendingPush();
         await AsyncStorage.removeItem('grade_ledger_v2_data');
         await AsyncStorage.removeItem('@last_synced_timestamp');
         await SyncService.setPremiumUser(false);

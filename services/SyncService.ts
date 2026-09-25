@@ -1,7 +1,12 @@
+import { AppState } from 'react-native';
 import { supabase } from './supabaseClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NotificationService } from './NotificationService';
 import { widgetTaskHandler } from '../widget/WidgetTaskHandler';
+import {
+  PushOutcome, PushQueue, beginPush, cancelPush, decidePush, emptyPushQueue,
+  enqueuePush, planLedgerFetch, readRemoteStamp, requestFlush, settlePush,
+} from '../utils/syncPlan';
 
 export type SyncState = 'offline' | 'syncing' | 'saved' | 'conflict';
 export type ConflictResolution = 'keep_local' | 'keep_remote';
@@ -21,9 +26,19 @@ class SyncServiceClass {
   private initialSyncComplete: boolean = false;
   private syncInProgress: boolean = false;
 
+  /** Throttled remote pushes; the decisions live in utils/syncPlan.ts. */
+  private pushQueue: PushQueue<any> = emptyPushQueue();
+  private pushTimer: ReturnType<typeof setTimeout> | null = null;
+  private pushInFlight: Promise<void> | null = null;
+
   constructor() {
     this.loadLocalPremium();
     this.listenForAuthChanges();
+    // The OS may suspend or kill a backgrounded app before the throttle
+    // window ends, so anything queued goes now.
+    AppState.addEventListener('change', (next) => {
+      if (next !== 'active') this.flushPendingPush().catch(console.error);
+    });
   }
 
   private async loadLocalPremium() {
@@ -47,10 +62,12 @@ class SyncServiceClass {
       if (event === 'SIGNED_IN' && session?.user) {
         // Reset guard — block all remote pushes until sync() finishes
         this.initialSyncComplete = false;
+        this.cancelPendingPush();
         // Run sync to compare local vs cloud and detect conflicts
         this.sync();
       } else if (event === 'SIGNED_OUT') {
         this.initialSyncComplete = false;
+        this.cancelPendingPush();
       }
     });
   }
@@ -162,26 +179,84 @@ class SyncServiceClass {
     // This prevents guest data from silently overwriting the user's cloud data
     // before the conflict check has run.
     if (this.initialSyncComplete) {
-      this._syncRemote(newData).catch(console.error);
+      this.pushQueue = enqueuePush(this.pushQueue, newData);
+      this.drivePushQueue();
     }
   }
 
-  private async _syncRemote(newData: any) {
+  /**
+   * Sends the queued ledger now instead of at the end of the throttle window,
+   * and resolves once nothing is in flight. Await it before anything that
+   * wipes the local ledger or ends the session.
+   */
+  public async flushPendingPush() {
+    this.pushQueue = requestFlush(this.pushQueue);
+    this.drivePushQueue();
+    while (this.pushInFlight) await this.pushInFlight;
+  }
+
+  private cancelPendingPush() {
+    this.pushQueue = cancelPush(this.pushQueue);
+    this.drivePushQueue();
+  }
+
+  private drivePushQueue() {
+    const decision = decidePush(this.pushQueue, Date.now(), {
+      canPush: this.initialSyncComplete,
+      appActive: AppState.currentState === 'active',
+    });
+    if (decision.kind === 'wait') {
+      // An armed timer already targets this moment: lastPushAt only moves when a push starts.
+      if (!this.pushTimer) {
+        this.pushTimer = setTimeout(() => {
+          this.pushTimer = null;
+          this.drivePushQueue();
+        }, decision.delayMs);
+      }
+      return;
+    }
+    if (this.pushTimer) {
+      clearTimeout(this.pushTimer);
+      this.pushTimer = null;
+    }
+    if (decision.kind !== 'push') return;
+
+    const { queue, ledger, epoch } = beginPush(this.pushQueue, Date.now());
+    this.pushQueue = queue;
+    this.pushInFlight = this._syncRemote(ledger)
+      .catch((e): PushOutcome => {
+        console.error('Failed to push local changes', e);
+        return 'failed';
+      })
+      .then((outcome) => {
+        this.pushQueue = settlePush(this.pushQueue, { ledger, epoch }, outcome);
+        this.pushInFlight = null;
+        this.drivePushQueue();
+      });
+  }
+
+  private async _syncRemote(newData: any): Promise<PushOutcome> {
     const { data: { session } } = await supabase.auth.getSession();
     const user = session?.user;
     if (!user) {
       this.setState('offline');
-      return;
+      return 'no-user';
     }
 
     this.setState('syncing');
     try {
-      await supabase.from('user_ledgers').upsert({ id: user.id, ledger_data: newData });
+      // supabase-js reports a failed request in `error` instead of throwing.
+      // Unchecked, a push that never arrived still advanced
+      // @last_synced_timestamp, so no later sync() would re-send it.
+      const { error } = await supabase.from('user_ledgers').upsert({ id: user.id, ledger_data: newData });
+      if (error) throw error;
       await AsyncStorage.setItem('@last_synced_timestamp', newData.last_updated.toString());
       this.setState('saved');
+      return 'sent';
     } catch (e) {
       console.error('Failed to push local changes', e);
       this.setState('offline');
+      return 'failed';
     }
   }
 
@@ -206,14 +281,32 @@ class SyncServiceClass {
       // Always restore premium from Supabase on sync
       await this.checkAndRestorePremium();
 
-      const { data: dbData } = await supabase.from('user_ledgers').select('ledger_data').eq('id', user.id).single();
-      const remoteData = dbData?.ledger_data;
-      
       const localDataStr = await AsyncStorage.getItem('grade_ledger_v2_data');
       const localData = localDataStr ? JSON.parse(localDataStr) : null;
-      
+
       const lastSyncedStr = await AsyncStorage.getItem('@last_synced_timestamp');
       const lastSynced = lastSyncedStr ? parseInt(lastSyncedStr, 10) : 0;
+
+      // Probe the timestamp first: the whole ledger is the app's largest
+      // download, and most launches have nothing new to fetch.
+      const stamp = await supabase.from('user_ledgers')
+        .select('last_updated:ledger_data->last_updated')
+        .eq('id', user.id)
+        .single();
+      const plan = planLedgerFetch(readRemoteStamp(stamp), localData?.last_updated || 0, lastSynced);
+
+      if (plan === 'up-to-date') {
+        this.initialSyncComplete = true;
+        this.setState('saved');
+        this.syncInProgress = false;
+        return;
+      }
+
+      let remoteData: any = null;
+      if (plan === 'download') {
+        const { data: dbData } = await supabase.from('user_ledgers').select('ledger_data').eq('id', user.id).single();
+        remoteData = dbData?.ledger_data;
+      }
 
       if (!remoteData) {
         // No cloud data — safe to push local (even guest data) to the new account
@@ -233,11 +326,14 @@ class SyncServiceClass {
       // Both local and remote have unseen changes → CONFLICT
       if (localData && remoteData && localUpdated > lastSynced && remoteUpdated > lastSynced && remoteUpdated !== localUpdated) {
         // Do NOT set initialSyncComplete — block pushes until user resolves
+        // (and drop a queued one: it must not land while the user is choosing)
+        this.cancelPendingPush();
         this.emitConflict(localData, remoteData);
         this.syncInProgress = false;
         return;
       } else if (remoteUpdated > lastSynced && remoteUpdated > localUpdated) {
         // Remote is newer — download cloud data
+        this.cancelPendingPush();
         await AsyncStorage.setItem('grade_ledger_v2_data', JSON.stringify(remoteData));
         await AsyncStorage.setItem('@last_synced_timestamp', remoteUpdated.toString());
         await this.emitDataChange();
