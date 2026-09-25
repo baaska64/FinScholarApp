@@ -136,6 +136,6 @@ export function compactGroups(masks: OcclusionMask[]): OcclusionMask[] {
 export function validateOcclusion(data: OcclusionData | undefined | null): string | null {
   if (!data || !data.imageId) return 'Pick an image first.';
   if (!data.masks || data.masks.length === 0) return 'Draw at least one box over something to hide.';
-  if (data.locate && !data.masks.some((m) => (m.label || '').trim())) return 'Name at least one box to make "where is it?" cards, or turn them off.';
+  if (data.locate && !data.masks.some((m) => (m.label || '').trim())) return 'To quiz yourself the other way, name at least one box (tap it, then fill in "Name of what\'s hidden"), or turn that option off.';
   return null;
 }

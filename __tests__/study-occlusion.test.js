@@ -45,7 +45,7 @@ export function runStudyOcclusionTests(describe, test) {
     test('IO1.5 Validation needs an image and a mask, and a label when locate is on', () => {
       assert.match(validateOcclusion(null), /image/);
       assert.match(validateOcclusion(data([])), /Draw/);
-      assert.match(validateOcclusion(data([mask('a', 1)], { locate: true })), /Name at least one/);
+      assert.match(validateOcclusion(data([mask('a', 1)], { locate: true })), /name at least one box/i);
       assert.strictEqual(validateOcclusion(data([mask('a', 1)])), null);
       assert.strictEqual(validateNote({ kind: 'occlusion', front: '', back: '', occlusion: data([mask('a', 1)]) }), null);
     });
@@ -58,7 +58,7 @@ export function runStudyOcclusionTests(describe, test) {
       assert.strictEqual(f.answer[0].text, 'Aorta');
       assert.strictEqual(f.extra, 'Chapter 3');
       const loc = buildNoteCards({ kind: 'occlusion', front: '', back: '', occlusion: data([mask('a', 1, { label: 'Aorta' })], { locate: true }) }, [], makeId, 0)[1];
-      assert.strictEqual(cardFaces(loc).question[0].text, 'Where is Aorta?');
+      assert.strictEqual(cardFaces(loc).question[0].text, 'Find Aorta');
       const row = groupNotes([c])[0];
       assert.match(notePreview(row).sub, /1 hidden part/);
     });

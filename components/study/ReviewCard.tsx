@@ -221,7 +221,7 @@ export default function ReviewCard({
               </Animated.View>
             ) : (
               <Text style={{ textAlign: 'center', marginTop: 12, fontFamily: 'Nunito_600SemiBold', fontSize: 12.5, color: theme.textTertiary }}>
-                {locate ? 'Tap the box where it is' : 'What is under the red box? Recall it, then tap to check'}
+                {locate ? 'Tap the box it is in' : 'What is under the red box? Recall it, then tap to check'}
               </Text>
             )}
           </ScrollView>

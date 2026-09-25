@@ -380,18 +380,26 @@ export default function OcclusionEditor({ visible, isDark, initial, onClose, onD
                                         {one ? `Box · card ${groupIndex.get(one.group)}` : `${selMasks.length} boxes selected`}
                                     </Text>
                                     {one && (
+                                        <>
+                                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text, marginBottom: 6 }}>
+                                            Name of what's hidden <Text style={{ fontFamily: 'Nunito_600SemiBold', color: theme.textTertiary }}>(optional)</Text>
+                                        </Text>
                                         <TextInput
                                             value={one.label || ''}
                                             onChangeText={(t) => setMasks(masks.map((m) => (m.id === one.id ? { ...m, label: t } : m)), false)}
-                                            placeholder="What's under it? (optional, shown with the answer)"
+                                            placeholder="e.g. Left atrium"
                                             placeholderTextColor={theme.textTertiary}
-                                            accessibilityLabel="Label for this box"
+                                            accessibilityLabel="Name of what is hidden under this box"
                                             style={{
-                                                height: 44, paddingHorizontal: 12, borderRadius: Radius.md, marginBottom: 10,
+                                                height: 44, paddingHorizontal: 12, borderRadius: Radius.md, marginBottom: 6,
                                                 backgroundColor: theme.inputBg, borderWidth: 1, borderColor: theme.inputBorder,
                                                 color: theme.text, fontFamily: 'Nunito_700Bold', fontSize: 14,
                                             }}
                                         />
+                                        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, lineHeight: 16, color: theme.textTertiary, marginBottom: 10 }}>
+                                            Shown as the answer when this box is asked. Write the thing itself, not a question.
+                                        </Text>
+                                        </>
                                     )}
                                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                                         {one && (
@@ -471,10 +479,18 @@ export default function OcclusionEditor({ visible, isDark, initial, onClose, onD
                             >
                                 <Ionicons name={data.locate ? 'checkbox' : 'square-outline'} size={19} color={data.locate ? tints.grades.ink : theme.textTertiary} style={{ marginTop: 1 }} />
                                 <View style={{ flex: 1 }}>
-                                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: theme.text }}>Also ask "where is it?"</Text>
+                                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: theme.text }}>Also quiz me the other way</Text>
                                     <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, color: theme.textSecondary, marginTop: 2 }}>
-                                        Extra cards that show a label and have you tap its place on the picture. Needs labels on the boxes.
+                                        Extra cards that show a name, like "Find the left atrium", and you tap the box it is in. Good for maps and anatomy, where the place is what you are learning. Not needed for tables or notes.
                                     </Text>
+                                    {data.locate && (() => {
+                                        const unnamed = masks.filter((m) => !(m.label || '').trim()).length;
+                                        return unnamed > 0 ? (
+                                            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, lineHeight: 16, color: tints.tasks.ink, marginTop: 5 }}>
+                                                {unnamed} box{unnamed !== 1 ? 'es have' : ' has'} no name yet, so {unnamed !== 1 ? 'they are' : 'it is'} only asked the usual way. Tap a box to name it.
+                                            </Text>
+                                        ) : null;
+                                    })()}
                                 </View>
                             </TouchableOpacity>
 

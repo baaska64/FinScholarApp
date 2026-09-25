@@ -314,7 +314,7 @@ export default function NoteEditorSheet({
               />
               <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textSecondary, marginTop: 8 }}>
                 {occlusion.masks.length} box{occlusion.masks.length !== 1 ? 'es' : ''} · {occlusionGroups(occlusion.masks).length} to learn
-                {occlusion.locate ? ' · plus "where is it?"' : ''} · {occlusion.mode === 'hideAll' ? 'hide all, guess one' : 'hide one, guess one'}
+                {occlusion.locate ? ' · plus find-it cards' : ''} · {occlusion.mode === 'hideAll' ? 'hide all, guess one' : 'hide one, guess one'}
               </Text>
             </>
           ) : null}

@@ -201,7 +201,7 @@ export function cardFaces(card: Flashcard, flip: boolean = false): CardFaces {
     // locate card asks for the label, every other card answers with it.
     const label = groupLabel(card.occlusion?.masks || [], groupOfOrd(card.ord));
     if (isLocateOrd(card.ord)) {
-      return { question: plain(`Where is ${label || 'it'}?`), answer: plain(label), extra: back, typeTarget: null };
+      return { question: plain(`Find ${label || 'it'}`), answer: plain(label), extra: back, typeTarget: null };
     }
     return { question: plain(front), answer: plain(label), extra: back, typeTarget: null };
   }
