@@ -340,3 +340,50 @@ export function subjectOutlook(subject: any, system: string): Outlook {
     }
     return { kind: 'lost', target, requiredAverage: null, requiredFor: null, message: 'Passing is no longer possible with the scores left.', remaining: [] };
 }
+
+export interface ItemLocation {
+    path: ItemPath;
+    /** The score's own name, falling back to its position. */
+    name: string;
+    periodName: string;
+    componentName: string;
+    /** Names of the scores it is a part of, outermost first. */
+    parents: string[];
+}
+
+/**
+ * Find a score by id. The outlook only carries ids and a flattened label, and
+ * a "what each needs" row has to open that exact score's sheet.
+ */
+export function locateItem(subject: any, id: string): ItemLocation | null {
+    const periods = subject?.periods || [];
+    for (let p = 0; p < periods.length; p++) {
+        const comps = periods[p]?.components || [];
+        for (let c = 0; c < comps.length; c++) {
+            const walk = (list: any[], trail: number[], parents: string[]): ItemLocation | null => {
+                for (let i = 0; i < list.length; i++) {
+                    const node = list[i];
+                    const depth = trail.length;
+                    const name = node?.name || (depth === 0 ? `Item ${i + 1}` : `Part ${i + 1}`);
+                    if (node?.id === id) {
+                        return {
+                            path: { period: p, component: c, items: [...trail, i] },
+                            name,
+                            periodName: periods[p]?.name || 'Period',
+                            componentName: comps[c]?.name || 'Component',
+                            parents,
+                        };
+                    }
+                    if (node?.subItems?.length) {
+                        const hit = walk(node.subItems, [...trail, i], [...parents, name]);
+                        if (hit) return hit;
+                    }
+                }
+                return null;
+            };
+            const hit = walk(comps[c]?.items || [], [], []);
+            if (hit) return hit;
+        }
+    }
+    return null;
+}

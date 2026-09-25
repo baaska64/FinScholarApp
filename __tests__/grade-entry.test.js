@@ -21,6 +21,7 @@ import {
   countScores,
   subjectOutlook,
   MAX_ITEM_DEPTH,
+  locateItem,
 } from '../utils/gradeEntry.ts';
 import { Calculator } from '../utils/calculator.js';
 
@@ -190,6 +191,28 @@ export function runGradeEntryTests(describe, test) {
       assert.strictEqual(formatGrade(80, 60, 'PERCENT'), '80.0%');
       assert.strictEqual(formatGrade(100, 60, '1_IS_BEST'), '1.00');
       assert.strictEqual(formatGrade(60, 60, '1_IS_BEST'), '3.00');
+    });
+  });
+
+  describe('Grade Entry Suite 3b: Locating a score', () => {
+    test('GE3.6 locateItem returns the path, names and the parts trail', () => {
+      const sub = subjectWith([{ id: 'i1', name: 'Quiz 1' }, { id: 'i2', name: 'Lab', subItems: [{ id: 'a', name: '' }, { id: 'b', name: 'Demo' }] }]);
+      const top = locateItem(sub, 'i1');
+      assert.deepStrictEqual(top.path, { period: 0, component: 0, items: [0] });
+      assert.strictEqual(top.componentName, 'Quizzes');
+      assert.strictEqual(top.periodName, 'Prelim');
+      const part = locateItem(sub, 'a');
+      assert.deepStrictEqual(part.path.items, [1, 0]);
+      assert.strictEqual(part.name, 'Part 1', 'an unnamed part falls back to its position');
+      assert.deepStrictEqual(part.parents, ['Lab']);
+      assert.strictEqual(locateItem(sub, 'nope'), null);
+    });
+
+    test('GE3.7 Every ungraded score in the outlook can be located', () => {
+      const sub = subjectWith([{ id: 'i1', score: 10, max: 20 }, { id: 'i2', name: 'Lab', subItems: [{ id: 'a', score: '', max: 50 }, { id: 'b', score: 30, max: 50 }] }], { targetValue: 70 });
+      const o = subjectOutlook(sub, 'PERCENT');
+      assert.ok(o.remaining.length > 0);
+      for (const r of o.remaining) assert.ok(locateItem(sub, r.id), `could not locate ${r.id}`);
     });
   });
 

@@ -40,6 +40,7 @@ import {
     scorePercent,
     countScores,
     subjectOutlook,
+    locateItem,
     MAX_ITEM_DEPTH,
     ItemPath,
     ItemDraft,
@@ -527,60 +528,142 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
         if (total === 0) return null;
         const style = OUTLOOK_STYLE[outlook.kind];
         const tint = outlook.kind === 'no-room' && res.absoluteEarned >= passPct ? tints.attendance : tints[style.tint];
-        const remaining = showAllRemaining ? outlook.remaining : outlook.remaining.slice(0, 3);
+
+        // The subject as 100 points: what is banked, what is still open, and
+        // what was already lost on graded work. The needed slice sits inside
+        // the open room, so the bar shows *why* the average is what it is.
+        const earned = Math.max(0, Math.min(100, res.absoluteEarned));
+        const open = Math.max(0, Math.min(100 - earned, res.absoluteAvailable));
+        const missed = Math.max(0, 100 - earned - open);
+        const aimAt = outlook.requiredFor === 'pass' ? passPct : outlook.target;
+        const needed = outlook.requiredAverage !== null ? Math.max(0, Math.min(open, aimAt - earned)) : 0;
+        const earnedColor = getGradeTierColor(res.percent, isDark, res.hasData);
+        const spareColor = isDark ? 'rgba(255,255,255,0.08)' : theme.surfaceSecondary;
+        const missedColor = isDark ? 'rgba(255,255,255,0.22)' : '#cfd3e3';
+
+        const subtitle = outlook.requiredAverage !== null
+            ? `${outlook.requiredAverage > 100 ? 'Over 100%' : `${outlook.requiredAverage.toFixed(1)}%`} average on the ${outlook.remaining.length} score${outlook.remaining.length !== 1 ? 's' : ''} left ${outlook.requiredFor === 'pass' ? 'just to pass' : `to reach ${formatWeight(outlook.target)}%`}.`
+            : outlook.message;
+
+        const legend = [
+            { key: 'earned', color: earnedColor, label: 'earned', value: earned },
+            ...(needed > 0.05 ? [{ key: 'needed', color: tint.solid, label: 'needed', value: needed }] : []),
+            ...(open - needed > 0.05 ? [{ key: 'open', color: spareColor, label: needed > 0.05 ? 'spare' : 'still open', value: open - needed, ring: true }] : []),
+            ...(missed > 0.05 ? [{ key: 'missed', color: missedColor, label: 'missed', value: missed }] : []),
+        ];
+
+        const rows = outlook.remaining
+            .map((r) => ({ r, loc: locateItem(subject, r.id) }))
+            .filter((x) => x.loc);
+        const shown = showAllRemaining ? rows : rows.slice(0, 3);
 
         return (
-            <Card padding={0} radius={Radius['2xl']} fill={tint.fill} border={tint.line} style={{ marginBottom: 20, overflow: 'hidden' }}>
+            <Card padding={0} radius={Radius['2xl']} style={{ marginBottom: 20, overflow: 'hidden' }}>
                 <View style={{ padding: 14 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Ionicons name={style.icon} size={14} color={tint.ink} />
-                        <Text style={{ ...microLabel, color: tint.ink }}>{style.title} · goal {formatWeight(outlook.target)}%</Text>
-                    </View>
-
-                    {outlook.requiredAverage !== null ? (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 12 }}>
-                            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 32, color: tint.ink, letterSpacing: -1 }}>
-                                {outlook.requiredAverage > 100 ? '100+' : outlook.requiredAverage.toFixed(1)}
-                                <Text style={{ fontSize: 17 }}>%</Text>
-                            </Text>
-                            <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 12.5, lineHeight: 17, color: theme.text }}>
-                                average needed on the {outlook.remaining.length} score{outlook.remaining.length !== 1 ? 's' : ''} left
-                                {outlook.requiredFor === 'pass' ? ' just to pass' : ` to reach ${formatWeight(outlook.target)}%`}
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <View style={{
+                            width: 38, height: 38, borderRadius: 12, marginRight: 11,
+                            alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: tint.fill, borderWidth: 1, borderColor: tint.line,
+                        }}>
+                            <Ionicons name={style.icon} size={19} color={tint.ink} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 15.5, color: theme.text, letterSpacing: -0.3 }}>{style.title}</Text>
+                            <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12.5, lineHeight: 17, color: theme.textSecondary, marginTop: 1 }}>
+                                {subtitle}
                             </Text>
                         </View>
-                    ) : (
-                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, lineHeight: 20, color: theme.text, marginTop: 6 }}>
-                            {outlook.message}
-                        </Text>
-                    )}
-                </View>
+                    </View>
 
-                {outlook.remaining.length > 0 && (
-                    <View style={{ borderTopWidth: 1, borderTopColor: tint.line, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 }}>
-                        <Text style={{ ...microLabel, color: tint.ink, marginBottom: 8 }}>What each needs</Text>
-                        {remaining.map((r) => (
-                            <View key={r.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 5 }}>
-                                <Text numberOfLines={1} style={{ flex: 1, marginRight: 10, fontFamily: 'Nunito_600SemiBold', fontSize: 12.5, color: theme.textSecondary }}>
-                                    {r.name} <Text style={{ color: theme.textTertiary }}>· {r.periodName}</Text>
-                                </Text>
-                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 13.5, color: theme.text }}>
-                                    {r.needed.toFixed(1)}
-                                    <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary }}> / {r.sumMax}</Text>
+                    {/* ── 100 points, split ── */}
+                    <View
+                        accessible
+                        accessibilityLabel={legend.map((l) => `${l.value.toFixed(1)} points ${l.label}`).join(', ') + `. Goal ${formatWeight(outlook.target)}.`}
+                        style={{ marginTop: 16 }}
+                    >
+                        <View style={{ flexDirection: 'row', height: 10, borderRadius: 5, overflow: 'hidden', backgroundColor: spareColor }}>
+                            <View style={{ width: `${earned}%`, backgroundColor: earnedColor }} />
+                            {needed > 0 && <View style={{ width: `${needed}%`, backgroundColor: tint.solid, opacity: 0.55 }} />}
+                            <View style={{ flex: 1 }} />
+                            {missed > 0 && <View style={{ width: `${missed}%`, backgroundColor: missedColor }} />}
+                        </View>
+                        <View style={{
+                            position: 'absolute', left: `${Math.max(0, Math.min(100, outlook.target))}%`, top: -4, height: 18,
+                            width: 2, marginLeft: -1, borderRadius: 1, backgroundColor: theme.text,
+                        }} />
+                        <View style={{ height: 16, marginTop: 5 }}>
+                            <Text numberOfLines={1} style={{
+                                position: 'absolute', left: `${Math.max(0, Math.min(100, outlook.target))}%`, width: 70, marginLeft: -35,
+                                textAlign: 'center', fontFamily: 'Nunito_800ExtraBold', fontSize: 10, color: theme.textSecondary,
+                            }}>
+                                Goal {formatWeight(outlook.target)}
+                            </Text>
+                        </View>
+                    </View>
+
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 4, marginTop: 6 }}>
+                        {legend.map((l) => (
+                            <View key={l.key} style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                                <View style={{
+                                    width: 8, height: 8, borderRadius: 4, backgroundColor: l.color,
+                                    opacity: l.key === 'needed' ? 0.55 : 1,
+                                    borderWidth: (l as any).ring ? 1 : 0, borderColor: theme.cardBorder,
+                                }} />
+                                <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary }}>
+                                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', color: theme.textSecondary }}>{l.value.toFixed(1)}</Text> {l.label}
                                 </Text>
                             </View>
                         ))}
-                        {outlook.remaining.length > 3 && (
-                            <TouchableOpacity
-                                onPress={() => setShowAllRemaining((v) => !v)}
-                                accessibilityRole="button"
-                                style={{ paddingTop: 6 }}
-                            >
-                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: tint.ink }}>
-                                    {showAllRemaining ? 'Show fewer' : `Show all ${outlook.remaining.length}`}
-                                </Text>
-                            </TouchableOpacity>
-                        )}
                     </View>
+                </View>
+
+                {/* ── The scores still to come, each opening its own sheet ── */}
+                {shown.map(({ r, loc }) => (
+                    <TouchableOpacity
+                        key={r.id}
+                        onPress={() => openEditScore(loc!.path)}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${loc!.name}, ${loc!.componentName}, ${loc!.periodName}. Needs ${r.needed.toFixed(1)} out of ${r.sumMax}. Opens editor.`}
+                        style={{
+                            flexDirection: 'row', alignItems: 'center', minHeight: 50,
+                            paddingHorizontal: 14, paddingVertical: 8,
+                            borderTopWidth: 1, borderTopColor: theme.cardBorder,
+                        }}
+                    >
+                        <View style={{ width: 10, height: 10, borderRadius: 5, marginLeft: 4, marginRight: 12, borderWidth: 2, borderColor: theme.textTertiary }} />
+                        <View style={{ flex: 1, marginRight: 8 }}>
+                            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 13.5, color: theme.text }}>{loc!.name}</Text>
+                            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11, color: theme.textTertiary, marginTop: 1 }}>
+                                {[loc!.periodName, loc!.componentName, ...loc!.parents].join(' · ')}
+                            </Text>
+                        </View>
+                        <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary, marginRight: 4 }}>need</Text>
+                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text, marginRight: 8 }}>
+                            {r.needed.toFixed(1)}
+                            <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textTertiary }}> / {r.sumMax}</Text>
+                        </Text>
+                        <Ionicons name="chevron-forward" size={14} color={theme.textTertiary} />
+                    </TouchableOpacity>
+                ))}
+
+                {rows.length > 3 && (
+                    <TouchableOpacity
+                        onPress={() => setShowAllRemaining((v) => !v)}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        style={{
+                            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, height: 42,
+                            borderTopWidth: 1, borderTopColor: theme.cardBorder,
+                            backgroundColor: isDark ? 'rgba(0,0,0,0.12)' : theme.surfaceSecondary,
+                        }}
+                    >
+                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.textSecondary }}>
+                            {showAllRemaining ? 'Show fewer' : `Show all ${rows.length} scores left`}
+                        </Text>
+                        <Ionicons name={showAllRemaining ? 'chevron-up' : 'chevron-down'} size={14} color={theme.textSecondary} />
+                    </TouchableOpacity>
                 )}
             </Card>
         );
