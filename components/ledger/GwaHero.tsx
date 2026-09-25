@@ -48,7 +48,7 @@ export default function GwaHero({ isDark, system, systemLabel, sem, year, cum, o
     const fig = scope === 'sem' ? sem : scope === 'year' ? year : cum;
 
     const valueText = !fig.hasData
-        ? '—'
+        ? '– –'
         : system === 'PERCENT'
             ? `${fig.percent.toFixed(1)}%`
             : fig.value.toFixed(3);
@@ -115,7 +115,12 @@ export default function GwaHero({ isDark, system, systemLabel, sem, year, cum, o
                 <Text
                     numberOfLines={1}
                     adjustsFontSizeToFit
-                    style={{ fontFamily: 'Nunito_900Black', fontSize: 46, lineHeight: 52, color: brand.onHero, letterSpacing: -1.6, maxWidth: '58%' }}
+                    // A dash at display size reads as a stray white bar, so the
+                    // no-data placeholder drops to a smaller, dimmed glyph.
+                    style={{
+                        fontFamily: 'Nunito_900Black', fontSize: fig.hasData ? 46 : 30, lineHeight: 52, letterSpacing: fig.hasData ? -1.6 : 0,
+                        color: fig.hasData ? brand.onHero : brand.onHeroMuted, maxWidth: '58%',
+                    }}
                 >
                     {valueText}
                 </Text>

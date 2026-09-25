@@ -25,6 +25,12 @@ export interface SubjectCardProps {
     isEditMode?: boolean;
     isSelected?: boolean;
     onToggleSelect?: () => void;
+    /**
+     * Render as a row inside the screen's Subjects card rather than as a card
+     * of its own. `first` drops the top hairline.
+     */
+    asRow?: boolean;
+    first?: boolean;
 }
 
 /**
@@ -45,6 +51,8 @@ export default function SubjectCard({
     isEditMode,
     isSelected,
     onToggleSelect,
+    asRow,
+    first,
 }: SubjectCardProps) {
     const { colorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
@@ -89,18 +97,7 @@ export default function SubjectCard({
         hasSchedule ? 'scheduled' : 'no class times yet',
     ].filter(Boolean).join(', ');
 
-    return (
-        <Card
-            padding={0}
-            radius={Radius.xl}
-            onPress={handleCardPress}
-            accessibilityLabel={accessibilityLabel}
-            accessibilityHint={effectiveEditMode ? 'Toggles selection' : 'Opens this subject'}
-            style={{
-                marginBottom: 10,
-                borderColor: isSelected ? theme.primary : theme.cardBorder,
-            }}
-        >
+    const body = (
             <View style={{ flexDirection: 'row', alignItems: 'center', padding: 11, gap: 12 }}>
                 {/* ── The grade, as a tile ─────────────────────────────── */}
                 <View
@@ -186,6 +183,39 @@ export default function SubjectCard({
                     </TouchableOpacity>
                 ) : null}
             </View>
+    );
+
+    if (asRow) {
+        return (
+            <TouchableOpacity
+                onPress={handleCardPress}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={accessibilityLabel}
+                accessibilityHint={effectiveEditMode ? 'Toggles selection' : 'Opens this subject'}
+                style={{
+                    borderTopWidth: first ? 0 : 1, borderTopColor: theme.cardBorder,
+                    backgroundColor: isSelected ? tints.grades.fill : 'transparent',
+                }}
+            >
+                {body}
+            </TouchableOpacity>
+        );
+    }
+
+    return (
+        <Card
+            padding={0}
+            radius={Radius.xl}
+            onPress={handleCardPress}
+            accessibilityLabel={accessibilityLabel}
+            accessibilityHint={effectiveEditMode ? 'Toggles selection' : 'Opens this subject'}
+            style={{
+                marginBottom: 10,
+                borderColor: isSelected ? theme.primary : theme.cardBorder,
+            }}
+        >
+            {body}
         </Card>
     );
 }
