@@ -177,6 +177,23 @@ function ItemRow({
     );
 }
 
+const FIN_HAPPY = require('../../assets/images/happy.png');
+const FIN_THINKING = require('../../assets/images/FinSights.png');
+const FIN_CONFUSED = require('../../assets/images/confused.png');
+
+/** Width the outlook zone keeps clear for Fin. */
+const FIN_ROOM = 96;
+
+/** Fin's mood per outcome — the pose says it before the words do. */
+const FIN_POSE: Record<OutlookKind, any> = {
+    reached: FIN_HAPPY,
+    'on-course': FIN_THINKING,
+    'passed-only': FIN_THINKING,
+    'no-room': FIN_THINKING,
+    'pass-only': FIN_CONFUSED,
+    lost: FIN_CONFUSED,
+};
+
 const OUTLOOK_STYLE: Record<OutlookKind, { tint: 'attendance' | 'schedule' | 'tasks' | 'danger'; icon: keyof typeof Ionicons.glyphMap; title: string }> = {
     reached: { tint: 'attendance', icon: 'checkmark-circle', title: 'Target reached' },
     'on-course': { tint: 'schedule', icon: 'locate', title: 'Within reach' },
@@ -563,25 +580,25 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
         return (
             <Card padding={0} radius={Radius['2xl']} style={{ marginBottom: 20, overflow: 'hidden' }}>
                 {/* ── Fin's read, in the outcome's tint ── */}
-                <View style={{ padding: 14, backgroundColor: tint.fill, borderBottomWidth: 1, borderBottomColor: tint.line }}>
+                <View style={{
+                    padding: 14, paddingRight: FIN_ROOM, overflow: 'hidden',
+                    backgroundColor: tint.fill, borderBottomWidth: 1, borderBottomColor: tint.line,
+                }}>
+                    {/* Fin stands on the zone's lower edge with his tail tucked
+                        behind the card body, so he reads as part of the card
+                        rather than an avatar pinned to it. Drawn first so the
+                        content sits above him; the zone reserves FIN_ROOM for
+                        him on the right. */}
+                    <TouchableOpacity
+                        onPress={() => setFinOpen(true)}
+                        activeOpacity={0.85}
+                        accessibilityRole="button"
+                        accessibilityLabel="Open FinSights"
+                        style={{ position: 'absolute', right: -8, bottom: -30, width: 128, height: 128 }}
+                    >
+                        <Image source={FIN_POSE[outlook.kind]} style={{ width: 128, height: 128 }} resizeMode="contain" />
+                    </TouchableOpacity>
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <TouchableOpacity
-                            onPress={() => setFinOpen(true)}
-                            activeOpacity={0.8}
-                            accessibilityRole="button"
-                            accessibilityLabel="Open FinSights"
-                            style={{
-                                width: 46, height: 46, borderRadius: 16, marginRight: 12, overflow: 'hidden',
-                                alignItems: 'center', justifyContent: 'center',
-                                backgroundColor: theme.surface, borderWidth: 1, borderColor: tint.line,
-                            }}
-                        >
-                            <Image
-                                source={require('../../assets/images/FinSights.png')}
-                                style={{ width: 54, height: 54, transform: [{ translateY: 4 }] }}
-                                resizeMode="cover"
-                            />
-                        </TouchableOpacity>
                         <View style={{ flex: 1 }}>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
                                 <Ionicons name={style.icon} size={15} color={tint.ink} />

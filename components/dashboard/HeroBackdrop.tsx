@@ -139,7 +139,7 @@ export default function HeroBackdrop({ width, height, curve = 22, motif = 'bubbl
                 })
             ) : (
                 <>
-                    {/* Bubbles. Fin is a fish; a few faint circles are enough to say so
+                    {/* Bubbles. Fin is a dolphin; a few faint circles are enough to say so
                         without putting an illustration back at the top of the page. */}
                     <Circle cx={w * 0.88} cy={h * 0.3} r={34} fill="#ffffff" opacity={0.05} />
                     <Circle cx={w * 0.72} cy={h * 0.56} r={13} fill="#ffffff" opacity={0.055} />
