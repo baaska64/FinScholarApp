@@ -1,38 +1,40 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
-  Modal,
   TextInput,
-  Animated,
-  Pressable,
   Dimensions,
   ActivityIndicator,
   Image,
   Share,
-  Platform,
+  PixelRatio,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from 'nativewind';
 import { useFocusEffect, router } from 'expo-router';
+import { setStatusBarStyle } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { SyncService } from '@/services/SyncService';
 import { AlertService } from '@/components/CustomAlert';
 import { useSemesterContext } from '@/components/SemesterContext';
-import { getTheme, getTints, Radius } from '@/constants/Theme';
+import { getTheme, getTints, getBrand, Radius } from '@/constants/Theme';
 import { ListSkeleton } from '@/components/ui/LoadingSkeleton';
 import ProgressBar from '@/components/ui/ProgressBar';
 import Card from '@/components/ui/Card';
 import AnimatedPressable from '@/components/ui/AnimatedPressable';
 import KeyboardSheet from '@/components/ui/KeyboardSheet';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import SectionHeader from '@/components/ui/SectionHeader';
+import HeroBackdrop from '@/components/dashboard/HeroBackdrop';
 import SpotlightTarget from '@/components/spotlight/SpotlightTarget';
 import { useScreenTour } from '@/components/spotlight/useScreenTour';
 import { SPOTLIGHT_IDS, TOUR_KEYS, STUDY_TOUR } from '@/constants/tours';
+import { useTabBarHeight } from '@/components/CustomTabBar';
+import { triggerHaptic } from '@/components/tasks/utils';
 
 import {
   Flashcard,
@@ -44,198 +46,162 @@ import {
   FlashcardStats,
   QuizQuestion,
   MatchCard,
-  ExamScheduleSlot,
   StudyViewMode,
+  NoteKind,
+  Rating,
 } from '@/components/study/types';
 import {
   DEFAULT_SR_SETTINGS,
   DECK_COLORS,
   DECK_ICONS,
-  STATUS_CONFIG,
   generateId,
-  applyRating,
-  makeNewCard,
   buildDeckTree,
   getNodeStats,
   collectCards,
   collectDecksFromNode,
-  parseImport,
-  computeExamPlan,
-  getCardStatus,
-  getNextDueText,
   getDeckThematicIcon,
   updateStudyStats,
-  calculateLevel,
+  recordAnswer,
+  trueRetention,
+  isStreakLive,
+  getLocalDateString,
+  parseImportNotes,
+  // scheduler
+  answerCard,
+  AnswerResult,
+  buildQueue,
+  pickNext,
+  sessionRemaining,
+  burySiblings,
+  bumpDaily,
+  cardState,
+  deckDueCounts,
+  sumCounts,
+  DueCounts,
+  QueueRef,
+  SessionMode,
+  studyDayKey,
+  studyDayStart,
+  previewIntervals,
+  examDaysLeft,
+  planExamReschedule,
+  examPullCount,
+  composition,
+  retrievability,
+  formatInterval,
+  noteIdOf,
+  isSidelined,
+  // notes
+  NoteDraft,
+  NoteRow,
+  buildNoteCards,
+  replaceNote,
+  groupNotes,
+  cardFaces,
+  cardQA,
+  clozeOverview,
+  clozePlain,
+  kindOf,
+  kindLabel,
+  NOTE_KINDS,
+  SAMPLE_NOTES,
 } from '@/components/study';
-import StudyDashboardStats from '@/components/study/StudyDashboardStats';
-import StudyModesStrip from '@/components/study/StudyModesStrip';
-import DeckTreeItem from '@/components/study/DeckTreeItem';
-import { useTabBarHeight } from '@/components/CustomTabBar';
+import { queueTints, queueOnBand } from '@/components/study/studyTheme';
+import DeckList from '@/components/study/DeckList';
+import ReviewCard from '@/components/study/ReviewCard';
+import AnswerBar from '@/components/study/AnswerBar';
+import NoteEditorSheet from '@/components/study/NoteEditorSheet';
+import StatsSheet from '@/components/study/StatsSheet';
+import FaceText from '@/components/study/FaceText';
 
 export { Flashcard, FlashcardDeck, SessionCard, DeckNode, NodeStats, SRSettings, FlashcardStats };
 export { buildDeckTree, getNodeStats, collectCards, DEFAULT_SR_SETTINGS };
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const CARD_HEIGHT = 260;
+const FONT_SCALE = PixelRatio.getFontScale();
 
 /** Page gutter, matched to the dashboard and schedule tabs. */
 const GUTTER = 14;
+/**
+ * The brand band, sized like the dashboard's so the two headers read as one
+ * family. It grows with the font scale because the stat card is lifted into
+ * it by a fixed amount — at a large text size a fixed band would run the
+ * due-count straight into the card.
+ */
+const HERO_H = Math.round(176 * Math.max(1, Math.min(FONT_SCALE, 1.4)));
+const HERO_CURVE = 26;
+const STAT_LIFT = 48;
 
-// ─── FlipCard Component ───────────────────────────────────────────────────────
+type DetailFilter = 'all' | 'new' | 'learning' | 'due' | 'suspended' | 'flagged' | 'leech';
+type PracticeAction = 'quiz' | 'match' | 'exam' | 'custom';
 
-interface FlipCardProps {
-  front: string;
-  back: string;
-  isFlipped: boolean;
-  onFlip: () => void;
-  color: string;
-  isDark: boolean;
-  frontLabel?: string;
-  backLabel?: string;
+/**
+ * A running review. New and review cards are fixed in `queue` when it starts;
+ * learning cards are picked live, because their due times move with every
+ * answer — the reason this is not the flat shuffled array it used to be, where
+ * a card failed twice sat in the list twice and "card 7 of 20" was a lie.
+ */
+interface Session {
+  deckIds: string[] | null;
+  title: string;
+  color: string | null;
+  mode: SessionMode;
+  queue: QueueRef[];
+  pos: number;
+  current: QueueRef | null;
+  answered: number;
+  again: number;
+  graduated: number;
+  startedAt: number;
+  shownAt: number;
+  flip: boolean;
+  done: boolean;
+  nextLearningAt: number | null;
+  xpBefore: number;
+  returnTo: 'decks' | 'detail';
 }
 
-function FlipCard({
-  front,
-  back,
-  isFlipped,
-  onFlip,
-  color,
-  isDark,
-  frontLabel = 'QUESTION',
-  backLabel = 'ANSWER',
-}: FlipCardProps) {
-  const theme = getTheme(isDark);
-  const flipAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.spring(flipAnim, {
-      toValue: isFlipped ? 1 : 0,
-      friction: 7,
-      tension: 50,
-      useNativeDriver: true,
-    }).start();
-  }, [isFlipped]);
-
-  const frontRotate = flipAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] });
-  const backRotate = flipAnim.interpolate({ inputRange: [0, 1], outputRange: ['-90deg', '0deg'] });
-  const frontOpacity = flipAnim.interpolate({ inputRange: [0, 0.49, 0.5, 1], outputRange: [1, 1, 0, 0] });
-  const backOpacity = flipAnim.interpolate({ inputRange: [0, 0.49, 0.5, 1], outputRange: [0, 0, 1, 1] });
-
-  const cardBase = {
-    width: SCREEN_WIDTH - 48,
-    height: CARD_HEIGHT,
-    borderRadius: Radius['3xl'],
-    borderWidth: 1.5,
-    // The deck colour doubles as the bottom lip, so the card reads as a solid
-    // object on the page rather than a sheet floating over it.
-    borderBottomWidth: 4,
-    borderBottomColor: color,
-    position: 'absolute' as const,
-    overflow: 'hidden' as const,
-  };
-
-  return (
-    <TouchableOpacity
-      onPress={onFlip}
-      activeOpacity={0.95}
-      style={{
-        width: SCREEN_WIDTH - 48,
-        height: CARD_HEIGHT,
-        alignSelf: 'center',
-        backgroundColor: 'transparent',
-      }}
-    >
-      <Animated.View
-        style={[
-          cardBase,
-          {
-            transform: [{ perspective: 1200 }, { rotateY: frontRotate }],
-            opacity: frontOpacity,
-            backgroundColor: theme.surface,
-            borderColor: color + '50',
-          },
-        ]}
-      >
-        <View style={{ height: 6, backgroundColor: color }} />
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 28 }}>
-          <Text
-            style={{
-              fontSize: 10,
-              fontFamily: 'Nunito_700Bold',
-              letterSpacing: 2.5,
-              color,
-              marginBottom: 16,
-              opacity: 0.85,
-            }}
-          >
-            {frontLabel}
-          </Text>
-          <Text
-            style={{
-              fontSize: 19,
-              fontFamily: 'Nunito_700Bold',
-              textAlign: 'center',
-              lineHeight: 28,
-              color: theme.text,
-            }}
-          >
-            {front}
-          </Text>
-        </View>
-        <View style={{ alignItems: 'center', paddingBottom: 18 }}>
-          <Text
-            style={{
-              color: theme.textTertiary,
-              fontSize: 11,
-              fontFamily: 'Nunito_400Regular',
-            }}
-          >
-            Tap to reveal {backLabel.toLowerCase()}
-          </Text>
-        </View>
-      </Animated.View>
-
-      <Animated.View
-        style={[
-          cardBase,
-          {
-            transform: [{ perspective: 1200 }, { rotateY: backRotate }],
-            opacity: backOpacity,
-            backgroundColor: color + (isDark ? '25' : '12'),
-            borderColor: color + '60',
-          },
-        ]}
-      >
-        <View style={{ height: 6, backgroundColor: color }} />
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 28 }}>
-          <Text
-            style={{
-              fontSize: 10,
-              fontFamily: 'Nunito_700Bold',
-              letterSpacing: 2.5,
-              color,
-              marginBottom: 16,
-              opacity: 0.85,
-            }}
-          >
-            {backLabel}
-          </Text>
-          <Text
-            style={{
-              fontSize: 19,
-              fontFamily: 'Nunito_700Bold',
-              textAlign: 'center',
-              lineHeight: 28,
-              color: theme.text,
-            }}
-          >
-            {back}
-          </Text>
-        </View>
-      </Animated.View>
-    </TouchableOpacity>
-  );
+interface UndoSnap {
+  decks: FlashcardDeck[];
+  stats: FlashcardStats;
+  session: Session;
 }
+
+function findNode(nodes: DeckNode[], path: string): DeckNode | null {
+  for (const n of nodes) {
+    if (n.fullPath === path) return n;
+    const f = findNode(Array.from(n.children.values()), path);
+    if (f) return f;
+  }
+  return null;
+}
+
+function allNodes(nodes: DeckNode[], depth = 0, out: { node: DeckNode; depth: number }[] = []) {
+  for (const n of nodes) {
+    out.push({ node: n, depth });
+    allNodes(Array.from(n.children.values()), depth + 1, out);
+  }
+  return out;
+}
+
+function relativeDue(ts: number, now: number): string {
+  const diff = ts - now;
+  if (diff <= 0) return 'now';
+  if (diff < 60 * 60 * 1000) return `in ${Math.max(1, Math.round(diff / 60000))} min`;
+  if (ts < studyDayStart(now, 1)) return `in ${Math.round(diff / 3600000)}h`;
+  if (ts < studyDayStart(now, 2)) return 'tomorrow';
+  const days = Math.round((studyDayStart(ts) - studyDayStart(now)) / 86400000);
+  return `in ${days} days`;
+}
+
+const shuffle = <T,>(a: T[]) => {
+  const arr = [...a];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+};
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
@@ -244,126 +210,19 @@ export default function FlashcardsScreen() {
   const isDark = colorScheme === 'dark';
   const theme = getTheme(isDark);
   const tints = getTints(isDark);
+  const brand = getBrand(isDark);
+  const qt = queueTints(isDark);
   const insets = useSafeAreaInsets();
   // The tab bar floats over the screen, so every view here reserves its height.
   const tabBarHeight = useTabBarHeight();
   const { selectedYear, selectedSemester } = useSemesterContext();
   const [currentSubjects, setCurrentSubjects] = useState<any[]>([]);
 
-  // ── Data state
+  // ── Data
   const [decks, setDecks] = useState<FlashcardDeck[]>([]);
+  const decksRef = useRef<FlashcardDeck[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // ── View routing
-  const [view, setView] = useState<StudyViewMode>('decks');
-  const [activeDeck, setActiveDeck] = useState<FlashcardDeck | null>(null);
-  const [activeNode, setActiveNode] = useState<DeckNode | null>(null);
-
-  // First visit only: point at the create-deck button, once the deck list is up.
-  useScreenTour(TOUR_KEYS.study, STUDY_TOUR, !loading && view === 'decks');
-
-  // ── Search & Filter State
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<'all' | 'due' | string>('all');
-
-  // ── Study session
-  const [sessionCards, setSessionCards] = useState<SessionCard[]>([]);
-  const [cardIndex, setCardIndex] = useState(0);
-  const [isFlipped, setIsFlipped] = useState(false);
-  const [sessionDone, setSessionDone] = useState(false);
-  const [sessionStats, setSessionStats] = useState({ again: 0, hard: 0, good: 0, easy: 0, mastered: 0 });
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const [studyReversed, setStudyReversed] = useState(false);
-  /**
-   * One-step undo for the last rating. A mis-tap on "Again" used to be
-   * unrecoverable — it rewrote the card's interval, ease and due date with no
-   * way back. The snapshot holds everything the rating touched.
-   */
-  const [undoState, setUndoState] = useState<null | {
-    card: SessionCard;
-    cardIndex: number;
-    sessionCards: SessionCard[];
-    sessionStats: { again: number; hard: number; good: number; easy: number; mastered: number };
-    stats: FlashcardStats;
-  }>(null);
-
-  // ── Multi-select management
-  const [isSelectionMode, setIsSelectionMode] = useState(false);
-  const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(new Set());
-
-  // ── Live countdown
-  const [nextDueIn, setNextDueIn] = useState<string>('');
-  const [totalDueNow, setTotalDueNow] = useState(0);
-
-  // ── Detail view state
-  const [detailSearch, setDetailSearch] = useState('');
-  const [detailFilter, setDetailFilter] = useState<'all' | 'new' | 'learning' | 'due'>('all');
-
-  // ── Quiz state
-  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
-  const [quizIndex, setQuizIndex] = useState(0);
-  const [quizScore, setQuizScore] = useState(0);
-  const [quizSelected, setQuizSelected] = useState<string | null>(null);
-  const [quizDone, setQuizDone] = useState(false);
-  const [quizMissed, setQuizMissed] = useState<QuizQuestion[]>([]);
-
-  // ── Match state
-  const [matchCards, setMatchCards] = useState<MatchCard[]>([]);
-  const [matchRevealed, setMatchRevealed] = useState<string[]>([]);
-  const [matchMatched, setMatchMatched] = useState<Set<string>>(new Set());
-  const [matchMoves, setMatchMoves] = useState(0);
-  const [matchStartTime, setMatchStartTime] = useState(0);
-  const [matchDone, setMatchDone] = useState(false);
-  const [matchElapsed, setMatchElapsed] = useState(0);
-
-  // ── Exam Prep state
-  const [showExamModal, setShowExamModal] = useState(false);
-  const [examDate, setExamDate] = useState(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
-  const [examShowDatePicker, setExamShowDatePicker] = useState(false);
-  const [examReviewsPerDay, setExamReviewsPerDay] = useState(0); // 0 = auto
-  const [examPlan, setExamPlan] = useState<ExamScheduleSlot[] | null>(null);
-
-  // ── Move deck state
-  const [showMoveModal, setShowMoveModal] = useState(false);
-  const [moveTargetPath, setMoveTargetPath] = useState('');
-  const [movingNode, setMovingNode] = useState<DeckNode | null>(null);
-
-  // ── Modals
-  const [showAddDeckModal, setShowAddDeckModal] = useState(false);
-  const [showAddCardModal, setShowAddCardModal] = useState(false);
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [showCreateSheet, setShowCreateSheet] = useState(false);
-
-  // Deck actions. This replaced an eleven-button AlertService.alert — the
-  // CustomAlert stacks >2 buttons vertically with no scroll, so on a normal
-  // phone Export / Reset / Delete rendered below the bottom of the screen.
-  const [actionNode, setActionNode] = useState<DeckNode | null>(null);
-
-  // ── Form state
-  const [editingDeck, setEditingDeck] = useState<FlashcardDeck | null>(null);
-  const [editingCard, setEditingCard] = useState<Flashcard | null>(null);
-  const [deckForm, setDeckForm] = useState({
-    name: '',
-    subject: '',
-    color: DECK_COLORS[0],
-    icon: 'book-outline',
-  });
-  const [cardForm, setCardForm] = useState({ front: '', back: '' });
-
-  // ── Import state
-  const [importLoading, setImportLoading] = useState(false);
-  const [parsedImport, setParsedImport] = useState<{ front: string; back: string }[]>([]);
-  const [importFileName, setImportFileName] = useState('');
-  const [importText, setImportText] = useState('');
-  const [importSeparator, setImportSeparator] = useState<'comma' | 'semicolon' | 'pipe' | 'tab'>('comma');
-  const isRatingRef = useRef(false);
-
-  // ── Settings state. The in-screen settings sheet was removed: it was never
-  //    rendered (nothing set its visible flag) and `app/study-options.tsx` is
-  //    the real editor, which both header entry points already opened.
   const [srSettings, setSrSettings] = useState<SRSettings>(DEFAULT_SR_SETTINGS);
-
-  // ── Stats state
   const [flashcardStats, setFlashcardStats] = useState<FlashcardStats>({
     lastStudyDate: '',
     currentStreak: 0,
@@ -374,30 +233,105 @@ export default function FlashcardsScreen() {
     weeklyHistory: [],
   });
   const statsRef = useRef<FlashcardStats>(flashcardStats);
-  useEffect(() => {
-    statsRef.current = flashcardStats;
-  }, [flashcardStats]);
+  const [clock, setClock] = useState(Date.now());
 
-  const toggleNode = (path: string) => {
-    setExpandedNodes((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
+  // ── Routing
+  const [view, setView] = useState<StudyViewMode>('decks');
+  const [activePath, setActivePath] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
+
+  // First visit only: point at the create button, once the deck list is up.
+  useScreenTour(TOUR_KEYS.study, STUDY_TOUR, !loading && view === 'decks');
+
+  // ── Deck screen
+  const [detailSearch, setDetailSearch] = useState('');
+  const [detailFilter, setDetailFilter] = useState<DetailFilter>('all');
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedNotes, setSelectedNotes] = useState<Set<string>>(new Set());
+
+  // ── Review
+  const [session, setSession] = useState<Session | null>(null);
+  const [revealed, setRevealed] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [undo, setUndo] = useState<UndoSnap | null>(null);
+  const ratingRef = useRef(false);
+
+  // ── Practice test
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
+  const [quizIndex, setQuizIndex] = useState(0);
+  const [quizScore, setQuizScore] = useState(0);
+  const [quizSelected, setQuizSelected] = useState<string | null>(null);
+  const [quizDone, setQuizDone] = useState(false);
+  const [quizMissed, setQuizMissed] = useState<QuizQuestion[]>([]);
+  const [practicePath, setPracticePath] = useState<string | null>(null);
+
+  // ── Speed match
+  const [matchCards, setMatchCards] = useState<MatchCard[]>([]);
+  const [matchRevealed, setMatchRevealed] = useState<string[]>([]);
+  const [matchMatched, setMatchMatched] = useState<Set<string>>(new Set());
+  const [matchMoves, setMatchMoves] = useState(0);
+  const [matchStartTime, setMatchStartTime] = useState(0);
+  const [matchDone, setMatchDone] = useState(false);
+  const [matchElapsed, setMatchElapsed] = useState(0);
+
+  // ── Sheets
+  const [showCreateSheet, setShowCreateSheet] = useState(false);
+  // Deck actions. This replaced an eleven-button AlertService.alert — the
+  // CustomAlert stacks >2 buttons vertically with no scroll, so on a normal
+  // phone Export / Reset / Delete rendered below the bottom of the screen.
+  const [actionPath, setActionPath] = useState<string | null>(null);
+  const [showDeckForm, setShowDeckForm] = useState(false);
+  const [editingDeckId, setEditingDeckId] = useState<string | null>(null);
+  const [deckForm, setDeckForm] = useState({ name: '', subject: '', color: DECK_COLORS[0], icon: 'book-outline' });
+  const [noteEditor, setNoteEditor] = useState<{ visible: boolean; deckId: string | null; note: NoteRow | null }>({
+    visible: false,
+    deckId: null,
+    note: null,
+  });
+  const [lastKind, setLastKind] = useState<NoteKind>('basic');
+  const [lastDeckId, setLastDeckId] = useState<string | null>(null);
+  const [showImport, setShowImport] = useState(false);
+  const [importDeckId, setImportDeckId] = useState<string | null>(null);
+  const [importText, setImportText] = useState('');
+  const [importSeparator, setImportSeparator] = useState<'comma' | 'semicolon' | 'pipe' | 'tab'>('comma');
+  const [importKind, setImportKind] = useState<'basic' | 'reversed' | 'typein'>('basic');
+  const [importFileName, setImportFileName] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [parsedImport, setParsedImport] = useState<{ kind: NoteKind; front: string; back: string }[]>([]);
+  const [examPath, setExamPath] = useState<string | null>(null);
+  const [examDate, setExamDate] = useState(new Date(Date.now() + 7 * 86400000));
+  const [examShowPicker, setExamShowPicker] = useState(false);
+  const [movingDeckId, setMovingDeckId] = useState<string | null>(null);
+  const [moveTargetPath, setMoveTargetPath] = useState('');
+  const [customPath, setCustomPath] = useState<string | null | undefined>(undefined);
+  const [showStats, setShowStats] = useState(false);
+  const [showReviewMore, setShowReviewMore] = useState(false);
+  const [pickerAction, setPickerAction] = useState<PracticeAction | null>(null);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Data loading & saving
   // ─────────────────────────────────────────────────────────────────────────
 
+  /**
+   * Writes still in flight. `pushLocalChanges` fires the data-change listener
+   * on every save, and that listener reloads from storage — so without this a
+   * reload triggered by answer N could land after answer N+1 was made and
+   * quietly put the deck back the way it was before N+1.
+   */
+  const pendingWrites = useRef(0);
+  const writeChain = useRef<Promise<void>>(Promise.resolve());
+
   const loadDecks = useCallback(async () => {
+    if (pendingWrites.current > 0) return;
     try {
       const raw = await AsyncStorage.getItem('grade_ledger_v2_data');
       if (raw) {
         const ledger = JSON.parse(raw);
-        setDecks(ledger.flashcards?.decks || []);
-        if (ledger.flashcards?.settings) setSrSettings(ledger.flashcards.settings);
+        const list: FlashcardDeck[] = Array.isArray(ledger.flashcards?.decks) ? ledger.flashcards.decks : [];
+        decksRef.current = list;
+        setDecks(list);
+        if (ledger.flashcards?.settings) setSrSettings({ ...DEFAULT_SR_SETTINGS, ...ledger.flashcards.settings });
         if (ledger.flashcards?.stats) {
           setFlashcardStats(ledger.flashcards.stats);
           statsRef.current = ledger.flashcards.stats;
@@ -410,6 +344,7 @@ export default function FlashcardsScreen() {
           setCurrentSubjects([]);
         }
       } else {
+        decksRef.current = [];
         setDecks([]);
         setCurrentSubjects([]);
       }
@@ -417,56 +352,43 @@ export default function FlashcardsScreen() {
       console.error('Failed to load flashcards:', e);
     } finally {
       setLoading(false);
+      setClock(Date.now());
     }
   }, [selectedYear, selectedSemester]);
 
-  const saveDecks = async (newDecks: FlashcardDeck[]) => {
-    setDecks(newDecks);
-    if (activeDeck) {
-      const updatedDeck = newDecks.find((d) => d.id === activeDeck.id);
-      if (updatedDeck) setActiveDeck(updatedDeck);
+  /**
+   * Updates state at once and writes in the background, one write at a time,
+   * so the review never waits on storage (or on the widget re-render every
+   * save triggers) between cards.
+   */
+  const persist = useCallback((nextDecks?: FlashcardDeck[] | null, nextStats?: FlashcardStats | null) => {
+    if (nextDecks) {
+      decksRef.current = nextDecks;
+      setDecks(nextDecks);
     }
-    if (activeNode) {
-      const newTree = buildDeckTree(newDecks);
-      const findNode = (nodes: DeckNode[], path: string, deckId?: string): DeckNode | null => {
-        for (const n of nodes) {
-          if (deckId && n.deck?.id === deckId) return n;
-          if (n.fullPath === path) return n;
-          const found = findNode(Array.from(n.children.values()), path, deckId);
-          if (found) return found;
-        }
-        return null;
-      };
-      const updatedNode = findNode(newTree, activeNode.fullPath, activeDeck?.id);
-      if (updatedNode) {
-        setActiveNode(updatedNode);
-        if (updatedNode.deck) setActiveDeck(updatedNode.deck);
-      }
+    if (nextStats) {
+      statsRef.current = nextStats;
+      setFlashcardStats(nextStats);
     }
-    try {
-      const raw = await AsyncStorage.getItem('grade_ledger_v2_data');
-      const ledger = raw ? JSON.parse(raw) : { settings: {}, years: [] };
-      const currentStats = statsRef.current || flashcardStats;
-      ledger.flashcards = { decks: newDecks, settings: srSettings, stats: currentStats };
-      await SyncService.pushLocalChanges(ledger);
-    } catch (e) {
-      console.error('Failed to save flashcards:', e);
-    }
-  };
-
-  const saveStats = async (newStats: FlashcardStats) => {
-    statsRef.current = newStats;
-    setFlashcardStats(newStats);
-    try {
-      const raw = await AsyncStorage.getItem('grade_ledger_v2_data');
-      const ledger = raw ? JSON.parse(raw) : { settings: {}, years: [] };
-      if (!ledger.flashcards) ledger.flashcards = { decks: decks, settings: srSettings };
-      ledger.flashcards.stats = newStats;
-      await SyncService.pushLocalChanges(ledger);
-    } catch (e) {
-      console.error('Failed to save flashcard stats:', e);
-    }
-  };
+    setClock(Date.now());
+    pendingWrites.current += 1;
+    writeChain.current = writeChain.current
+      .then(async () => {
+        const raw = await AsyncStorage.getItem('grade_ledger_v2_data');
+        const ledger = raw ? JSON.parse(raw) : { settings: {}, years: [] };
+        ledger.flashcards = {
+          ...(ledger.flashcards || {}),
+          decks: decksRef.current,
+          settings: ledger.flashcards?.settings || srSettings,
+          stats: statsRef.current,
+        };
+        await SyncService.pushLocalChanges(ledger);
+      })
+      .catch((e) => console.error('Failed to save flashcards:', e))
+      .finally(() => {
+        pendingWrites.current = Math.max(0, pendingWrites.current - 1);
+      });
+  }, [srSettings]);
 
   useFocusEffect(
     useCallback(() => {
@@ -481,145 +403,176 @@ export default function FlashcardsScreen() {
     return () => unsub();
   }, [loadDecks]);
 
-  // Live countdown timer
+  // Counts depend on the clock: learning cards and reviews come due on their own.
   useEffect(() => {
-    const tick = () => {
-      const now = Date.now();
-      let dueCount = 0;
-      let soonestFutureDue = Infinity;
-      for (const deck of decks) {
-        if (!deck || !Array.isArray(deck.cards)) continue;
-        for (const card of deck.cards) {
-          if (!card) continue;
-          if (card.nextDue <= now) dueCount++;
-          else if (card.nextDue < soonestFutureDue) soonestFutureDue = card.nextDue;
-        }
-      }
-      setTotalDueNow(dueCount);
-      if (dueCount > 0) {
-        setNextDueIn('');
-      } else if (soonestFutureDue < Infinity) {
-        const diffMs = soonestFutureDue - now;
-        const totalSec = Math.max(0, Math.floor(diffMs / 1000));
-        if (totalSec <= 0) {
-          setNextDueIn('');
-          setTotalDueNow((prev) => prev + 1);
-        } else if (totalSec < 60) {
-          setNextDueIn(`${totalSec}s`);
-        } else if (totalSec < 3600) {
-          const m = Math.floor(totalSec / 60);
-          setNextDueIn(`${m}m ${totalSec % 60}s`);
-        } else if (totalSec < 86400) {
-          const h = Math.floor(totalSec / 3600);
-          setNextDueIn(`${h}h ${Math.floor((totalSec % 3600) / 60)}m`);
-        } else {
-          setNextDueIn(`${Math.floor(totalSec / 86400)}d`);
-        }
-      } else {
-        setNextDueIn('');
-      }
-    };
-    tick();
-    const interval = setInterval(tick, 30000);
-    return () => clearInterval(interval);
-  }, [decks]);
+    const t = setInterval(() => setClock(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  // The band is azure, so the status bar icons go light while it is showing.
+  useFocusEffect(
+    useCallback(() => {
+      setStatusBarStyle(view === 'decks' ? 'light' : isDark ? 'light' : 'dark', true);
+      return () => setStatusBarStyle(isDark ? 'light' : 'dark', true);
+    }, [isDark, view])
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Deck actions
+  // Derived
   // ─────────────────────────────────────────────────────────────────────────
+
+  const tree = useMemo(() => buildDeckTree(decks), [decks]);
+
+  const { countsByPath, totalByPath } = useMemo(() => {
+    const counts = new Map<string, DueCounts>();
+    const totals = new Map<string, number>();
+    const walk = (n: DeckNode): [DueCounts, number] => {
+      let c: DueCounts = n.deck ? deckDueCounts(n.deck, srSettings, clock) : { new: 0, learn: 0, review: 0 };
+      let t = n.deck?.cards?.length || 0;
+      for (const child of n.children.values()) {
+        const [cc, ct] = walk(child);
+        c = sumCounts([c, cc]);
+        t += ct;
+      }
+      counts.set(n.fullPath, c);
+      totals.set(n.fullPath, t);
+      return [c, t];
+    };
+    tree.forEach(walk);
+    return { countsByPath: counts, totalByPath: totals };
+  }, [tree, srSettings, clock]);
+
+  const zero: DueCounts = { new: 0, learn: 0, review: 0 };
+  const countsFor = (n: DeckNode) => countsByPath.get(n.fullPath) || zero;
+  const totalFor = (n: DeckNode) => totalByPath.get(n.fullPath) || 0;
+  const allCounts = sumCounts(tree.map(countsFor));
+  const allDue = allCounts.new + allCounts.learn + allCounts.review;
+  const totalCards = decks.reduce((s, d) => s + (Array.isArray(d?.cards) ? d.cards.length : 0), 0);
+
+  const activeNode = activePath ? findNode(tree, activePath) : null;
+  const deckById = (id: string | null | undefined) => decksRef.current.find((d) => d && d.id === id) || null;
+
+  const examLabelFor = (n: DeckNode) => {
+    const list = collectDecksFromNode(n);
+    let best: number | null = null;
+    for (const d of list) {
+      const left = examDaysLeft(d, clock);
+      if (left !== null && (best === null || left < best)) best = left;
+    }
+    if (best === null) return null;
+    return best === 0 ? 'Exam today' : `Exam in ${best}d`;
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Decks
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const openNode = (n: DeckNode) => {
+    setActivePath(n.fullPath);
+    setDetailSearch('');
+    setDetailFilter('all');
+    setIsSelectionMode(false);
+    setSelectedNotes(new Set());
+    setView('detail');
+  };
+
+  const toggleNode = (path: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
 
   const openAddDeck = (prefillName?: string) => {
-    setEditingDeck(null);
-    setDeckForm({
-      name: prefillName || '',
-      subject: '',
-      color: DECK_COLORS[0],
-      icon: 'book-outline',
-    });
-    setShowAddDeckModal(true);
+    setEditingDeckId(null);
+    setDeckForm({ name: prefillName || '', subject: '', color: DECK_COLORS[0], icon: 'book-outline' });
     setShowCreateSheet(false);
+    setShowDeckForm(true);
   };
 
   const openEditDeck = (deck: FlashcardDeck) => {
-    setEditingDeck(deck);
+    setEditingDeckId(deck.id);
     setDeckForm({
       name: deck.name,
       subject: deck.subject,
       color: deck.color,
       icon: deck.icon || getDeckThematicIcon(deck.subject, deck.name),
     });
-    setShowAddDeckModal(true);
+    setShowDeckForm(true);
   };
 
-  const handleSaveDeck = async () => {
+  const handleSaveDeck = () => {
     if (!deckForm.name.trim()) {
       AlertService.alert('Missing Name', 'Please enter a deck name.');
       return;
     }
-    const nd = [...decks];
-    if (editingDeck) {
-      const idx = nd.findIndex((d) => d.id === editingDeck.id);
-      if (idx >= 0) {
-        nd[idx] = {
-          ...nd[idx],
+    const d = decksRef.current;
+    let nd: FlashcardDeck[];
+    if (editingDeckId) {
+      nd = d.map((x) =>
+        x.id === editingDeckId
+          ? { ...x, name: deckForm.name.trim(), subject: deckForm.subject.trim(), color: deckForm.color, icon: deckForm.icon }
+          : x
+      );
+    } else {
+      nd = [
+        ...d,
+        {
+          id: generateId(),
           name: deckForm.name.trim(),
           subject: deckForm.subject.trim(),
           color: deckForm.color,
           icon: deckForm.icon,
-        };
-        if (activeDeck?.id === editingDeck.id) setActiveDeck(nd[idx]);
-      }
-    } else {
-      nd.push({
-        id: generateId(),
-        name: deckForm.name.trim(),
-        subject: deckForm.subject.trim(),
-        color: deckForm.color,
-        icon: deckForm.icon,
-        createdAt: Date.now(),
-        cards: [],
-      });
+          createdAt: Date.now(),
+          cards: [],
+        },
+      ];
     }
-    await saveDecks(nd);
-    setShowAddDeckModal(false);
-    setEditingDeck(null);
+    persist(nd);
+    setShowDeckForm(false);
+    setEditingDeckId(null);
   };
 
-  const handleDeleteDeck = (deck: FlashcardDeck) => {
-    AlertService.alert('Delete Deck', `Delete "${deck.name}" and all ${deck.cards.length} cards?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await saveDecks(decks.filter((d) => d.id !== deck.id));
-          if (activeDeck?.id === deck.id) {
-            setActiveDeck(null);
-            setActiveNode(null);
-            setView('decks');
-          }
-        },
-      },
-    ]);
+  const addSampleDeck = () => {
+    const now = Date.now();
+    let cards: Flashcard[] = [];
+    SAMPLE_NOTES.forEach((draft, i) => {
+      cards = cards.concat(buildNoteCards(draft, [], generateId, now + i));
+    });
+    const deck: FlashcardDeck = {
+      id: generateId(),
+      name: 'Getting started',
+      subject: '',
+      color: DECK_COLORS[1],
+      icon: 'sparkles-outline',
+      createdAt: now,
+      cards,
+    };
+    persist([...decksRef.current, deck]);
+    triggerHaptic('success');
   };
 
   const handleDeleteNode = (node: DeckNode) => {
-    const decksToDelete = collectDecksFromNode(node);
-    const totalCards = decksToDelete.reduce((sum, d) => sum + (d?.cards?.length || 0), 0);
+    const list = collectDecksFromNode(node);
+    const cardCount = list.reduce((s, d) => s + (d?.cards?.length || 0), 0);
+    const isDeck = node.deck && node.children.size === 0;
     AlertService.alert(
-      'Delete Folder',
-      `Delete "${node.name}" including ${decksToDelete.length} deck(s) and ${totalCards} cards?`,
+      isDeck ? 'Delete deck' : 'Delete folder',
+      isDeck
+        ? `Delete "${node.name}" and its ${cardCount} card${cardCount !== 1 ? 's' : ''}?`
+        : `Delete "${node.name}" including ${list.length} deck(s) and ${cardCount} cards?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete All',
+          text: 'Delete',
           style: 'destructive',
-          onPress: async () => {
-            const idsToDelete = new Set(decksToDelete.map((d) => d.id));
-            await saveDecks(decks.filter((d) => !idsToDelete.has(d.id)));
-            if (activeNode?.fullPath.startsWith(node.fullPath)) {
-              setActiveDeck(null);
-              setActiveNode(null);
+          onPress: () => {
+            const ids = new Set(list.map((d) => d.id));
+            persist(decksRef.current.filter((d) => !ids.has(d.id)));
+            if (activePath && activePath.startsWith(node.fullPath)) {
+              setActivePath(null);
               setView('decks');
             }
           },
@@ -629,459 +582,680 @@ export default function FlashcardsScreen() {
   };
 
   const handleResetProgress = (node: DeckNode) => {
-    AlertService.alert('Reset Progress', `Reset all learning progress for "${node.name}"?`, [
+    AlertService.alert('Reset progress', `Forget all learning progress for "${node.name}"? The cards stay; they start over as new.`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Reset',
         style: 'destructive',
-        onPress: async () => {
-          const decksToReset = collectDecksFromNode(node);
-          const idsToReset = new Set(decksToReset.map((d) => d.id));
-          const nd = decks.map((d) => {
-            if (idsToReset.has(d.id)) {
-              return {
-                ...d,
-                cards: Array.isArray(d.cards) ? d.cards.map((c) => ({
-                  ...c,
-                  interval: 0,
-                  easeFactor: 2.5,
-                  nextDue: Date.now(),
-                  reviewCount: 0,
-                  stepIndex: 0,
-                })) : [],
-              };
-            }
-            return d;
-          });
-          await saveDecks(nd);
-          if (activeDeck && idsToReset.has(activeDeck.id)) {
-            const updatedDeck = nd.find((d) => d.id === activeDeck.id);
-            if (updatedDeck) setActiveDeck(updatedDeck);
-          }
+        onPress: () => {
+          const ids = new Set(collectDecksFromNode(node).map((d) => d.id));
+          const now = Date.now();
+          persist(
+            decksRef.current.map((d) =>
+              ids.has(d.id)
+                ? {
+                    ...d,
+                    daily: undefined,
+                    cards: (d.cards || []).map((c) => {
+                      const {
+                        stability: _s,
+                        difficulty: _d,
+                        lastReview: _l,
+                        introducedOn: _i,
+                        buriedUntil: _b,
+                        leech: _le,
+                        ...rest
+                      } = c;
+                      return { ...rest, state: 'new', interval: 0, easeFactor: 2.5, nextDue: now, reviewCount: 0, step: 0, stepIndex: 0, lapses: 0 };
+                    }),
+                  }
+                : d
+            )
+          );
         },
       },
     ]);
   };
 
   const openAddSubNode = (node: DeckNode) => {
-    setEditingDeck(null);
-    setDeckForm({
-      name: node.fullPath + '::',
-      subject: '',
-      color: DECK_COLORS[0],
-      icon: 'book-outline',
-    });
-    setShowAddDeckModal(true);
+    setEditingDeckId(null);
+    setDeckForm({ name: node.fullPath + '::', subject: '', color: node.deck?.color || DECK_COLORS[0], icon: 'book-outline' });
+    setShowDeckForm(true);
   };
 
   const handleDuplicateDeck = (deck: FlashcardDeck) => {
-    const nd = [...decks];
+    const noteMap = new Map<string, string>();
     const copy: FlashcardDeck = {
       ...deck,
       id: generateId(),
       name: deck.name + ' (copy)',
       createdAt: Date.now(),
-      cards: Array.isArray(deck.cards) ? deck.cards.map((c) => ({ ...c, id: generateId() })) : [],
+      daily: undefined,
+      examDate: undefined,
+      cards: (deck.cards || []).map((c) => {
+        const oldNote = noteIdOf(c);
+        if (!noteMap.has(oldNote)) noteMap.set(oldNote, generateId());
+        return { ...c, id: generateId(), noteId: noteMap.get(oldNote) };
+      }),
     };
-    nd.push(copy);
-    saveDecks(nd);
-    AlertService.alert('Duplicated!', `Created "${copy.name}" with ${copy.cards.length} cards.`);
+    persist([...decksRef.current, copy]);
+    AlertService.alert('Duplicated', `Created "${copy.name}" with ${copy.cards.length} cards.`);
   };
 
   const handleMoveDeck = (node: DeckNode) => {
-    setMovingNode(node);
+    if (!node.deck) return;
+    setMovingDeckId(node.deck.id);
     const parts = node.fullPath.split('::');
     parts.pop();
     setMoveTargetPath(parts.length > 0 ? parts.join('::') + '::' : '');
-    setShowMoveModal(true);
   };
 
-  const confirmMoveDeck = async () => {
-    if (!movingNode || !movingNode.deck) {
-      setShowMoveModal(false);
+  const confirmMoveDeck = () => {
+    const deck = deckById(movingDeckId);
+    if (!deck) {
+      setMovingDeckId(null);
       return;
     }
-    const deck = movingNode.deck;
-    const targetPrefix = moveTargetPath.trim();
-    const lastSegment = movingNode.name;
-    const newFullPath = targetPrefix ? targetPrefix + lastSegment : lastSegment;
-    const pathParts = newFullPath.split('::').filter(Boolean);
-    let newSubject = '';
-    let newName = lastSegment;
-    if (pathParts.length > 1) {
-      newName = pathParts[pathParts.length - 1];
-      newSubject = pathParts.slice(0, -1).join('::');
-    }
-    const nd = decks.map((d) => (d.id === deck.id ? { ...d, name: newName, subject: newSubject } : d));
-    await saveDecks(nd);
-    setShowMoveModal(false);
-    setMovingNode(null);
-
-    const newTree = buildDeckTree(nd);
-    const findNode = (nodes: DeckNode[], deckId: string): DeckNode | null => {
-      for (const n of nodes) {
-        if (n.deck?.id === deckId) return n;
-        const found = findNode(Array.from(n.children.values()), deckId);
-        if (found) return found;
-      }
-      return null;
-    };
-    const updatedNode = findNode(newTree, deck.id);
-    if (updatedNode) {
-      setActiveNode(updatedNode);
-      setActiveDeck(updatedNode.deck);
-    }
+    const node = allNodes(tree).find((x) => x.node.deck?.id === deck.id)?.node;
+    const lastSegment = node?.name || deck.name.split('::').pop() || deck.name;
+    const target = moveTargetPath.trim();
+    const parts = (target ? target + lastSegment : lastSegment).split('::').filter(Boolean);
+    const newName = parts[parts.length - 1] || lastSegment;
+    const newSubject = parts.length > 1 ? parts.slice(0, -1).join('::') : '';
+    const nd = decksRef.current.map((d) => (d.id === deck.id ? { ...d, name: newName, subject: newSubject } : d));
+    persist(nd);
+    setMovingDeckId(null);
+    const moved = allNodes(buildDeckTree(nd)).find((x) => x.node.deck?.id === deck.id)?.node;
+    if (moved && view === 'detail') setActivePath(moved.fullPath);
   };
 
   const handleExportDeck = async (node: DeckNode) => {
-    const allCards = collectCards(node);
-    if (allCards.length === 0) {
-      AlertService.alert('No Cards', 'There are no cards to export in this deck or folder.');
+    const list = collectDecksFromNode(node);
+    const notes = list.flatMap((d) => groupNotes(d.cards || []));
+    if (notes.length === 0) {
+      AlertService.alert('No cards', 'There are no cards to export in this deck or folder.');
       return;
     }
-    const header = `# FinScholar Flashcard Export: ${node.name}\n# Format: Front, Back\n`;
-    const rows = allCards.map((c) => {
-      const escapeCsv = (str: string) => {
-        const text = (str || '').replace(/\r?\n/g, ' ');
-        if (text.includes(',') || text.includes('"') || text.includes(';')) {
-          return `"${text.replace(/"/g, '""')}"`;
-        }
-        return text;
-      };
-      return `${escapeCsv(c.front)}, ${escapeCsv(c.back)}`;
-    });
-    const content = header + rows.join('\n');
+    const esc = (str: string) => {
+      const text = (str || '').replace(/\r?\n/g, ' ');
+      return text.includes(',') || text.includes('"') || text.includes(';') ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+    const header = `# FinScholar export: ${node.name}\n# Format: Front, Back — cloze notes are exported as Text, Extra\n`;
+    const rows = notes.map((n) => `${esc(n.front)}, ${esc(n.back)}`);
     try {
-      await Share.share({
-        title: `${node.name} Flashcards`,
-        message: content,
-      });
-    } catch (e: any) {
+      await Share.share({ title: `${node.name} flashcards`, message: header + rows.join('\n') });
+    } catch (e) {
       console.error('Deck export error:', e);
     }
   };
 
-  const showDeckActions = (node: DeckNode) => {
-    setActionNode(node);
-  };
-
   // ─────────────────────────────────────────────────────────────────────────
-  // Exam Prep Scheduling
+  // Notes
   // ─────────────────────────────────────────────────────────────────────────
 
-  const applyExamSchedule = async () => {
-    if (!activeNode || !examPlan) return;
-    const allCards = collectCards(activeNode);
-    if (allCards.length === 0) return;
-
-    const now = Date.now();
-    const firstGapDays = examPlan.length > 1 ? examPlan[1].day - examPlan[0].day : 1;
-    const nd = decks.map((d) => {
-      const nodeDecks = collectDecksFromNode(activeNode);
-      const nodeDeckIds = new Set(nodeDecks.map((dd) => dd.id));
-      if (!nodeDeckIds.has(d.id)) return d;
-      return {
-        ...d,
-        cards: Array.isArray(d.cards) ? d.cards.map((c) => ({
-          ...c,
-          nextDue: now + examPlan[0].day * 24 * 60 * 60 * 1000,
-          interval: Math.max(1, Math.round(firstGapDays)),
-          easeFactor: 2.5,
-          reviewCount: c.reviewCount,
-          stepIndex: 0,
-        })) : [],
-      };
-    });
-    await saveDecks(nd);
-    setShowExamModal(false);
-    setExamPlan(null);
-    AlertService.alert(
-      'Exam Prep Active!',
-      `Scheduled ${allCards.length} cards across ${examPlan.length} review sessions before your exam.`
-    );
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Card actions
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const openAddCard = () => {
-    setEditingCard(null);
-    setCardForm({ front: '', back: '' });
-    setShowAddCardModal(true);
-  };
-
-  const handleSaveCard = async (keepOpen = false) => {
-    if (!cardForm.front.trim() || !cardForm.back.trim()) {
-      AlertService.alert('Missing Fields', 'Please fill in both the question and answer.');
+  const openAddNote = (deckId: string | null) => {
+    const remembered = lastDeckId && deckById(lastDeckId) ? lastDeckId : null;
+    const target =
+      deckId || activeNode?.deck?.id || (activeNode ? collectDecksFromNode(activeNode)[0]?.id : null) || remembered || decksRef.current[0]?.id || null;
+    if (!target) {
+      openAddDeck();
       return;
     }
-    const targetDeck = activeDeck || (editingCard ? decks.find((d) => Array.isArray(d.cards) && d.cards.some((c) => c.id === editingCard.id)) : null);
-    if (!targetDeck) return;
-    const nd = [...decks];
-    const di = nd.findIndex((d) => d.id === targetDeck.id);
-    if (di < 0) return;
-    if (!Array.isArray(nd[di].cards)) nd[di].cards = [];
-    if (editingCard) {
-      nd[di].cards = nd[di].cards.map((c) =>
-        c.id === editingCard.id ? { ...c, front: cardForm.front.trim(), back: cardForm.back.trim() } : c
-      );
-    } else {
-      nd[di].cards.push(makeNewCard(cardForm.front, cardForm.back));
-    }
-    await saveDecks(nd);
-    if (activeDeck?.id === targetDeck.id) setActiveDeck(nd[di]);
-    // A card edited from inside a session has to change in the live queue as
-    // well, or the session keeps showing the text you just fixed.
-    if (editingCard) {
-      setSessionCards((prev) =>
-        prev.map((sc) =>
-          sc.id === editingCard.id ? { ...sc, front: cardForm.front.trim(), back: cardForm.back.trim() } : sc
-        )
-      );
-    }
-    // "Save & add another" keeps the sheet up so a study set can be typed in
-    // one sitting instead of reopening the sheet per card.
-    if (!keepOpen || editingCard) setShowAddCardModal(false);
-    setEditingCard(null);
-    setCardForm({ front: '', back: '' });
+    setNoteEditor({ visible: true, deckId: target, note: null });
   };
 
-  const handleDeleteCard = (card: Flashcard) => {
-    const targetDeck = activeDeck || decks.find((d) => Array.isArray(d.cards) && d.cards.some((c) => c.id === card.id));
-    if (!targetDeck) return;
-    AlertService.alert('Delete Card', 'Remove this card from the deck?', [
+  const noteFor = (deckId: string, noteId: string): NoteRow | null => {
+    const deck = deckById(deckId);
+    return deck ? groupNotes(deck.cards || []).find((n) => n.noteId === noteId) || null : null;
+  };
+
+  const openEditNote = (deckId: string, noteId: string) => {
+    const note = noteFor(deckId, noteId);
+    if (note) setNoteEditor({ visible: true, deckId, note });
+  };
+
+  const handleSaveNote = (draft: NoteDraft, deckId: string, keepOpen: boolean) => {
+    const d = decksRef.current;
+    const editing = noteEditor.note;
+    const sourceDeckId = editing ? noteEditor.deckId : deckId;
+    const deck = d.find((x) => x.id === sourceDeckId);
+    if (!deck) return;
+    const existing = editing ? (deck.cards || []).filter((c) => noteIdOf(c) === editing.noteId) : [];
+    const cards = buildNoteCards(draft, existing, generateId, Date.now());
+    const nd = d.map((x) =>
+      x.id === deck.id ? { ...x, cards: editing ? replaceNote(x.cards || [], editing.noteId, cards) : [...(x.cards || []), ...cards] } : x
+    );
+    persist(nd);
+    setLastKind(draft.kind);
+    if (!editing) setLastDeckId(deck.id);
+    if (editing) {
+      setNoteEditor((prev) => ({ ...prev, visible: false }));
+      // An edit can remove the card being reviewed (a deleted cloze number).
+      if (session?.current && !cards.some((c) => c.id === session.current!.cardId) && existing.some((c) => c.id === session.current!.cardId)) {
+        advanceSession(session, nd);
+      }
+    } else if (!keepOpen) {
+      setNoteEditor((prev) => ({ ...prev, visible: false }));
+    }
+  };
+
+  const handleDeleteNote = (note: NoteRow) => {
+    const deckId = noteEditor.deckId;
+    AlertService.alert('Delete note', note.cards.length > 1 ? `Delete this note and its ${note.cards.length} cards?` : 'Delete this card?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
-        onPress: async () => {
-          const nd = decks.map((d) =>
-            d.id === targetDeck.id
-              ? { ...d, cards: Array.isArray(d.cards) ? d.cards.filter((c) => c.id !== card.id) : [] }
-              : d
+        onPress: () => {
+          const nd = decksRef.current.map((d) =>
+            d.id === deckId ? { ...d, cards: (d.cards || []).filter((c) => noteIdOf(c) !== note.noteId) } : d
           );
-          await saveDecks(nd);
-          const updated = nd.find((d) => d.id === targetDeck.id);
-          if (updated && activeDeck?.id === targetDeck.id) {
-            setActiveDeck(updated);
-          }
+          persist(nd);
+          setNoteEditor((prev) => ({ ...prev, visible: false }));
+          if (session?.current && note.cards.some((c) => c.id === session.current!.cardId)) advanceSession(session, nd);
         },
       },
     ]);
+  };
+
+  /** Applies `fn` to every card of the selected notes under the open deck. */
+  const mapSelected = (fn: (c: Flashcard) => Flashcard | null) => {
+    if (!activeNode) return decksRef.current;
+    const ids = new Set(collectDecksFromNode(activeNode).map((d) => d.id));
+    return decksRef.current.map((d) => {
+      if (!ids.has(d.id)) return d;
+      const cards: Flashcard[] = [];
+      for (const c of d.cards || []) {
+        if (!selectedNotes.has(`${d.id}:${noteIdOf(c)}`)) {
+          cards.push(c);
+          continue;
+        }
+        const next = fn(c);
+        if (next) cards.push(next);
+      }
+      return { ...d, cards };
+    });
+  };
+
+  const endSelection = () => {
+    setIsSelectionMode(false);
+    setSelectedNotes(new Set());
   };
 
   const handleBulkDelete = () => {
-    if (selectedCardIds.size === 0) return;
-    AlertService.alert('Delete Cards', `Remove ${selectedCardIds.size} selected card(s)?`, [
+    if (selectedNotes.size === 0) return;
+    AlertService.alert('Delete notes', `Delete ${selectedNotes.size} selected note${selectedNotes.size !== 1 ? 's' : ''} and all their cards?`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
-        onPress: async () => {
-          const nd = decks.map((d) => ({
-            ...d,
-            cards: Array.isArray(d.cards) ? d.cards.filter((c) => !selectedCardIds.has(c.id)) : [],
-          }));
-          await saveDecks(nd);
-          if (activeDeck) {
-            const u = nd.find((d) => d.id === activeDeck.id);
-            if (u) setActiveDeck(u);
-          }
-          setSelectedCardIds(new Set());
-          setIsSelectionMode(false);
+        onPress: () => {
+          persist(mapSelected(() => null));
+          endSelection();
         },
       },
     ]);
   };
 
-  const handleBulkReverse = (onlySelected: boolean = false) => {
-    if (onlySelected && selectedCardIds.size === 0) return;
-    if (!onlySelected && !activeNode) return;
-    const title = onlySelected ? 'Reverse Selected' : 'Reverse Folder';
-    const msg = onlySelected
-      ? `Swap Front/Back for ${selectedCardIds.size} card(s)?`
-      : 'Swap Front/Back of all cards under this folder?';
-    AlertService.alert(title, msg, [
+  const handleBulkSuspend = (suspend: boolean) => {
+    persist(
+      mapSelected((c) => {
+        if (suspend) return { ...c, suspended: true };
+        const { suspended: _s, ...rest } = c;
+        return rest;
+      })
+    );
+    endSelection();
+  };
+
+  const handleBulkReverse = () => {
+    AlertService.alert('Swap sides', 'Swap the front and back of the selected notes? Cloze notes are left as they are.', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Reverse',
-        onPress: async () => {
-          let deckIdsToReverse = new Set<string>();
-          if (!onlySelected && activeNode) {
-            deckIdsToReverse = new Set(collectDecksFromNode(activeNode).map((d) => d.id));
-          }
-          const nd = decks.map((d) => ({
-            ...d,
-            cards: Array.isArray(d.cards) ? d.cards.map((c) => {
-              const shouldReverse = onlySelected ? selectedCardIds.has(c.id) : deckIdsToReverse.has(d.id);
-              if (shouldReverse) return { ...c, front: c.back, back: c.front };
-              return c;
-            }) : [],
-          }));
-          await saveDecks(nd);
-          if (onlySelected) {
-            setSelectedCardIds(new Set());
-            setIsSelectionMode(false);
-          }
+        text: 'Swap',
+        onPress: () => {
+          persist(mapSelected((c) => (kindOf(c) === 'cloze' ? c : { ...c, front: c.back, back: c.front })));
+          endSelection();
         },
       },
     ]);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Study session
+  // Review sessions
   // ─────────────────────────────────────────────────────────────────────────
 
-  const startStudy = (node: DeckNode, advance: boolean = false) => {
-    const allCards = collectCards(node);
-    if (allCards.length === 0) {
-      AlertService.alert('No Cards', 'Add some cards before studying!');
-      return;
-    }
+  const scopeOf = (s: Session | null) => (s?.deckIds ? new Set(s.deckIds) : null);
+
+  const startSession = (node: DeckNode | null, mode: SessionMode = 'normal', aheadDays = 7, decksOverride?: FlashcardDeck[]) => {
+    const d = decksOverride || decksRef.current;
+    const scopeDecks = node ? collectDecksFromNode(node) : d;
+    const ids = node ? new Set(scopeDecks.map((x) => x.id)) : null;
     const now = Date.now();
-    const due = allCards.filter((c) => c.nextDue <= now);
-    const session = due.length > 0 && !advance ? due : [...allCards];
-    const shuffled = [...session].sort(() => Math.random() - 0.5);
-    setSessionCards(shuffled);
-    setCardIndex(0);
-    setIsFlipped(false);
-    setSessionDone(false);
-    setSessionStats({ again: 0, hard: 0, good: 0, easy: 0, mastered: 0 });
-    setStudyReversed(false);
-    setActiveNode(node);
-    setActiveDeck(node.deck || decks[0] || null);
-    isRatingRef.current = false;
-    setUndoState(null);
-    setView('study');
-  };
-
-  const startStudyAll = () => {
-    const now = Date.now();
-    const allDue: SessionCard[] = [];
-    for (const deck of decks) {
-      if (!deck || !Array.isArray(deck.cards)) continue;
-      for (const card of deck.cards) {
-        if (card && card.nextDue <= now) allDue.push({ ...card, deckId: deck.id });
-      }
-    }
-    if (allDue.length === 0) {
-      AlertService.alert('All Caught Up!', 'No cards are due for review right now.');
+    const queue = buildQueue(d, ids, srSettings, now, mode, aheadDays);
+    const pick = pickNext(d, ids, queue, 0, now, { mode });
+    if (!pick.ref) {
+      const empty = (node ? totalFor(node) : totalCards) === 0;
+      AlertService.alert(
+        empty ? 'No cards yet' : 'Nothing due',
+        empty
+          ? 'Add some cards to this deck first.'
+          : pick.nextLearningAt
+          ? `Your learning cards come back ${relativeDue(pick.nextLearningAt, now)}. Custom study lets you review ahead or cram meanwhile.`
+          : 'You have finished everything for today. Custom study lets you review ahead or cram.',
+        empty
+          ? [{ text: 'OK' }]
+          : [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'Custom study', onPress: () => setTimeout(() => setCustomPath(node ? node.fullPath : null), 250) },
+            ]
+      );
       return;
     }
-    const shuffled = [...allDue].sort(() => Math.random() - 0.5);
-    setSessionCards(shuffled);
-    setCardIndex(0);
-    setIsFlipped(false);
-    setSessionDone(false);
-    setSessionStats({ again: 0, hard: 0, good: 0, easy: 0, mastered: 0 });
-    setActiveNode(null);
-    setActiveDeck(decks[0] || null);
-    isRatingRef.current = false;
-    setUndoState(null);
-    setView('study');
-  };
-
-  /** Puts the card, the queue, the session tally and the XP back as they were. */
-  const handleUndoRating = async () => {
-    if (!undoState) return;
-    const snap = undoState;
-    setUndoState(null);
-
-    const { deckId, ...restored } = snap.card;
-    const nd = decks.map((d) =>
-      d.id === deckId
-        ? { ...d, cards: Array.isArray(d.cards) ? d.cards.map((c) => (c.id === restored.id ? { ...restored } : c)) : [] }
-        : d
-    );
-    await saveDecks(nd);
-    if (activeDeck?.id === deckId) {
-      const updated = nd.find((d) => d.id === deckId);
-      if (updated) setActiveDeck(updated);
-    }
-
-    setSessionCards(snap.sessionCards);
-    setSessionStats(snap.sessionStats);
-    setCardIndex(snap.cardIndex);
-    setSessionDone(false);
-    setIsFlipped(true);
-    await saveStats(snap.stats);
-  };
-
-  const handleRate = async (rating: 1 | 2 | 3 | 4) => {
-    if (isRatingRef.current) return;
-    if (cardIndex >= sessionCards.length) return;
-    isRatingRef.current = true;
-
-    const card = sessionCards[cardIndex];
-    if (!card) {
-      isRatingRef.current = false;
-      return;
-    }
-    setUndoState({
-      card,
-      cardIndex,
-      sessionCards: [...sessionCards],
-      sessionStats: { ...sessionStats },
-      stats: statsRef.current || flashcardStats,
+    const title =
+      mode === 'cram' ? `Cram · ${node ? node.name : 'All decks'}` : mode === 'ahead' ? `Ahead · ${node ? node.name : 'All decks'}` : node ? node.name : 'All decks';
+    setSession({
+      deckIds: ids ? Array.from(ids) : null,
+      title,
+      color: node?.deck?.color || null,
+      mode,
+      queue,
+      pos: pick.queuePos,
+      current: pick.ref,
+      answered: 0,
+      again: 0,
+      graduated: 0,
+      startedAt: now,
+      shownAt: now,
+      flip: false,
+      done: false,
+      nextLearningAt: null,
+      xpBefore: statsRef.current?.totalXp || 0,
+      returnTo: view === 'detail' ? 'detail' : 'decks',
     });
+    setRevealed(false);
+    setTyped('');
+    setUndo(null);
+    ratingRef.current = false;
+    setView('study');
+  };
 
-    const updatedCard = applyRating(card, rating, srSettings);
-    const nd = [...decks];
-    const di = nd.findIndex((d) => d.id === card.deckId);
-    if (di >= 0 && nd[di] && Array.isArray(nd[di].cards)) {
-      nd[di].cards = nd[di].cards.map((c) => (c.id === card.id ? updatedCard : c));
-      await saveDecks(nd);
-      if (activeDeck?.id === card.deckId) setActiveDeck(nd[di]);
+  const advanceSession = (s: Session, d: FlashcardDeck[], at: number = Date.now()) => {
+    const pick = pickNext(d, scopeOf(s), s.queue, s.pos, at, { mode: s.mode });
+    setSession({ ...s, pos: pick.queuePos, current: pick.ref, done: !pick.ref, nextLearningAt: pick.nextLearningAt, shownAt: Date.now() });
+    setRevealed(false);
+    setTyped('');
+  };
+
+  const currentCard = (() => {
+    if (!session?.current) return null;
+    const deck = decks.find((d) => d.id === session.current!.deckId);
+    const card = deck?.cards?.find((c) => c.id === session.current!.cardId);
+    return deck && card ? { deck, card } : null;
+  })();
+
+  const revealAnswer = () => {
+    if (!revealed) {
+      setRevealed(true);
+      triggerHaptic('light');
     }
-    const ratingKey: Record<number, keyof Omit<typeof sessionStats, 'mastered'>> = {
-      1: 'again',
-      2: 'hard',
-      3: 'good',
-      4: 'easy',
-    };
-    let justMastered = false;
-    if (card.interval === 0 && updatedCard.interval > 0) justMastered = true;
-    setSessionStats((prev) => ({
-      ...prev,
-      [ratingKey[rating]]: prev[ratingKey[rating]] + 1,
-      mastered: prev.mastered + (justMastered ? 1 : 0),
-    }));
+  };
 
-    const REQUEUE_WINDOW_MS = 20 * 60 * 1000;
-    const shouldRequeue = updatedCard.interval === 0 && updatedCard.nextDue - Date.now() < REQUEUE_WINDOW_MS;
-    if (shouldRequeue) setSessionCards((prev) => [...prev, { ...updatedCard, deckId: card.deckId }]);
+  const rate = (g: Rating) => {
+    const s = session;
+    if (!s || !s.current || ratingRef.current) return;
+    ratingRef.current = true;
+    try {
+      const now = Date.now();
+      const d = decksRef.current;
+      const deck = d.find((x) => x.id === s.current!.deckId);
+      const card = deck?.cards?.find((c) => c.id === s.current!.cardId);
+      if (!deck || !card) {
+        advanceSession(s, d);
+        return;
+      }
+      const prevState = cardState(card);
+      let nextDecks = d;
+      let res: AnswerResult | null = null;
+      if (s.mode !== 'cram') {
+        res = answerCard(card, g, srSettings, now, { examDate: examDaysLeft(deck, now) !== null ? deck.examDate : null });
+        let cards = (deck.cards || []).map((c) => (c.id === card.id ? res!.card : c));
+        cards = burySiblings(cards, res.card, now);
+        nextDecks = d.map((x) => (x.id === deck.id ? bumpDaily({ ...deck, cards }, prevState, now) : x));
+      }
 
-    if (cardIndex + 1 >= sessionCards.length && !shouldRequeue) {
-      setSessionDone(true);
-      const newStats = updateStudyStats(
-        statsRef.current || flashcardStats,
-        1,
-        justMastered ? 1 : 0,
-        true,
-        sessionCards.length
-      );
-      saveStats(newStats);
-      isRatingRef.current = false;
+      let st = updateStudyStats(statsRef.current, 1, res?.graduated ? 1 : 0, false);
+      st = recordAnswer(st, {
+        dayKey: studyDayKey(now),
+        wasReview: s.mode !== 'cram' && prevState === 'review',
+        passed: g !== 1,
+        ms: now - s.shownAt,
+      });
+
+      // Cram does not reschedule, so "Again" has to put the card back itself.
+      let queue = s.queue;
+      if (s.mode === 'cram' && g === 1) {
+        const at = Math.min(queue.length, s.pos + 4);
+        queue = [...queue.slice(0, at), s.current, ...queue.slice(at)];
+      }
+      const pick = pickNext(nextDecks, scopeOf(s), queue, s.pos, now, { mode: s.mode });
+      const done = !pick.ref;
+      const answered = s.answered + 1;
+      if (done) st = updateStudyStats(st, 0, 0, true, answered);
+
+      setUndo({ decks: d, stats: statsRef.current, session: s });
+      persist(s.mode === 'cram' ? null : nextDecks, st);
+      setSession({
+        ...s,
+        queue,
+        pos: pick.queuePos,
+        current: pick.ref,
+        answered,
+        again: s.again + (g === 1 ? 1 : 0),
+        graduated: s.graduated + (res?.graduated ? 1 : 0),
+        shownAt: Date.now(),
+        done,
+        nextLearningAt: pick.nextLearningAt,
+      });
+      setRevealed(false);
+      setTyped('');
+      triggerHaptic(done ? 'success' : 'light');
+
+      if (res?.becameLeech) {
+        const leechDeck = deck.id;
+        const leechNote = noteIdOf(res.card);
+        const leechId = res.card.id;
+        setTimeout(() => {
+          AlertService.alert(
+            'This card keeps slipping',
+            `You have forgotten it ${res!.card.lapses} times. Cards like this usually need rewording — split it into smaller facts, or add a memory aid.`,
+            [
+              { text: 'Keep going', style: 'cancel' },
+              { text: 'Edit it', onPress: () => openEditNote(leechDeck, leechNote) },
+              {
+                text: 'Suspend it',
+                onPress: () =>
+                  persist(
+                    decksRef.current.map((x) =>
+                      x.id === leechDeck ? { ...x, cards: x.cards.map((c) => (c.id === leechId ? { ...c, suspended: true } : c)) } : x
+                    )
+                  ),
+              },
+            ]
+          );
+        }, 250);
+      }
+    } finally {
+      ratingRef.current = false;
+    }
+  };
+
+  /** One step back: the card, its siblings, the deck's daily counts, XP and streak. */
+  const handleUndo = () => {
+    if (!undo) return;
+    const snap = undo;
+    setUndo(null);
+    persist(snap.decks, snap.stats);
+    setSession({ ...snap.session, shownAt: Date.now() });
+    setRevealed(false);
+    setTyped('');
+  };
+
+  const continueLearning = () => {
+    if (!session) return;
+    const d = decksRef.current;
+    const at = session.nextLearningAt || Date.now();
+    const pick = pickNext(d, scopeOf(session), session.queue, session.pos, at, { mode: session.mode });
+    if (!pick.ref) return;
+    setSession({ ...session, current: pick.ref, pos: pick.queuePos, done: false, nextLearningAt: null, shownAt: Date.now() });
+    setRevealed(false);
+    setTyped('');
+  };
+
+  const exitSession = () => {
+    setUndo(null);
+    setShowReviewMore(false);
+    setView(session?.returnTo === 'detail' && activeNode ? 'detail' : 'decks');
+  };
+
+  const patchCurrent = (patch: (c: Flashcard) => Flashcard, thenAdvance: boolean) => {
+    if (!session?.current) return;
+    const ref = session.current;
+    const nd = decksRef.current.map((d) =>
+      d.id === ref.deckId ? { ...d, cards: (d.cards || []).map((c) => (c.id === ref.cardId ? patch(c) : c)) } : d
+    );
+    persist(nd);
+    setUndo(null);
+    if (thenAdvance) advanceSession(session, nd);
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Custom study
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const customNode = customPath === undefined ? undefined : customPath === null ? null : findNode(tree, customPath);
+  const customScope = customNode === undefined ? [] : customNode ? collectDecksFromNode(customNode) : decks;
+
+  const addNewBonus = (node: DeckNode | null, extra: number) => {
+    const ids = new Set((node ? collectDecksFromNode(node) : decksRef.current).map((d) => d.id));
+    const now = Date.now();
+    const nd = decksRef.current.map((d) => {
+      if (!ids.has(d.id)) return d;
+      const today = studyDayKey(now);
+      const daily = d.daily && d.daily.date === today ? d.daily : { date: today, newDone: 0, reviewDone: 0, newBonus: 0 };
+      return { ...d, daily: { ...daily, newBonus: (daily.newBonus || 0) + extra } };
+    });
+    persist(nd);
+    return nd;
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Practice test
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** One card per note, as plain question/answer pairs the practice modes can use. */
+  const practicePairs = (node: DeckNode) => {
+    const seen = new Set<string>();
+    const out: { id: string; question: string; answer: string }[] = [];
+    for (const c of collectCards(node)) {
+      if (c.suspended) continue;
+      const key = `${c.deckId}:${noteIdOf(c)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const qa = cardQA(c);
+      if (qa.question.trim() && qa.answer.trim()) out.push({ id: c.id, ...qa });
+    }
+    return out;
+  };
+
+  const generateQuiz = (node: DeckNode, onlyMissed?: QuizQuestion[]) => {
+    const pairs = practicePairs(node);
+    if (pairs.length < 2) {
+      AlertService.alert('Not enough cards', 'You need at least 2 cards for a practice test.');
+      return;
+    }
+    let source = pairs;
+    if (onlyMissed) {
+      const missed = new Set(onlyMissed.map((q) => q.cardId));
+      source = pairs.filter((p) => missed.has(p.id));
     } else {
-      setIsFlipped(false);
+      source = shuffle(pairs).slice(0, Math.min(10, pairs.length));
+    }
+    const questions: QuizQuestion[] = source.map((p) => {
+      const correct = p.answer.trim();
+      const others = Array.from(new Set(pairs.map((x) => x.answer.trim()).filter((a) => a && a.toLowerCase() !== correct.toLowerCase())));
+      const options = shuffle(Array.from(new Set([...shuffle(others).slice(0, 3), correct])));
+      return { cardId: p.id, question: p.question, correctAnswer: correct, options };
+    });
+    setQuizQuestions(questions);
+    setQuizIndex(0);
+    setQuizScore(0);
+    setQuizSelected(null);
+    setQuizDone(false);
+    setQuizMissed([]);
+    setPracticePath(node.fullPath);
+    setView('quiz');
+  };
+
+  const handleQuizAnswer = (answer: string) => {
+    if (quizSelected !== null) return;
+    setQuizSelected(answer);
+    const q = quizQuestions[quizIndex];
+    const isCorrect = answer === q.correctAnswer;
+    triggerHaptic(isCorrect ? 'success' : 'warning');
+    if (isCorrect) setQuizScore((p) => p + 1);
+    else setQuizMissed((p) => [...p, q]);
+    setTimeout(() => {
+      if (quizIndex + 1 >= quizQuestions.length) {
+        setQuizDone(true);
+        persist(null, updateStudyStats(statsRef.current, quizQuestions.length, quizScore + (isCorrect ? 1 : 0), true));
+      } else {
+        setQuizIndex((p) => p + 1);
+        setQuizSelected(null);
+      }
+    }, 1100);
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Speed match
+  // ─────────────────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (view !== 'match' || matchDone || matchStartTime === 0) return;
+    const timer = setInterval(() => setMatchElapsed(Math.max(0, Math.floor((Date.now() - matchStartTime) / 1000))), 1000);
+    return () => clearInterval(timer);
+  }, [view, matchDone, matchStartTime]);
+
+  const startMatch = (node: DeckNode) => {
+    const pairs = practicePairs(node);
+    if (pairs.length < 2) {
+      AlertService.alert('Not enough cards', 'You need at least 2 cards for speed match.');
+      return;
+    }
+    const tiles: MatchCard[] = [];
+    shuffle(pairs)
+      .slice(0, Math.min(6, pairs.length))
+      .forEach((p) => {
+        tiles.push({ id: generateId(), pairId: p.id, text: p.question, isTerm: true });
+        tiles.push({ id: generateId(), pairId: p.id, text: p.answer, isTerm: false });
+      });
+    setMatchCards(shuffle(tiles));
+    setMatchRevealed([]);
+    setMatchMatched(new Set());
+    setMatchMoves(0);
+    setMatchStartTime(Date.now());
+    setMatchDone(false);
+    setMatchElapsed(0);
+    setPracticePath(node.fullPath);
+    setView('match');
+  };
+
+  const handleMatchTap = (tileId: string) => {
+    if (matchRevealed.length >= 2 || matchRevealed.includes(tileId)) return;
+    const tile = matchCards.find((c) => c.id === tileId);
+    if (!tile || matchMatched.has(tile.pairId)) return;
+    const next = [...matchRevealed, tileId];
+    setMatchRevealed(next);
+    if (next.length < 2) return;
+    setMatchMoves((p) => p + 1);
+    const [a, b] = next.map((id) => matchCards.find((c) => c.id === id)!);
+    if (a.pairId === b.pairId && a.isTerm !== b.isTerm) {
+      triggerHaptic('light');
       setTimeout(() => {
-        setCardIndex((prev) => prev + 1);
-        isRatingRef.current = false;
-      }, 120);
-      const newStats = updateStudyStats(
-        statsRef.current || flashcardStats,
-        1,
-        justMastered ? 1 : 0,
-        false
-      );
-      saveStats(newStats);
+        setMatchMatched((prev) => {
+          const set = new Set(prev);
+          set.add(a.pairId);
+          const totalPairs = matchCards.length / 2;
+          if (set.size >= totalPairs) {
+            setMatchDone(true);
+            setMatchElapsed(Math.max(0, Math.floor((Date.now() - matchStartTime) / 1000)));
+            persist(null, updateStudyStats(statsRef.current, totalPairs, 0, true));
+          }
+          return set;
+        });
+        setMatchRevealed([]);
+      }, 350);
+    } else {
+      setTimeout(() => setMatchRevealed([]), 750);
     }
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  // File import
+  // Practice launcher
   // ─────────────────────────────────────────────────────────────────────────
+
+  const runPractice = (action: PracticeAction, node: DeckNode | null) => {
+    if (action === 'custom') {
+      setCustomPath(node ? node.fullPath : null);
+      return;
+    }
+    if (!node) return;
+    if (action === 'quiz') generateQuiz(node);
+    else if (action === 'match') startMatch(node);
+    else if (action === 'exam') openExam(node);
+  };
+
+  /** From the home screen a practice mode needs a deck; ask only when there is a choice. */
+  const launchFromHome = (action: PracticeAction) => {
+    if (decks.length === 0) {
+      AlertService.alert('No decks yet', 'Create a deck and add a few cards first.');
+      return;
+    }
+    if (action === 'custom') {
+      setCustomPath(null);
+      return;
+    }
+    if (tree.length === 1 && tree[0].children.size === 0) runPractice(action, tree[0]);
+    else setPickerAction(action);
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Exam mode
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const openExam = (node: DeckNode) => {
+    const current = collectDecksFromNode(node).find((d) => examDaysLeft(d) !== null)?.examDate;
+    if (current) {
+      const [y, m, d] = current.split('-').map(Number);
+      setExamDate(new Date(y, m - 1, d, 12));
+    } else {
+      setExamDate(new Date(Date.now() + 14 * 86400000));
+    }
+    setExamPath(node.fullPath);
+  };
+
+  const applyExam = (node: DeckNode) => {
+    const key = getLocalDateString(examDate);
+    const ids = new Set(collectDecksFromNode(node).map((d) => d.id));
+    const now = Date.now();
+    persist(decksRef.current.map((d) => (ids.has(d.id) ? { ...d, examDate: key, cards: planExamReschedule(d.cards || [], key, now) } : d)));
+    setExamPath(null);
+    triggerHaptic('success');
+  };
+
+  const endExam = (node: DeckNode) => {
+    const ids = new Set(collectDecksFromNode(node).map((d) => d.id));
+    persist(
+      decksRef.current.map((d) => {
+        if (!ids.has(d.id)) return d;
+        const { examDate: _e, ...rest } = d;
+        return rest as FlashcardDeck;
+      })
+    );
+    setExamPath(null);
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Import
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const openImport = (deckId: string) => {
+    setImportDeckId(deckId);
+    setImportText('');
+    setParsedImport([]);
+    setImportFileName('');
+    setShowImport(true);
+  };
 
   const handlePickFile = async () => {
     try {
@@ -1095,9 +1269,9 @@ export default function FlashcardsScreen() {
       setImportFileName(asset.name);
       const response = await fetch(asset.uri);
       const content = await response.text();
-      const cards = parseImport(content, importSeparator);
-      if (cards.length === 0) AlertService.alert('No Cards Found', 'Make sure your separator matches the file contents.');
-      setParsedImport(cards);
+      const notes = parseImportNotes(content, importSeparator, importKind);
+      if (notes.length === 0) AlertService.alert('No cards found', 'Make sure the separator matches the file.');
+      setParsedImport(notes);
     } catch (e: any) {
       console.error('File Read Error:', e);
       AlertService.alert('Error', `Could not read the file: ${e?.message || 'Unknown error'}`);
@@ -1106,1889 +1280,24 @@ export default function FlashcardsScreen() {
     }
   };
 
-  const handleParseText = () => {
-    if (!importText.trim()) return;
-    const cards = parseImport(importText, importSeparator);
-    if (cards.length === 0) AlertService.alert('No Cards Found', 'Please check your formatting and separator.');
-    setParsedImport(cards);
-  };
-
-  const handleConfirmImport = async () => {
-    if (!activeDeck || parsedImport.length === 0) return;
-    const nd = [...decks];
-    const di = nd.findIndex((d) => d.id === activeDeck.id);
-    parsedImport.forEach(({ front, back }) => nd[di].cards.push(makeNewCard(front, back)));
-    await saveDecks(nd);
-    setActiveDeck(nd[di]);
-    const count = parsedImport.length;
-    setParsedImport([]);
-    setImportFileName('');
-    setShowImportModal(false);
-    AlertService.alert('Imported!', `${count} card${count !== 1 ? 's' : ''} added to "${activeDeck.name}".`);
-  };
-
-  const closeImportModal = () => {
-    setShowImportModal(false);
-    setParsedImport([]);
-    setImportFileName('');
-    setImportText('');
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Quiz logic
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const generateQuiz = (node: DeckNode, onlyMissed?: QuizQuestion[]) => {
-    const allCards = collectCards(node);
-    if (allCards.length < 2) {
-      AlertService.alert('Not Enough Cards', 'You need at least 2 cards for a quiz.');
-      return;
-    }
-
-    let source: SessionCard[];
-    if (onlyMissed) {
-      const missedIds = new Set(onlyMissed.map((q) => q.cardId));
-      source = allCards.filter((c) => missedIds.has(c.id));
-    } else {
-      source = [...allCards].sort(() => Math.random() - 0.5).slice(0, Math.min(10, allCards.length));
-    }
-
-    const questions: QuizQuestion[] = source.map((card) => {
-      const cardBackClean = (card.back || '').trim();
-      const otherUniqueBacks = Array.from(
-        new Set(
-          allCards
-            .map((c) => (c.back || '').trim())
-            .filter((backText) => backText.length > 0 && backText.toLowerCase() !== cardBackClean.toLowerCase())
-        )
-      );
-      const shuffledOthers = [...otherUniqueBacks].sort(() => Math.random() - 0.5);
-      const distractors = shuffledOthers.slice(0, 3);
-      const options = Array.from(new Set([...distractors, cardBackClean])).sort(() => Math.random() - 0.5);
-      return { cardId: card.id, question: card.front, correctAnswer: card.back, options };
-    });
-
-    setQuizQuestions(questions);
-    setQuizIndex(0);
-    setQuizScore(0);
-    setQuizSelected(null);
-    setQuizDone(false);
-    setQuizMissed([]);
-    setActiveNode(node);
-    setView('quiz');
-  };
-
-  const handleQuizAnswer = (answer: string) => {
-    if (quizSelected !== null) return;
-    setQuizSelected(answer);
-    const q = quizQuestions[quizIndex];
-    const isCorrect = answer === q.correctAnswer;
-    if (isCorrect) {
-      setQuizScore((prev) => prev + 1);
-    } else {
-      setQuizMissed((prev) => [...prev, q]);
-    }
-    setTimeout(() => {
-      if (quizIndex + 1 >= quizQuestions.length) {
-        setQuizDone(true);
-        const newStats = updateStudyStats(
-          statsRef.current || flashcardStats,
-          quizQuestions.length,
-          quizScore + (isCorrect ? 1 : 0),
-          true
-        );
-        saveStats(newStats);
-      } else {
-        setQuizIndex((prev) => prev + 1);
-        setQuizSelected(null);
-      }
-    }, 1200);
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Match game logic
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // Live running ticker during Speed Match gameplay
-  useEffect(() => {
-    if (view !== 'match' || matchDone || matchStartTime === 0) return;
-    const timer = setInterval(() => {
-      setMatchElapsed(Math.max(0, Math.floor((Date.now() - matchStartTime) / 1000)));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [view, matchDone, matchStartTime]);
-
-  const startMatch = (node: DeckNode) => {
-    const allCards = collectCards(node);
-    if (allCards.length < 2) {
-      AlertService.alert('Not Enough Cards', 'You need at least 2 cards for the matching game.');
-      return;
-    }
-
-    const selected = [...allCards].sort(() => Math.random() - 0.5).slice(0, Math.min(8, allCards.length));
-    const cards: MatchCard[] = [];
-    selected.forEach((card) => {
-      cards.push({ id: generateId(), pairId: card.id, text: card.front, isTerm: true });
-      cards.push({ id: generateId(), pairId: card.id, text: card.back, isTerm: false });
-    });
-    const shuffled = [...cards].sort(() => Math.random() - 0.5);
-
-    setMatchCards(shuffled);
-    setMatchRevealed([]);
-    setMatchMatched(new Set());
-    setMatchMoves(0);
-    setMatchStartTime(Date.now());
-    setMatchDone(false);
-    setMatchElapsed(0);
-    setActiveNode(node);
-    setView('match');
-  };
-
-  const handleMatchTap = (cardId: string) => {
-    if (matchRevealed.length >= 2) return;
-    if (matchRevealed.includes(cardId)) return;
-    const card = matchCards.find((c) => c.id === cardId);
-    if (!card || matchMatched.has(card.pairId)) return;
-
-    const newRevealed = [...matchRevealed, cardId];
-    setMatchRevealed(newRevealed);
-
-    if (newRevealed.length === 2) {
-      setMatchMoves((prev) => prev + 1);
-      const [first, second] = newRevealed.map((id) => matchCards.find((c) => c.id === id)!);
-      if (first.pairId === second.pairId && first.isTerm !== second.isTerm) {
-        setTimeout(() => {
-          setMatchMatched((prev) => {
-            const next = new Set(prev);
-            next.add(first.pairId);
-            const totalPairs = matchCards.length / 2;
-            if (next.size >= totalPairs) {
-              setMatchDone(true);
-              const elapsedSec = Math.max(0, Math.floor((Date.now() - matchStartTime) / 1000));
-              setMatchElapsed(elapsedSec);
-              const newStats = updateStudyStats(
-                statsRef.current || flashcardStats,
-                totalPairs,
-                0,
-                true
-              );
-              saveStats(newStats);
-            }
-            return next;
-          });
-          setMatchRevealed([]);
-        }, 400);
-      } else {
-        setTimeout(() => setMatchRevealed([]), 800);
-      }
-    }
-  };
-
-  // Quick Study Modes Launcher from Dashboard
-  const handleSelectDashboardStudyMode = (modeId: 'flashcards' | 'spaced' | 'match' | 'quiz' | 'exam') => {
-    if (decks.length === 0) {
-      AlertService.alert('No Decks Found', 'Please create or import a flashcard deck first.');
-      return;
-    }
-    const tree = buildDeckTree(decks);
-    const targetNode = tree[0];
-
-    if (modeId === 'flashcards') {
-      startStudy(targetNode, true);
-    } else if (modeId === 'spaced') {
-      if (totalDueNow > 0) {
-        startStudyAll();
-      } else {
-        startStudy(targetNode, false);
-      }
-    } else if (modeId === 'match') {
-      startMatch(targetNode);
-    } else if (modeId === 'quiz') {
-      generateQuiz(targetNode);
-    } else if (modeId === 'exam') {
-      setActiveNode(targetNode);
-      setActiveDeck(targetNode.deck);
-      setExamPlan(null);
-      setExamReviewsPerDay(0);
-      setShowExamModal(true);
-    }
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render: Decks Dashboard (Redesigned R1, R2, R3)
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const renderDecks = () => {
-    const totalCards = decks.reduce((sum, d) => sum + (Array.isArray(d?.cards) ? d.cards.length : 0), 0);
-    const tree = buildDeckTree(decks);
-
-    // Calculate total mastered cards across all decks
-    let totalMasteredCards = 0;
+  const handleConfirmImport = () => {
+    const deck = deckById(importDeckId);
+    if (!deck || parsedImport.length === 0) return;
     const now = Date.now();
-    decks.forEach((d) => {
-      if (!d || !Array.isArray(d.cards)) return;
-      d.cards.forEach((c) => {
-        if (!c) return;
-        if (c.reviewCount > 0 && c.interval > 0 && c.nextDue > now) {
-          totalMasteredCards++;
-        }
-      });
+    let added: Flashcard[] = [];
+    parsedImport.forEach((n, i) => {
+      added = added.concat(buildNoteCards({ kind: n.kind, front: n.front, back: n.back }, [], generateId, now + i));
     });
-
-    // Extract unique subjects for filter bar
-    const subjectsSet = new Set<string>();
-    decks.forEach((d) => {
-      if (d && d.subject && d.subject.trim()) {
-        const topLevel = d.subject.trim().split('::')[0];
-        if (topLevel) subjectsSet.add(topLevel);
-        subjectsSet.add(d.subject.trim());
-      }
-    });
-    const uniqueSubjects = Array.from(subjectsSet);
-
-    // Filter tree according to search and selected subject
-    let filteredDecks = decks;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      filteredDecks = filteredDecks.filter(
-        (d) => d && (d.name.toLowerCase().includes(q) || d.subject?.toLowerCase().includes(q))
-      );
-    }
-    if (selectedSubjectFilter === 'due') {
-      filteredDecks = filteredDecks.filter((d) => d && Array.isArray(d.cards) && d.cards.some((c) => c && c.nextDue <= now));
-    } else if (selectedSubjectFilter !== 'all') {
-      filteredDecks = filteredDecks.filter(
-        (d) => d && (d.subject === selectedSubjectFilter || d.subject?.startsWith(selectedSubjectFilter + '::'))
-      );
-    }
-
-    const filteredTree = buildDeckTree(filteredDecks);
-
-    return (
-      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
-        {/* ══ App bar — flush with the page, matching the other tabs ═══════ */}
-        <View
-          style={{
-            flexDirection: 'row', alignItems: 'center',
-            paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10, zIndex: 10,
-            backgroundColor: theme.background,
-          }}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9, flex: 1, marginRight: 10 }}>
-            <View style={{
-              width: 32, height: 32, borderRadius: 10,
-              backgroundColor: tints.grades.fill,
-              borderWidth: 1, borderColor: tints.grades.line,
-              alignItems: 'center', justifyContent: 'center',
-            }}>
-              <Ionicons name="layers" size={17} color={tints.grades.ink} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text
-                accessibilityRole="header"
-                numberOfLines={1}
-                style={{ fontFamily: 'Nunito_900Black', fontSize: 19, color: theme.text, letterSpacing: -0.4 }}
-              >
-                Flash Study
-              </Text>
-              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary }}>
-                {decks.length} deck{decks.length !== 1 ? 's' : ''} · {totalCards} card{totalCards !== 1 ? 's' : ''}
-                {totalDueNow > 0 ? ` · ${totalDueNow} due` : ''}
-              </Text>
-            </View>
-          </View>
-
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <TouchableOpacity
-              onPress={() => router.push('/study-options')}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityLabel="Study options — spaced repetition settings"
-              style={{
-                width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
-                backgroundColor: theme.surface,
-                borderWidth: 1, borderColor: theme.cardBorder,
-                borderBottomWidth: 2, borderBottomColor: theme.lip,
-              }}
-            >
-              <Ionicons name="options-outline" size={18} color={theme.textSecondary} />
-            </TouchableOpacity>
-
-            <SpotlightTarget id={SPOTLIGHT_IDS.studyCreateDeck}>
-              <AnimatedPressable
-                onPress={() => setShowCreateSheet(true)}
-                accessibilityRole="button"
-                accessibilityLabel="Create deck or folder"
-                style={{
-                  width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
-                  backgroundColor: theme.primary,
-                  borderBottomWidth: 2, borderBottomColor: theme.primaryDark,
-                }}
-              >
-                <Ionicons name="add" size={21} color="#ffffff" />
-              </AnimatedPressable>
-            </SpotlightTarget>
-          </View>
-        </View>
-
-        {loading ? (
-          <ListSkeleton count={4} cardHeight={80} />
-        ) : decks.length === 0 ? (
-          <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: GUTTER, paddingBottom: tabBarHeight }}>
-            <Card padding={0} radius={Radius['2xl']} style={{ overflow: 'hidden' }}>
-              <View style={{
-                alignItems: 'center', paddingTop: 26, paddingBottom: 22,
-                backgroundColor: tints.grades.fill,
-                borderBottomWidth: 1, borderBottomColor: tints.grades.line,
-              }}>
-                <View style={{
-                  width: 68, height: 68, borderRadius: 22,
-                  alignItems: 'center', justifyContent: 'center',
-                  backgroundColor: theme.surface,
-                  borderWidth: 2, borderColor: tints.grades.line,
-                }}>
-                  <Ionicons name="albums-outline" size={31} color={tints.grades.ink} />
-                </View>
-              </View>
-
-              <View style={{ padding: 22, alignItems: 'center' }}>
-                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 20, color: theme.text, textAlign: 'center', letterSpacing: -0.4 }}>
-                  Your study space
-                </Text>
-                <Text style={{
-                  fontFamily: 'Nunito_400Regular', fontSize: 13.5, color: theme.textSecondary,
-                  textAlign: 'center', lineHeight: 20, marginTop: 7, marginBottom: 20,
-                }}>
-                  Make a deck of flashcards, or paste a list you already have. FinScholar schedules the reviews for you with SM-2 spaced repetition.
-                </Text>
-
-                <AnimatedPressable
-                  onPress={() => openAddDeck()}
-                  accessibilityRole="button"
-                  accessibilityLabel="Create your first deck"
-                  style={{
-                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
-                    width: '100%', paddingVertical: 13, borderRadius: Radius.lg,
-                    backgroundColor: theme.primary,
-                    borderBottomWidth: 3, borderBottomColor: theme.primaryDark,
-                  }}
-                >
-                  <Ionicons name="add-circle" size={18} color="#ffffff" />
-                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: '#ffffff' }}>
-                    Create your first deck
-                  </Text>
-                </AnimatedPressable>
-              </View>
-            </Card>
-          </View>
-        ) : (
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingHorizontal: GUTTER, paddingTop: 2, paddingBottom: tabBarHeight + 24 }}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-          >
-            {/* Gamification & Statistics Island (R2) */}
-            <StudyDashboardStats
-              stats={flashcardStats}
-              totalCards={totalCards}
-              totalDueNow={totalDueNow}
-              totalMastered={totalMasteredCards}
-              nextDueIn={nextDueIn}
-              onStudyAllDue={startStudyAll}
-            />
-
-            {/* Quick Study Modes Launcher (R1) */}
-            <StudyModesStrip onSelectMode={handleSelectDashboardStudyMode} />
-
-            {/* ══ Deck list ═════════════════════════════════════════════════
-                 Search and the filter chips sit directly above the list they
-                 act on. The "Study Options" row that used to live here was a
-                 third route to the same screen as the header gear. */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-              <View style={{ width: 4, height: 20, borderRadius: 2, backgroundColor: tints.grades.solid, marginRight: 9 }} />
-              <Text accessibilityRole="header" style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, letterSpacing: -0.2 }}>
-                Your decks
-              </Text>
-              <View style={{
-                marginLeft: 8, minWidth: 22, paddingHorizontal: 7, paddingVertical: 2,
-                borderRadius: Radius.full, alignItems: 'center', backgroundColor: theme.surfaceSecondary,
-              }}>
-                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>
-                  {filteredTree.length}
-                </Text>
-              </View>
-
-              <View style={{ flex: 1 }} />
-
-              <AnimatedPressable
-                onPress={() => openAddDeck()}
-                accessibilityRole="button"
-                accessibilityLabel="Add deck"
-                style={{
-                  flexDirection: 'row', alignItems: 'center', gap: 4,
-                  paddingHorizontal: 12, height: 32, borderRadius: Radius.full,
-                  backgroundColor: theme.primary,
-                  borderBottomWidth: 2, borderBottomColor: theme.primaryDark,
-                }}
-              >
-                <Ionicons name="add" size={16} color="#ffffff" />
-                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: '#ffffff' }}>Deck</Text>
-              </AnimatedPressable>
-            </View>
-
-            {/* Search */}
-            <View style={{
-              flexDirection: 'row', alignItems: 'center',
-              paddingHorizontal: 12, height: 42, borderRadius: Radius.lg, marginBottom: 10,
-              backgroundColor: theme.inputBg, borderWidth: 1, borderColor: theme.inputBorder,
-            }}>
-              <Ionicons name="search" size={16} color={theme.textTertiary} />
-              <TextInput
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                placeholder="Search decks or subjects…"
-                placeholderTextColor={theme.textTertiary}
-                accessibilityLabel="Search decks"
-                style={{ flex: 1, marginLeft: 8, fontFamily: 'Nunito_600SemiBold', fontSize: 13.5, color: theme.text, padding: 0 }}
-              />
-              {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                  <Ionicons name="close-circle" size={16} color={theme.textTertiary} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Filter chips */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-              <View style={{ flexDirection: 'row', gap: 7 }}>
-                {[
-                  { key: 'all', label: 'All decks', count: decks.length, tint: null as any },
-                  ...(totalDueNow > 0 ? [{ key: 'due', label: 'Due now', count: totalDueNow, tint: tints.schedule }] : []),
-                  ...uniqueSubjects.map((sub) => ({ key: sub, label: sub, count: null as any, tint: null as any })),
-                ].map((chip) => {
-                  const active = selectedSubjectFilter === chip.key;
-                  const activeFill = chip.tint ? chip.tint.fill : tints.grades.fill;
-                  const activeLine = chip.tint ? chip.tint.line : tints.grades.line;
-                  const activeInk = chip.tint ? chip.tint.ink : tints.grades.ink;
-                  return (
-                    <TouchableOpacity
-                      key={chip.key}
-                      onPress={() => setSelectedSubjectFilter(chip.key)}
-                      activeOpacity={0.75}
-                      accessibilityRole="tab"
-                      accessibilityState={{ selected: active }}
-                      accessibilityLabel={chip.count !== null ? `${chip.label}, ${chip.count}` : chip.label}
-                      style={{
-                        flexDirection: 'row', alignItems: 'center', gap: 5,
-                        paddingHorizontal: 12, height: 30, borderRadius: Radius.full,
-                        backgroundColor: active ? activeFill : theme.surfaceSecondary,
-                        borderWidth: 1, borderColor: active ? activeLine : theme.cardBorder,
-                      }}
-                    >
-                      {chip.key === 'due' && (
-                        <Ionicons name="flash" size={12} color={active ? activeInk : theme.textTertiary} />
-                      )}
-                      <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: active ? activeInk : theme.textSecondary }}>
-                        {chip.label}
-                      </Text>
-                      {chip.count !== null && (
-                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: active ? activeInk : theme.textTertiary }}>
-                          {chip.count}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </ScrollView>
-
-            {/* Deck Tree & Cards List (R3) */}
-            {filteredTree.length === 0 ? (
-              <View style={{
-                flexDirection: 'row', alignItems: 'center',
-                padding: 12, borderRadius: Radius.lg,
-                backgroundColor: tints.grades.fill, borderWidth: 1, borderColor: tints.grades.line,
-              }}>
-                <View style={{
-                  width: 34, height: 34, borderRadius: 11, marginRight: 11,
-                  alignItems: 'center', justifyContent: 'center',
-                  backgroundColor: isDark ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.7)',
-                }}>
-                  <Ionicons name="search-outline" size={17} color={tints.grades.ink} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>
-                    No decks match
-                  </Text>
-                  <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 1 }}>
-                    Try a different search, or clear the filter above.
-                  </Text>
-                </View>
-              </View>
-            ) : (
-              filteredTree.map((node) => (
-                <DeckTreeItem
-                  key={node.fullPath}
-                  node={node}
-                  depth={0}
-                  expandedNodes={expandedNodes}
-                  onToggleNode={toggleNode}
-                  onPressDeck={(n) => {
-                    setActiveNode(n);
-                    setActiveDeck(n.deck);
-                    setDetailSearch('');
-                    setDetailFilter('all');
-                    setView('detail');
-                  }}
-                  onLongPressDeck={(n) => showDeckActions(n)}
-                  onQuickStudy={(n) => startStudy(n)}
-                  onMoreActions={(n) => showDeckActions(n)}
-                />
-              ))
-            )}
-          </ScrollView>
-        )}
-      </SafeAreaView>
-    );
+    persist(decksRef.current.map((d) => (d.id === deck.id ? { ...d, cards: [...(d.cards || []), ...added] } : d)));
+    const count = parsedImport.length;
+    setShowImport(false);
+    setParsedImport([]);
+    AlertService.alert('Imported', `${count} note${count !== 1 ? 's' : ''} (${added.length} card${added.length !== 1 ? 's' : ''}) added to "${deck.name}".`);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Render: Deck Detail (Redesigned R1, R3)
+  // Shared atoms
   // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * The deck screen.
-   *
-   * This absorbed the old separate `manage` view. The two were ~90% the same
-   * screen — both listed the cards with edit and delete, both had their own
-   * study CTA, import and add-card buttons — but search and status filters
-   * existed only here while bulk select, bulk reverse and the per-card due date
-   * existed only there, so which half of the features you got depended on
-   * which button you happened to press. Everything from both lives here now.
-   */
-  const renderDetail = () => {
-    if (!activeNode) return null;
-    const stats = getNodeStats(activeNode);
-    const allCards = collectCards(activeNode);
-    const deck = activeNode.deck ? decks.find((d) => d.id === activeNode.deck!.id) || activeNode.deck : null;
-    const color = deck?.color || theme.primary;
-    const masteredPct = stats.total > 0 ? Math.round((stats.mastered / stats.total) * 100) : 0;
-    const nextReviewText = getNextDueText(activeNode);
-    const readyNow = stats.due + stats.learning;
-
-    let filteredCards = allCards;
-    if (detailSearch.trim()) {
-      const q = detailSearch.toLowerCase();
-      filteredCards = filteredCards.filter(
-        (c) => c.front.toLowerCase().includes(q) || c.back.toLowerCase().includes(q)
-      );
-    }
-    if (detailFilter !== 'all') {
-      filteredCards = filteredCards.filter((c) => getCardStatus(c) === detailFilter);
-    }
-
-    const visibleIds = filteredCards.map((c) => c.id);
-    const isAllSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedCardIds.has(id));
-    const handleToggleSelectAll = () => {
-      if (isAllSelected) setSelectedCardIds(new Set());
-      else setSelectedCardIds(new Set(visibleIds));
-    };
-
-    const studyModes = [
-      { id: 'flashcards', icon: 'albums-outline' as const, title: 'Flashcards', desc: 'Flip and rate recall', tint: tints.grades },
-      { id: 'spaced', icon: 'refresh-outline' as const, title: 'Spaced rep.', desc: 'Only what is due', tint: tints.schedule },
-      { id: 'match', icon: 'grid-outline' as const, title: 'Speed match', desc: 'Pair terms to answers', tint: tints.tasks },
-      { id: 'quiz', icon: 'document-text-outline' as const, title: 'Practice test', desc: 'Multiple choice', tint: tints.attendance },
-      { id: 'exam', icon: 'calendar-outline' as const, title: 'Exam prep', desc: 'Plan up to a date', tint: tints.danger },
-    ];
-
-    const statusRows = [
-      { key: 'new', label: 'New', count: stats.new, color: STATUS_CONFIG.new.color },
-      { key: 'learning', label: 'Learning', count: stats.learning, color: STATUS_CONFIG.learning.color },
-      { key: 'due', label: 'Review', count: stats.due, color: STATUS_CONFIG.due.color },
-      { key: 'mastered', label: 'Mastered', count: stats.mastered, color: STATUS_CONFIG.mastered.color },
-    ];
-
-    return (
-      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
-        {/* ══ App bar ═══════════════════════════════════════════════════════ */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10 }}>
-          <TouchableOpacity
-            onPress={() => { setView('decks'); setIsSelectionMode(false); setSelectedCardIds(new Set()); }}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel="Back to all decks"
-            style={{
-              width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
-              backgroundColor: theme.surface,
-              borderWidth: 1, borderColor: theme.cardBorder,
-              borderBottomWidth: 2, borderBottomColor: theme.lip,
-            }}
-          >
-            <Ionicons name="chevron-back" size={18} color={theme.textSecondary} />
-          </TouchableOpacity>
-
-          <View style={{ flex: 1 }}>
-            <Text numberOfLines={1} accessibilityRole="header" style={{ fontFamily: 'Nunito_900Black', fontSize: 18, color: theme.text, letterSpacing: -0.4 }}>
-              {activeNode.name}
-            </Text>
-            {activeNode.fullPath !== activeNode.name && (
-              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary }}>
-                {activeNode.fullPath}
-              </Text>
-            )}
-          </View>
-
-          <TouchableOpacity
-            onPress={() => showDeckActions(activeNode)}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel="Deck options"
-            style={{
-              width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
-              backgroundColor: theme.surface,
-              borderWidth: 1, borderColor: theme.cardBorder,
-              borderBottomWidth: 2, borderBottomColor: theme.lip,
-            }}
-          >
-            <Ionicons name="ellipsis-horizontal" size={18} color={theme.textSecondary} />
-          </TouchableOpacity>
-        </View>
-
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingHorizontal: GUTTER, paddingBottom: tabBarHeight + 92 }}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          {/* ══ Progress ════════════════════════════════════════════════════ */}
-          <Card padding={0} radius={Radius['2xl']} style={{ overflow: 'hidden', marginBottom: 18 }}>
-            <View style={{
-              flexDirection: 'row', alignItems: 'center', padding: 14,
-              backgroundColor: color + (isDark ? '20' : '14'),
-              borderBottomWidth: 1, borderBottomColor: color + (isDark ? '35' : '28'),
-            }}>
-              <View style={{
-                width: 42, height: 42, borderRadius: 14, marginRight: 12,
-                alignItems: 'center', justifyContent: 'center',
-                backgroundColor: theme.surface, borderWidth: 1, borderColor: color + '55',
-              }}>
-                <Ionicons name={(deck?.icon as any) || getDeckThematicIcon(deck?.subject, deck?.name)} size={20} color={color} />
-              </View>
-              <View style={{ flex: 1, marginRight: 10 }}>
-                <Text style={microLabel}>Mastery</Text>
-                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: theme.text, letterSpacing: -0.6, marginTop: 1 }}>
-                  {masteredPct}%
-                </Text>
-              </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 18, color: theme.text }}>{stats.total}</Text>
-                <Text style={microLabel}>cards</Text>
-              </View>
-            </View>
-
-            {readyNow > 0 ? (
-              <View style={{
-                flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10,
-                backgroundColor: tints.schedule.fill, borderBottomWidth: 1, borderBottomColor: tints.schedule.line,
-              }}>
-                <Ionicons name="flash" size={14} color={tints.schedule.ink} style={{ marginRight: 7 }} />
-                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: tints.schedule.ink }}>
-                  {readyNow} card{readyNow !== 1 ? 's' : ''} ready to review now
-                </Text>
-              </View>
-            ) : nextReviewText ? (
-              <View style={{
-                flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10,
-                borderBottomWidth: 1, borderBottomColor: theme.cardBorder,
-              }}>
-                <Ionicons name="time-outline" size={14} color={theme.textTertiary} style={{ marginRight: 7 }} />
-                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary }}>
-                  Next review in <Text style={{ fontFamily: 'Nunito_900Black', color: theme.primary }}>{nextReviewText}</Text>
-                </Text>
-              </View>
-            ) : null}
-
-            <View style={{ padding: 14, gap: 9 }}>
-              {statusRows.map((row) => (
-                <View key={row.key} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: row.color, marginRight: 9 }} />
-                  <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, width: 70, color: theme.textSecondary }}>
-                    {row.label}
-                  </Text>
-                  <ProgressBar
-                    progress={stats.total > 0 ? row.count / stats.total : 0}
-                    height={7}
-                    color={row.color}
-                    animate={false}
-                    style={{ flex: 1, marginHorizontal: 8 }}
-                    accessibilityLabel={`${row.label}: ${row.count} of ${stats.total}`}
-                  />
-                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, width: 30, textAlign: 'right', color: theme.text }}>
-                    {row.count}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          </Card>
-
-          {/* ══ Study modes ═════════════════════════════════════════════════ */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-            <View style={{ width: 4, height: 20, borderRadius: 2, backgroundColor: tints.grades.solid, marginRight: 9 }} />
-            <Text accessibilityRole="header" style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, letterSpacing: -0.2 }}>
-              Study modes
-            </Text>
-          </View>
-
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 22 }}>
-            {studyModes.map((mode) => (
-              <Card
-                key={mode.id}
-                padding={12}
-                radius={Radius.lg}
-                onPress={() => {
-                  if (mode.id === 'flashcards') startStudy(activeNode, true);
-                  else if (mode.id === 'spaced') startStudy(activeNode, false);
-                  else if (mode.id === 'match') startMatch(activeNode);
-                  else if (mode.id === 'quiz') generateQuiz(activeNode);
-                  else if (mode.id === 'exam') {
-                    setExamPlan(null);
-                    setExamReviewsPerDay(0);
-                    setShowExamModal(true);
-                  }
-                }}
-                accessibilityLabel={`${mode.title}. ${mode.desc}`}
-                style={{ width: (SCREEN_WIDTH - GUTTER * 2 - 10) / 2 }}
-              >
-                <View style={{
-                  width: 36, height: 36, borderRadius: 12, marginBottom: 9,
-                  alignItems: 'center', justifyContent: 'center',
-                  backgroundColor: mode.tint.fill, borderWidth: 1, borderColor: mode.tint.line,
-                }}>
-                  <Ionicons name={mode.icon} size={18} color={mode.tint.ink} />
-                </View>
-                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: theme.text }}>
-                  {mode.title}
-                </Text>
-                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, marginTop: 1 }}>
-                  {mode.desc}
-                </Text>
-              </Card>
-            ))}
-          </View>
-
-          {/* ══ Cards ═══════════════════════════════════════════════════════ */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-            <View style={{ width: 4, height: 20, borderRadius: 2, backgroundColor: tints.tools.solid, marginRight: 9 }} />
-            <Text accessibilityRole="header" style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, letterSpacing: -0.2 }}>
-              Cards
-            </Text>
-            <View style={{
-              marginLeft: 8, minWidth: 22, paddingHorizontal: 7, paddingVertical: 2,
-              borderRadius: Radius.full, alignItems: 'center', backgroundColor: theme.surfaceSecondary,
-            }}>
-              <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>
-                {allCards.length}
-              </Text>
-            </View>
-
-            <View style={{ flex: 1 }} />
-
-            {deck && (
-              <>
-                <TouchableOpacity
-                  onPress={() => { setActiveDeck(deck); setShowImportModal(true); }}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel="Import cards"
-                  style={{
-                    width: 32, height: 32, borderRadius: 11, marginRight: 8,
-                    alignItems: 'center', justifyContent: 'center',
-                    backgroundColor: theme.surfaceSecondary,
-                  }}
-                >
-                  <Ionicons name="cloud-upload-outline" size={16} color={theme.textSecondary} />
-                </TouchableOpacity>
-                <AnimatedPressable
-                  onPress={openAddCard}
-                  accessibilityRole="button"
-                  accessibilityLabel="Add card"
-                  style={{
-                    flexDirection: 'row', alignItems: 'center', gap: 4,
-                    paddingHorizontal: 12, height: 32, borderRadius: Radius.full,
-                    backgroundColor: theme.primary,
-                    borderBottomWidth: 2, borderBottomColor: theme.primaryDark,
-                  }}
-                >
-                  <Ionicons name="add" size={16} color="#ffffff" />
-                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: '#ffffff' }}>Add</Text>
-                </AnimatedPressable>
-              </>
-            )}
-          </View>
-
-          {/* Search */}
-          <View style={{
-            flexDirection: 'row', alignItems: 'center',
-            paddingHorizontal: 12, height: 42, borderRadius: Radius.lg, marginBottom: 10,
-            backgroundColor: theme.inputBg, borderWidth: 1, borderColor: theme.inputBorder,
-          }}>
-            <Ionicons name="search" size={16} color={theme.textTertiary} />
-            <TextInput
-              value={detailSearch}
-              onChangeText={setDetailSearch}
-              placeholder="Search cards in this deck…"
-              placeholderTextColor={theme.textTertiary}
-              accessibilityLabel="Search cards"
-              style={{ flex: 1, marginLeft: 8, fontFamily: 'Nunito_600SemiBold', fontSize: 13.5, color: theme.text, padding: 0 }}
-            />
-            {detailSearch.length > 0 && (
-              <TouchableOpacity onPress={() => setDetailSearch('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                <Ionicons name="close-circle" size={16} color={theme.textTertiary} />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Status filter */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
-            <View style={{ flexDirection: 'row', gap: 7 }}>
-              {[
-                { key: 'all', label: 'All', count: allCards.length, color: theme.primary },
-                { key: 'new', label: 'New', count: stats.new, color: STATUS_CONFIG.new.color },
-                { key: 'learning', label: 'Learning', count: stats.learning, color: STATUS_CONFIG.learning.color },
-                { key: 'due', label: 'Review', count: stats.due, color: STATUS_CONFIG.due.color },
-              ].map((tab) => {
-                const active = detailFilter === tab.key;
-                return (
-                  <TouchableOpacity
-                    key={tab.key}
-                    onPress={() => setDetailFilter(tab.key as any)}
-                    activeOpacity={0.75}
-                    accessibilityRole="tab"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={`${tab.label}, ${tab.count} cards`}
-                    style={{
-                      flexDirection: 'row', alignItems: 'center', gap: 5,
-                      paddingHorizontal: 12, height: 30, borderRadius: Radius.full,
-                      backgroundColor: active ? tab.color + (isDark ? '28' : '18') : theme.surfaceSecondary,
-                      borderWidth: 1, borderColor: active ? tab.color + '66' : theme.cardBorder,
-                    }}
-                  >
-                    <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: tab.color }} />
-                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: active ? theme.text : theme.textSecondary }}>
-                      {tab.label}
-                    </Text>
-                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textTertiary }}>
-                      {tab.count}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </ScrollView>
-
-          {/* Selection toolbar — carried over from the old Manage view */}
-          {allCards.length > 0 && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              {isSelectionMode ? (
-                <>
-                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text, marginRight: 2 }}>
-                    {selectedCardIds.size} selected
-                  </Text>
-                  <TouchableOpacity
-                    onPress={handleToggleSelectAll}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                    style={{ paddingHorizontal: 4 }}
-                  >
-                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.primary }}>
-                      {isAllSelected ? 'None' : 'All'}
-                    </Text>
-                  </TouchableOpacity>
-                  {selectedCardIds.size > 0 && (
-                    <>
-                      <TouchableOpacity
-                        onPress={() => handleBulkReverse(true)}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel="Swap front and back on the selected cards"
-                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                        style={{ paddingHorizontal: 4 }}
-                      >
-                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.primary }}>Reverse</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={handleBulkDelete}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel="Delete the selected cards"
-                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                        style={{ paddingHorizontal: 4 }}
-                      >
-                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: tints.danger.ink }}>Delete</Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
-                  <View style={{ flex: 1 }} />
-                  <TouchableOpacity
-                    onPress={() => { setIsSelectionMode(false); setSelectedCardIds(new Set()); }}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    style={{ paddingHorizontal: 14, height: 30, borderRadius: Radius.full, justifyContent: 'center', backgroundColor: theme.primary }}
-                  >
-                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: '#ffffff' }}>Done</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <>
-                  <TouchableOpacity
-                    onPress={() => setIsSelectionMode(true)}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    accessibilityLabel="Select cards"
-                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
-                  >
-                    <Ionicons name="checkbox-outline" size={15} color={theme.textSecondary} />
-                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary }}>Select</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => handleBulkReverse(false)}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    accessibilityLabel="Swap front and back on every card here"
-                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 14 }}
-                  >
-                    <Ionicons name="swap-vertical" size={15} color={theme.textSecondary} />
-                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary }}>Reverse all</Text>
-                  </TouchableOpacity>
-                </>
-              )}
-            </View>
-          )}
-
-          {/* Card rows */}
-          {filteredCards.length === 0 ? (
-            <View style={{
-              flexDirection: 'row', alignItems: 'center',
-              padding: 12, borderRadius: Radius.lg,
-              backgroundColor: tints.grades.fill, borderWidth: 1, borderColor: tints.grades.line,
-            }}>
-              <View style={{
-                width: 34, height: 34, borderRadius: 11, marginRight: 11,
-                alignItems: 'center', justifyContent: 'center',
-                backgroundColor: isDark ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.7)',
-              }}>
-                <Ionicons name={allCards.length === 0 ? 'documents-outline' : 'search-outline'} size={17} color={tints.grades.ink} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>
-                  {allCards.length === 0 ? 'No cards yet' : 'Nothing matches'}
-                </Text>
-                <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 1, lineHeight: 16 }}>
-                  {allCards.length === 0
-                    ? 'Add cards one at a time, or import a list you already have.'
-                    : 'Try a different search or filter.'}
-                </Text>
-              </View>
-            </View>
-          ) : (
-            filteredCards.map((card, idx) => {
-              const status = getCardStatus(card);
-              const cfg = STATUS_CONFIG[status];
-              const isSelected = selectedCardIds.has(card.id);
-              const cardDue = card.nextDue <= Date.now();
-              const dueText = cardDue
-                ? 'Due now'
-                : new Date(card.nextDue).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-              const owningDeck =
-                deck ||
-                decks.find((d) => Array.isArray(d.cards) && d.cards.some((c) => c.id === card.id));
-
-              return (
-                <Card
-                  key={card.id}
-                  padding={12}
-                  radius={Radius.lg}
-                  onPress={
-                    isSelectionMode
-                      ? () => {
-                          const next = new Set(selectedCardIds);
-                          if (next.has(card.id)) next.delete(card.id);
-                          else next.add(card.id);
-                          setSelectedCardIds(next);
-                        }
-                      : owningDeck
-                      ? () => {
-                          setActiveDeck(owningDeck);
-                          setEditingCard(card);
-                          setCardForm({ front: card.front, back: card.back });
-                          setShowAddCardModal(true);
-                        }
-                      : undefined
-                  }
-                  accessibilityLabel={`${card.front}. ${card.back}. ${cfg.label}, ${dueText}`}
-                  accessibilityHint={isSelectionMode ? 'Toggles selection' : 'Opens this card for editing'}
-                  style={{ marginBottom: 8, borderColor: isSelected ? theme.primary : theme.cardBorder }}
-                >
-                  <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-                    {isSelectionMode ? (
-                      <View style={{
-                        width: 22, height: 22, borderRadius: 7, marginRight: 11, marginTop: 1,
-                        alignItems: 'center', justifyContent: 'center',
-                        borderWidth: 2,
-                        borderColor: isSelected ? theme.primary : (isDark ? '#464d75' : '#cbd5e1'),
-                        backgroundColor: isSelected ? theme.primary : 'transparent',
-                      }}>
-                        {isSelected && <Ionicons name="checkmark" size={14} color="#ffffff" />}
-                      </View>
-                    ) : (
-                      <View style={{
-                        width: 22, height: 22, borderRadius: 7, marginRight: 11, marginTop: 1,
-                        alignItems: 'center', justifyContent: 'center',
-                        backgroundColor: theme.surfaceSecondary,
-                      }}>
-                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 10, color: theme.textTertiary }}>
-                          {idx + 1}
-                        </Text>
-                      </View>
-                    )}
-
-                    <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5, gap: 6 }}>
-                        <View style={{
-                          paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6,
-                          backgroundColor: cfg.color + (isDark ? '28' : '18'),
-                        }}>
-                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 9.5, color: cfg.color, letterSpacing: 0.2 }}>
-                            {cfg.label.toUpperCase()}
-                          </Text>
-                        </View>
-                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: cardDue ? tints.tasks.ink : theme.textTertiary }}>
-                          {dueText}
-                        </Text>
-                        {card.reviewCount > 0 && (
-                          <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 10.5, color: theme.textTertiary }}>
-                            · {card.reviewCount} review{card.reviewCount !== 1 ? 's' : ''}
-                          </Text>
-                        )}
-                      </View>
-
-                      <Text numberOfLines={2} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text, lineHeight: 18 }}>
-                        {card.front}
-                      </Text>
-                      <Text numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textSecondary, marginTop: 2, lineHeight: 17 }}>
-                        {card.back}
-                      </Text>
-                    </View>
-
-                    {!isSelectionMode && owningDeck && (
-                      <TouchableOpacity
-                        onPress={() => { setActiveDeck(owningDeck); handleDeleteCard(card); }}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Delete card ${card.front}`}
-                        hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
-                        style={{
-                          width: 28, height: 28, borderRadius: 9, marginLeft: 8,
-                          alignItems: 'center', justifyContent: 'center',
-                          backgroundColor: tints.danger.fill,
-                        }}
-                      >
-                        <Ionicons name="trash-outline" size={14} color={tints.danger.ink} />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                </Card>
-              );
-            })
-          )}
-        </ScrollView>
-
-        {/* ══ Study CTA ═════════════════════════════════════════════════════ */}
-        <View
-          style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0,
-            paddingHorizontal: GUTTER, paddingTop: 12, paddingBottom: tabBarHeight + 12,
-            backgroundColor: theme.background,
-            borderTopWidth: 1, borderTopColor: theme.cardBorder,
-          }}
-        >
-          <AnimatedPressable
-            onPress={() => startStudy(activeNode, readyNow === 0)}
-            accessibilityRole="button"
-            accessibilityLabel={readyNow > 0 ? `Study ${readyNow} due cards` : `Study ahead, ${allCards.length} cards`}
-            style={{
-              flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-              paddingVertical: 14, borderRadius: Radius.lg,
-              backgroundColor: allCards.length === 0 ? theme.surfaceSecondary : color,
-              borderBottomWidth: 3,
-              borderBottomColor: allCards.length === 0 ? theme.cardBorder : 'rgba(0,0,0,0.28)',
-            }}
-          >
-            <Ionicons name="play" size={17} color={allCards.length === 0 ? theme.textTertiary : '#ffffff'} />
-            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15.5, color: allCards.length === 0 ? theme.textTertiary : '#ffffff' }}>
-              {allCards.length === 0
-                ? 'Add cards to start'
-                : readyNow > 0
-                ? `Study ${readyNow} due card${readyNow !== 1 ? 's' : ''}`
-                : `Study ahead · ${allCards.length} card${allCards.length !== 1 ? 's' : ''}`}
-            </Text>
-          </AnimatedPressable>
-        </View>
-      </SafeAreaView>
-    );
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render: Study Session
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const renderStudy = () => {
-    if (sessionCards.length === 0 && !sessionDone) return null;
-
-    if (sessionDone) {
-      const now = Date.now();
-      let soonestDue = Infinity;
-      let moreDueNow = 0;
-      for (const deck of decks) {
-        if (!deck || !Array.isArray(deck.cards)) continue;
-        for (const card of deck.cards) {
-          if (!card) continue;
-          if (card.nextDue <= now) moreDueNow++;
-          else if (card.nextDue < soonestDue) soonestDue = card.nextDue;
-        }
-      }
-      const nextDueDiffSec = soonestDue < Infinity ? Math.floor((soonestDue - now) / 1000) : -1;
-      let nextDueLabel = '';
-      if (nextDueDiffSec > 0 && nextDueDiffSec < 60) nextDueLabel = `${nextDueDiffSec}s`;
-      else if (nextDueDiffSec >= 60 && nextDueDiffSec < 3600) nextDueLabel = `${Math.floor(nextDueDiffSec / 60)}m`;
-      else if (nextDueDiffSec >= 3600 && nextDueDiffSec < 86400)
-        nextDueLabel = `${Math.floor(nextDueDiffSec / 3600)}h ${Math.floor((nextDueDiffSec % 3600) / 60)}m`;
-      else if (nextDueDiffSec >= 86400) nextDueLabel = `${Math.floor(nextDueDiffSec / 86400)}d`;
-
-      const accuracyPct =
-        sessionCards.length > 0
-          ? Math.round(((sessionCards.length - sessionStats.again) / sessionCards.length) * 100)
-          : 0;
-
-      return (
-        <SafeAreaView edges={['top', 'left', 'right']} className="flex-1" style={{ backgroundColor: theme.background }}>
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{
-              flexGrow: 1,
-              alignItems: 'center',
-              justifyContent: 'center',
-              paddingHorizontal: 24,
-              paddingTop: 16,
-              paddingBottom: tabBarHeight + 24,
-            }}
-            showsVerticalScrollIndicator={false}
-          >
-            <Image
-              source={require('../../assets/images/happy.png')}
-              style={{ width: 110, height: 110, marginBottom: 16 }}
-              resizeMode="contain"
-            />
-            <Text className={`font-nunito-black text-3xl text-center mb-1 ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              Session Complete! 🎉
-            </Text>
-            <Text className={`font-nunito text-sm text-center mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              You reviewed {sessionCards.length} card{sessionCards.length !== 1 ? 's' : ''}. Fin is proud of your progress!
-            </Text>
-
-            <View
-              className="w-full p-6 rounded-3xl mb-4 border"
-              style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
-            >
-              <Text className={`font-nunito-bold text-xs text-center tracking-widest mb-6 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                SESSION ANALYTICS & XP
-              </Text>
-              <View className="flex-row justify-around items-center">
-                <View className="items-center flex-1 border-r border-slate-200 dark:border-slate-800">
-                  <Text className="font-nunito-black text-3xl text-indigo-500">{accuracyPct}%</Text>
-                  <Text className={`font-nunito-bold text-[10px] uppercase tracking-wider mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                    Accuracy
-                  </Text>
-                </View>
-                <View className="items-center flex-1 border-r border-slate-200 dark:border-slate-800">
-                  <Text className="font-nunito-black text-3xl text-emerald-500">{sessionStats.mastered}</Text>
-                  <Text className={`font-nunito-bold text-[10px] uppercase tracking-wider mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                    Mastered
-                  </Text>
-                </View>
-                <View className="items-center flex-1">
-                  <View className="flex-row items-center justify-center">
-                    <Text className="font-nunito-black text-3xl text-orange-500">{flashcardStats.currentStreak}</Text>
-                    <Text className="text-xl ml-1">🔥</Text>
-                  </View>
-                  <Text className={`font-nunito-bold text-[10px] uppercase tracking-wider mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                    Day Streak
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            {moreDueNow > 0 ? (
-              <View
-                className={`w-full p-4 rounded-2xl mb-6 ${
-                  isDark ? 'bg-indigo-950/40 border border-indigo-800/30' : 'bg-indigo-50 border border-indigo-100'
-                }`}
-              >
-                <Text className={`font-nunito-bold text-center text-sm ${isDark ? 'text-indigo-300' : 'text-indigo-700'}`}>
-                  {moreDueNow} more card{moreDueNow !== 1 ? 's' : ''} due right now!
-                </Text>
-              </View>
-            ) : nextDueLabel ? (
-              <View
-                className="w-full p-4 rounded-2xl mb-6 flex-row items-center justify-center border"
-                style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder }}
-              >
-                <Ionicons name="time-outline" size={16} color={isDark ? '#94a3b8' : '#64748b'} />
-                <Text className={`font-nunito text-sm ml-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                  Next review in <Text className="font-nunito-bold text-indigo-500">{nextDueLabel}</Text>
-                </Text>
-              </View>
-            ) : null}
-
-            <View className="flex-row w-full" style={{ gap: 12 }}>
-              <TouchableOpacity
-                onPress={() => setView(activeNode ? 'detail' : 'decks')}
-                className="flex-1 py-4 rounded-2xl items-center border"
-                style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
-              >
-                <Text className={`font-nunito-bold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                  {activeNode ? 'Back to Deck' : 'All Decks'}
-                </Text>
-              </TouchableOpacity>
-              {moreDueNow > 0 ? (
-                <TouchableOpacity
-                  onPress={startStudyAll}
-                  className="flex-1 py-4 rounded-2xl items-center bg-indigo-500 shadow-lg shadow-indigo-500/30"
-                >
-                  <Text className="font-nunito-bold text-white">Continue ({moreDueNow})</Text>
-                </TouchableOpacity>
-              ) : activeNode ? (
-                <TouchableOpacity
-                  onPress={() => startStudy(activeNode)}
-                  style={{ backgroundColor: activeDeck?.color || '#4f46e5', flex: 1 }}
-                  className="py-4 rounded-2xl items-center"
-                >
-                  <Text className="font-nunito-bold text-white">Study Again</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          </ScrollView>
-        </SafeAreaView>
-      );
-    }
-
-    const card = sessionCards[cardIndex];
-    const progress = sessionCards.length > 0 ? cardIndex / sessionCards.length : 0;
-    const cardColor = decks.find((d) => d.id === card.deckId)?.color || activeDeck?.color || theme.primary;
-    const owningDeck = decks.find((d) => d.id === card.deckId) || activeDeck || null;
-
-    const exitSession = () => {
-      setUndoState(null);
-      setView(activeNode ? 'detail' : 'decks');
-    };
-
-    const headerButton = (
-      iconName: keyof typeof Ionicons.glyphMap,
-      label: string,
-      onPress: () => void,
-      opts?: { active?: boolean; disabled?: boolean }
-    ) => (
-      <TouchableOpacity
-        onPress={onPress}
-        disabled={opts?.disabled}
-        activeOpacity={0.7}
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        accessibilityState={{ disabled: Boolean(opts?.disabled), selected: Boolean(opts?.active) }}
-        style={{
-          width: 36, height: 36, borderRadius: 12,
-          alignItems: 'center', justifyContent: 'center',
-          backgroundColor: opts?.active ? tints.grades.fill : theme.surface,
-          borderWidth: 1, borderColor: opts?.active ? tints.grades.line : theme.cardBorder,
-          borderBottomWidth: 2, borderBottomColor: opts?.active ? tints.grades.line : theme.lip,
-          opacity: opts?.disabled ? 0.4 : 1,
-        }}
-      >
-        <Ionicons
-          name={iconName}
-          size={17}
-          color={opts?.active ? tints.grades.ink : theme.textSecondary}
-        />
-      </TouchableOpacity>
-    );
-
-    return (
-      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
-        {/* ══ Session bar ═══════════════════════════════════════════════════ */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10 }}>
-          {headerButton('close', 'End session', exitSession)}
-
-          <View style={{ flex: 1, alignItems: 'center' }}>
-            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>
-              {activeNode ? activeNode.deck?.name || activeNode.name : 'All decks'}
-            </Text>
-            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary }}>
-              Card {cardIndex + 1} of {sessionCards.length}
-            </Text>
-          </View>
-
-          {/* Undo the last rating — a mis-tap is otherwise permanent. */}
-          {headerButton('arrow-undo-outline', 'Undo last rating', handleUndoRating, { disabled: !undoState })}
-
-          {owningDeck &&
-            headerButton('create-outline', 'Edit this card', () => {
-              setActiveDeck(owningDeck);
-              setEditingCard(card);
-              setCardForm({ front: card.front, back: card.back });
-              setShowAddCardModal(true);
-            })}
-
-          {headerButton(
-            'swap-vertical',
-            studyReversed ? 'Show the term first' : 'Show the answer first',
-            () => {
-              setStudyReversed((r) => !r);
-              setIsFlipped(false);
-            },
-            { active: studyReversed }
-          )}
-        </View>
-
-        <View style={{ paddingHorizontal: GUTTER, marginBottom: 22 }}>
-          <ProgressBar
-            progress={progress}
-            height={7}
-            color={cardColor}
-            accessibilityLabel={`Session progress, card ${cardIndex + 1} of ${sessionCards.length}`}
-          />
-        </View>
-
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: GUTTER }}>
-          <FlipCard
-            front={studyReversed ? card.back : card.front}
-            back={studyReversed ? card.front : card.back}
-            isFlipped={isFlipped}
-            onFlip={() => setIsFlipped((f) => !f)}
-            color={cardColor}
-            isDark={isDark}
-            frontLabel={studyReversed ? 'DEFINITION' : 'TERM'}
-            backLabel={studyReversed ? 'TERM' : 'DEFINITION'}
-          />
-          {!isFlipped && (
-            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12.5, color: theme.textTertiary, marginTop: 28 }}>
-              Tap the card to reveal the {studyReversed ? 'term' : 'definition'}
-            </Text>
-          )}
-        </View>
-
-        <View
-          pointerEvents={isFlipped ? 'auto' : 'none'}
-          style={{ paddingHorizontal: GUTTER, paddingBottom: tabBarHeight + 12, opacity: isFlipped ? 1 : 0 }}
-        >
-          <Text style={{ ...microLabel, textAlign: 'center', marginBottom: 12 }}>
-            How well did you know this?
-          </Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            {(() => {
-              const isNew = card.interval === 0;
-              const formatMin = (m: number) =>
-                m < 60 ? `<${m}m` : m < 1440 ? `<${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
-              const formatDay = (d: number) => (d < 1 ? '<1d' : `${Math.round(d)}d`);
-              const parseSteps = (str: string | undefined) => {
-                const p = (str || '1 10')
-                  .split(' ')
-                  .map((s) => parseInt(s.trim(), 10))
-                  .filter((n) => !isNaN(n));
-                return p.length > 0 ? p : [1, 10];
-              };
-              const steps = parseSteps(srSettings.learningSteps);
-              const stepIndex = card.stepIndex || 0;
-              const againSub = formatMin(steps[0]);
-              const hardSub = isNew ? formatMin(steps[stepIndex]) : formatDay(Math.max(1, card.interval * 1.2));
-              let goodSub = '';
-              if (isNew) {
-                goodSub =
-                  stepIndex + 1 >= steps.length
-                    ? formatDay(srSettings.graduatingInterval || 1)
-                    : formatMin(steps[stepIndex + 1]);
-              } else {
-                goodSub = formatDay(Math.max(1, card.interval * card.easeFactor));
-              }
-              const easySub = isNew
-                ? formatDay(srSettings.easyInterval || 4)
-                : formatDay(Math.max(1, card.interval * card.easeFactor * 1.3));
-              return [
-                { rating: 1 as const, label: 'Again', sub: againSub, tint: tints.danger },
-                { rating: 2 as const, label: 'Hard', sub: hardSub, tint: tints.tasks },
-                { rating: 3 as const, label: 'Good', sub: goodSub, tint: tints.schedule },
-                { rating: 4 as const, label: 'Easy', sub: easySub, tint: tints.attendance },
-              ].map((btn) => (
-                <AnimatedPressable
-                  key={btn.rating}
-                  onPress={() => isFlipped && handleRate(btn.rating)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${btn.label}, next review in ${btn.sub}`}
-                  style={{
-                    flex: 1,
-                    paddingVertical: 12,
-                    borderRadius: Radius.lg,
-                    alignItems: 'center',
-                    backgroundColor: btn.tint.fill,
-                    borderWidth: 1,
-                    borderColor: btn.tint.line,
-                    borderBottomWidth: 3,
-                    borderBottomColor: btn.tint.line,
-                  }}
-                >
-                  <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 14, color: btn.tint.ink }}>
-                    {btn.label}
-                  </Text>
-                  <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: btn.tint.ink, opacity: 0.75, marginTop: 1 }}>
-                    {btn.sub}
-                  </Text>
-                </AnimatedPressable>
-              ));
-            })()}
-          </View>
-        </View>
-      </SafeAreaView>
-    );
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render: Practice Test / Quiz
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const renderQuiz = () => {
-    if (quizQuestions.length === 0) return null;
-
-    if (quizDone) {
-      const pct = quizQuestions.length > 0 ? Math.round((quizScore / quizQuestions.length) * 100) : 0;
-      return (
-        <SafeAreaView edges={['top', 'left', 'right']} className="flex-1" style={{ backgroundColor: theme.background }}>
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{
-              flexGrow: 1,
-              alignItems: 'center',
-              justifyContent: 'center',
-              paddingHorizontal: 24,
-              paddingTop: 16,
-              paddingBottom: tabBarHeight + 24,
-            }}
-            showsVerticalScrollIndicator={false}
-          >
-            <View
-              style={{
-                width: 100,
-                height: 100,
-                borderRadius: 50,
-                backgroundColor: pct >= 70 ? 'rgba(16,185,129,0.12)' : 'rgba(249,115,22,0.12)',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginBottom: 20,
-              }}
-            >
-              <Ionicons
-                name={pct >= 70 ? 'trophy-outline' : 'school-outline'}
-                size={48}
-                color={pct >= 70 ? '#10b981' : '#f97316'}
-              />
-            </View>
-            <Text className={`font-nunito-black text-3xl text-center mb-2 ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              {pct}% Score
-            </Text>
-            <Text className={`font-nunito text-sm text-center mb-8 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              You got {quizScore} out of {quizQuestions.length} correct
-            </Text>
-
-            {quizMissed.length > 0 && (
-              <View
-                className="w-full p-5 rounded-3xl mb-6 border"
-                style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
-              >
-                <Text className={`font-nunito-bold text-xs tracking-widest mb-4 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                  MISSED TERMS ({quizMissed.length})
-                </Text>
-                {quizMissed.map((q, i) => (
-                  <View
-                    key={i}
-                    className="mb-3 pb-3"
-                    style={{
-                      borderBottomWidth: i < quizMissed.length - 1 ? 1 : 0,
-                      borderBottomColor: theme.cardBorder,
-                    }}
-                  >
-                    <Text className={`font-nunito-bold text-sm ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                      {q.question}
-                    </Text>
-                    <Text className={`font-nunito text-xs mt-1 text-emerald-500`}>{q.correctAnswer}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            <View className="flex-row w-full" style={{ gap: 12 }}>
-              <TouchableOpacity
-                onPress={() => setView(activeNode ? 'detail' : 'decks')}
-                className="flex-1 py-4 rounded-2xl items-center border"
-                style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
-              >
-                <Text className={`font-nunito-bold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                  {activeNode ? 'Back to Deck' : 'All Decks'}
-                </Text>
-              </TouchableOpacity>
-              {quizMissed.length > 0 && activeNode && (
-                <TouchableOpacity
-                  onPress={() => generateQuiz(activeNode, quizMissed)}
-                  className="flex-1 py-4 rounded-2xl items-center bg-indigo-500 shadow-lg shadow-indigo-500/30"
-                >
-                  <Text className="font-nunito-bold text-white">Retry Missed ({quizMissed.length})</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </ScrollView>
-        </SafeAreaView>
-      );
-    }
-
-    const q = quizQuestions[quizIndex];
-    const progress = quizIndex / quizQuestions.length;
-
-    return (
-      <SafeAreaView edges={['top', 'left', 'right']} className="flex-1" style={{ backgroundColor: theme.background }}>
-        <View className="flex-row justify-between items-center px-6 py-4">
-          <TouchableOpacity
-            onPress={() => setView(activeNode ? 'detail' : 'decks')}
-            className="w-10 h-10 rounded-full items-center justify-center border"
-            style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder }}
-          >
-            <Ionicons name="close" size={20} color={isDark ? '#94a3b8' : '#64748b'} />
-          </TouchableOpacity>
-          <Text className={`font-nunito-bold text-sm ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>Practice Test</Text>
-          <Text className={`font-nunito-bold text-sm ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-            {quizIndex + 1}/{quizQuestions.length}
-          </Text>
-        </View>
-
-        <View className="mx-6 h-2 rounded-full mb-8 overflow-hidden" style={{ backgroundColor: theme.surfaceSecondary }}>
-          <View style={{ width: `${progress * 100}%`, backgroundColor: '#10b981', height: '100%', borderRadius: 999 }} />
-        </View>
-
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 20 }}
-          showsVerticalScrollIndicator={false}
-        >
-          <View
-            className="p-6 rounded-3xl mb-8 border"
-            style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
-          >
-            <Text className={`font-nunito-bold text-xs tracking-widest mb-3 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-              QUESTION {quizIndex + 1}
-            </Text>
-            <Text className={`font-nunito-black text-lg leading-relaxed ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              {q.question}
-            </Text>
-          </View>
-
-          <View style={{ gap: 12 }}>
-            {q.options.map((option, idx) => {
-              const isSelected = quizSelected === option;
-              const isCorrect = option === q.correctAnswer;
-              const showResult = quizSelected !== null;
-              let bgColor = theme.surface;
-              let borderColor = theme.cardBorder;
-              let textColor = theme.text;
-
-              if (showResult) {
-                if (isCorrect) {
-                  bgColor = 'rgba(16,185,129,0.12)';
-                  borderColor = '#10b981';
-                  textColor = '#10b981';
-                } else if (isSelected && !isCorrect) {
-                  bgColor = 'rgba(239,68,68,0.12)';
-                  borderColor = '#ef4444';
-                  textColor = '#ef4444';
-                } else {
-                  textColor = isDark ? '#475569' : '#94a3b8';
-                }
-              }
-
-              return (
-                <TouchableOpacity
-                  key={idx}
-                  onPress={() => handleQuizAnswer(option)}
-                  disabled={quizSelected !== null}
-                  style={{ backgroundColor: bgColor, borderColor }}
-                  className="p-4 rounded-2xl border flex-row items-center"
-                >
-                  <View
-                    style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 14,
-                      borderWidth: 1.5,
-                      borderColor:
-                        showResult && isCorrect
-                          ? '#10b981'
-                          : showResult && isSelected
-                          ? '#ef4444'
-                          : isDark
-                          ? '#475569'
-                          : '#cbd5e1',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginRight: 12,
-                    }}
-                  >
-                    {showResult && isCorrect && <Ionicons name="checkmark" size={16} color="#10b981" />}
-                    {showResult && isSelected && !isCorrect && <Ionicons name="close" size={16} color="#ef4444" />}
-                    {!showResult && (
-                      <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: isDark ? '#94a3b8' : '#64748b' }}>
-                        {String.fromCharCode(65 + idx)}
-                      </Text>
-                    )}
-                  </View>
-                  <Text style={{ color: textColor, fontFamily: 'Nunito_700Bold', fontSize: 14, flex: 1 }}>{option}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </ScrollView>
-
-        <View style={{ paddingHorizontal: 24, paddingTop: 12, paddingBottom: tabBarHeight + 8 }}>
-          <View className="flex-row items-center justify-center" style={{ gap: 16 }}>
-            <View className="flex-row items-center" style={{ gap: 4 }}>
-              <Ionicons name="checkmark-circle" size={16} color="#10b981" />
-              <Text className={`font-nunito-bold text-sm ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{quizScore}</Text>
-            </View>
-            <View className="flex-row items-center" style={{ gap: 4 }}>
-              <Ionicons name="close-circle" size={16} color="#ef4444" />
-              <Text className={`font-nunito-bold text-sm ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                {quizMissed.length}
-              </Text>
-            </View>
-          </View>
-        </View>
-      </SafeAreaView>
-    );
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render: Matching Game
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const renderMatch = () => {
-    if (matchCards.length === 0) return null;
-
-    if (matchDone) {
-      const totalPairs = matchCards.length / 2;
-      const accuracy = matchMoves > 0 ? Math.round((totalPairs / matchMoves) * 100) : 100;
-      const mins = Math.floor(matchElapsed / 60);
-      const secs = matchElapsed % 60;
-
-      return (
-        <SafeAreaView edges={['top', 'left', 'right']} className="flex-1" style={{ backgroundColor: theme.background }}>
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{
-              flexGrow: 1,
-              alignItems: 'center',
-              justifyContent: 'center',
-              paddingHorizontal: 24,
-              paddingTop: 16,
-              paddingBottom: tabBarHeight + 24,
-            }}
-            showsVerticalScrollIndicator={false}
-          >
-            <View
-              style={{
-                width: 100,
-                height: 100,
-                borderRadius: 50,
-                backgroundColor: 'rgba(249,115,22,0.12)',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginBottom: 20,
-              }}
-            >
-              <Ionicons name="grid-outline" size={48} color="#f97316" />
-            </View>
-            <Text className={`font-nunito-black text-3xl text-center mb-2 ${isDark ? 'text-white' : 'text-slate-800'}`}>
-              All Matched!
-            </Text>
-            <Text className={`font-nunito text-sm text-center mb-8 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              You matched all {totalPairs} pairs
-            </Text>
-
-            <View
-              className={`w-full p-6 rounded-3xl mb-8 border ${
-                isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'
-              }`}
-            >
-              <View className="flex-row justify-around items-center">
-                <View className="items-center">
-                  <Text className={`font-nunito-black text-2xl ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {mins}:{String(secs).padStart(2, '0')}
-                  </Text>
-                  <Text className={`font-nunito-bold text-[10px] uppercase tracking-wider mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                    Time
-                  </Text>
-                </View>
-                <View className="items-center">
-                  <Text className={`font-nunito-black text-2xl ${isDark ? 'text-white' : 'text-slate-800'}`}>
-                    {matchMoves}
-                  </Text>
-                  <Text className={`font-nunito-bold text-[10px] uppercase tracking-wider mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                    Moves
-                  </Text>
-                </View>
-                <View className="items-center">
-                  <Text className="font-nunito-black text-2xl text-orange-500">{accuracy}%</Text>
-                  <Text className={`font-nunito-bold text-[10px] uppercase tracking-wider mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                    Accuracy
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            <View className="flex-row w-full" style={{ gap: 12 }}>
-              <TouchableOpacity
-                onPress={() => setView(activeNode ? 'detail' : 'decks')}
-                className="flex-1 py-4 rounded-2xl items-center border"
-                style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip }}
-              >
-                <Text className={`font-nunito-bold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                  {activeNode ? 'Back to Deck' : 'All Decks'}
-                </Text>
-              </TouchableOpacity>
-              {activeNode && (
-                <TouchableOpacity
-                  onPress={() => startMatch(activeNode)}
-                  className="flex-1 py-4 rounded-2xl items-center bg-orange-500 shadow-lg shadow-orange-500/30"
-                >
-                  <Text className="font-nunito-bold text-white">Play Again</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </ScrollView>
-        </SafeAreaView>
-      );
-    }
-
-    const cols = 4;
-    const cardSize = (SCREEN_WIDTH - 40 - (cols - 1) * 8) / cols;
-
-    return (
-      <SafeAreaView edges={['top', 'left', 'right']} className="flex-1" style={{ backgroundColor: theme.background }}>
-        <View className="flex-row justify-between items-center px-6 py-4">
-          <TouchableOpacity
-            onPress={() => setView(activeNode ? 'detail' : 'decks')}
-            className="w-10 h-10 rounded-full items-center justify-center border"
-            style={{ backgroundColor: theme.surface, borderColor: theme.cardBorder }}
-          >
-            <Ionicons name="close" size={20} color={isDark ? '#94a3b8' : '#64748b'} />
-          </TouchableOpacity>
-          <Text className={`font-nunito-bold text-sm ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>Matching Game</Text>
-          <View className="flex-row items-center" style={{ gap: 12 }}>
-            <View className="flex-row items-center" style={{ gap: 4 }}>
-              <Ionicons name="time-outline" size={15} color={isDark ? '#94a3b8' : '#64748b'} />
-              <Text className={`font-nunito-bold text-sm ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                {Math.floor(matchElapsed / 60)}:{String(matchElapsed % 60).padStart(2, '0')}
-              </Text>
-            </View>
-            <Text className={`font-nunito-bold text-sm ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              {matchMoves} moves
-            </Text>
-          </View>
-        </View>
-
-        <View className="mx-6 h-2 rounded-full mb-6 overflow-hidden" style={{ backgroundColor: theme.surfaceSecondary }}>
-          <View
-            style={{
-              width: `${(matchMatched.size / (matchCards.length / 2)) * 100}%`,
-              backgroundColor: '#f97316',
-              height: '100%',
-              borderRadius: 999,
-            }}
-          />
-        </View>
-
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24 }} showsVerticalScrollIndicator={false}>
-          <View className="flex-row flex-wrap" style={{ gap: 8 }}>
-            {matchCards.map((card) => {
-              const isRevealed = matchRevealed.includes(card.id);
-              const isMatched = matchMatched.has(card.pairId);
-              const showFace = isRevealed || isMatched;
-
-              return (
-                <TouchableOpacity
-                  key={card.id}
-                  onPress={() => handleMatchTap(card.id)}
-                  disabled={isMatched || isRevealed}
-                  style={{
-                    width: cardSize,
-                    height: cardSize + 16,
-                    borderRadius: 14,
-                    borderWidth: 1.5,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 6,
-                    backgroundColor: isMatched
-                      ? isDark
-                        ? 'rgba(16,185,129,0.1)'
-                        : 'rgba(16,185,129,0.06)'
-                      : showFace
-                      ? isDark
-                        ? '#1e293b'
-                        : '#ffffff'
-                      : isDark
-                      ? '#334155'
-                      : '#e2e8f0',
-                    borderColor: isMatched ? '#10b981' : showFace ? '#f97316' : isDark ? '#475569' : '#cbd5e1',
-                    opacity: isMatched ? 0.6 : 1,
-                  }}
-                >
-                  {showFace ? (
-                    <Text
-                      numberOfLines={4}
-                      style={{
-                        fontFamily: 'Nunito_700Bold',
-                        fontSize: cardSize > 80 ? 11 : 9,
-                        textAlign: 'center',
-                        color: isMatched ? '#10b981' : isDark ? '#e2e8f0' : '#334155',
-                      }}
-                    >
-                      {card.text}
-                    </Text>
-                  ) : (
-                    <Ionicons name="help-outline" size={20} color={isDark ? '#64748b' : '#94a3b8'} />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    );
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render: Deck Management (Card list)
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // ─── Shared sheet atoms ──────────────────────────────────────────────────
 
   const microLabel = {
     fontFamily: 'Nunito_800ExtraBold' as const,
@@ -3009,7 +1318,38 @@ export default function FlashcardsScreen() {
     fontSize: 15,
   };
 
-  const PrimaryButton = ({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) => (
+  const iconButton = (
+    icon: keyof typeof Ionicons.glyphMap,
+    label: string,
+    onPress: () => void,
+    opts?: { disabled?: boolean; active?: boolean }
+  ) => (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={opts?.disabled}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: Boolean(opts?.disabled), selected: Boolean(opts?.active) }}
+      style={{
+        width: 36,
+        height: 36,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: opts?.active ? tints.grades.fill : theme.surface,
+        borderWidth: 1,
+        borderColor: opts?.active ? tints.grades.line : theme.cardBorder,
+        borderBottomWidth: 2,
+        borderBottomColor: opts?.active ? tints.grades.line : theme.lip,
+        opacity: opts?.disabled ? 0.4 : 1,
+      }}
+    >
+      <Ionicons name={icon} size={17} color={opts?.active ? tints.grades.ink : theme.textSecondary} />
+    </TouchableOpacity>
+  );
+
+  const PrimaryButton = ({ label, onPress, disabled, color }: { label: string; onPress: () => void; disabled?: boolean; color?: string }) => (
     <AnimatedPressable
       onPress={onPress}
       disabled={disabled}
@@ -3019,185 +1359,1514 @@ export default function FlashcardsScreen() {
         paddingVertical: 14,
         borderRadius: Radius.lg,
         alignItems: 'center',
-        backgroundColor: disabled ? theme.surfaceSecondary : theme.primary,
+        backgroundColor: disabled ? theme.surfaceSecondary : color || theme.primary,
         borderBottomWidth: 3,
-        borderBottomColor: disabled ? theme.cardBorder : theme.primaryDark,
+        borderBottomColor: disabled ? theme.cardBorder : color ? 'rgba(0,0,0,0.25)' : theme.primaryDark,
         opacity: disabled ? 0.7 : 1,
       }}
     >
-      <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15.5, color: disabled ? theme.textTertiary : '#ffffff' }}>
-        {label}
-      </Text>
+      <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15.5, color: disabled ? theme.textTertiary : '#ffffff' }}>{label}</Text>
     </AnimatedPressable>
   );
 
-  // ─── Create ──────────────────────────────────────────────────────────────
+  /** Anki's three numbers, in their colours. */
+  const QueueCounts = ({ c, size = 13, onBand }: { c: DueCounts; size?: number; onBand?: boolean }) => {
+    const band = queueOnBand(isDark);
+    const items = [
+      { key: 'new', n: c.new, label: 'new', color: onBand ? band.new : qt.new.ink },
+      { key: 'learn', n: c.learn, label: 'learning', color: onBand ? band.learn : qt.learn.ink },
+      { key: 'review', n: c.review, label: 'review', color: onBand ? band.review : qt.review.ink },
+    ];
+    return (
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        {items.map((it) => (
+          <View key={it.key} style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: it.color }} />
+            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: size, color: onBand ? brand.onHeroMuted : theme.textSecondary }}>
+              <Text style={{ fontFamily: 'Nunito_900Black', color: onBand ? brand.onHero : theme.text }}>{it.n}</Text> {it.label}
+            </Text>
+          </View>
+        ))}
+      </View>
+    );
+  };
+
+  const ToolTiles = ({ node }: { node: DeckNode | null }) => {
+    const tiles: { key: PracticeAction; icon: keyof typeof Ionicons.glyphMap; label: string; hint: string; tint: typeof tints.grades }[] = [
+      { key: 'quiz', icon: 'document-text-outline', label: 'Practice test', hint: 'Multiple choice', tint: tints.attendance },
+      { key: 'match', icon: 'grid-outline', label: 'Speed match', hint: 'Pair them up', tint: tints.tasks },
+      { key: 'exam', icon: 'calendar-outline', label: 'Exam prep', hint: 'Ready by a date', tint: tints.danger },
+      { key: 'custom', icon: 'flash-outline', label: 'Custom', hint: 'Ahead or cram', tint: tints.schedule },
+    ];
+    return (
+      <View style={{ flexDirection: 'row', gap: 10 }}>
+        {tiles.map((t) => (
+          <TouchableOpacity
+            key={t.key}
+            onPress={() => (node ? runPractice(t.key, node) : launchFromHome(t.key))}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`${t.label}, ${t.hint}`}
+            style={{ flex: 1, alignItems: 'center' }}
+          >
+            <View
+              style={{
+                width: '100%',
+                height: 52,
+                borderRadius: 20,
+                marginBottom: 7,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: t.tint.fill,
+                borderWidth: 1,
+                borderColor: t.tint.line,
+              }}
+            >
+              <Ionicons name={t.icon} size={20} color={t.tint.ink} />
+            </View>
+            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: theme.text }}>
+              {t.label}
+            </Text>
+            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 9.5, color: theme.textTertiary, marginTop: 1 }}>
+              {t.hint}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render: home
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderHome = () => {
+    const todayMidnight = getLocalDateString();
+    const studiedToday = flashcardStats.lastStudyDate === todayMidnight;
+    const streak = isStreakLive(flashcardStats.lastStudyDate) ? Math.max(0, flashcardStats.currentStreak || 0) : 0;
+    const goal = Math.max(1, flashcardStats.dailyGoal || 20);
+    const reviewedToday = studiedToday ? flashcardStats.cardsReviewedToday ?? 0 : 0;
+    const retention = trueRetention(flashcardStats, 30);
+
+    // Time estimate from this student's own pace; 8 seconds a card until there is one.
+    const log = flashcardStats.log || {};
+    const recent = Object.values(log).slice(-14);
+    const recentReviews = recent.reduce((s, x) => s + (x?.reviews || 0), 0);
+    const recentMs = recent.reduce((s, x) => s + (x?.ms || 0), 0);
+    const perCard = recentReviews >= 20 ? recentMs / recentReviews : 8000;
+    const estMin = Math.max(1, Math.round((allDue * perCard) / 60000));
+
+    let nextDue = Infinity;
+    for (const d of decks) for (const c of d?.cards || []) if (c && !isSidelined(c, clock) && cardState(c) !== 'new' && c.nextDue > clock && c.nextDue < nextDue) nextDue = c.nextDue;
+
+    const q = search.trim().toLowerCase();
+    const visibleTree = q
+      ? buildDeckTree(decks.filter((d) => d && (d.name.toLowerCase().includes(q) || (d.subject || '').toLowerCase().includes(q))))
+      : tree;
+
+    const statTiles = [
+      {
+        key: 'streak',
+        icon: 'flame' as const,
+        value: `${streak}`,
+        label: 'Day streak',
+        caption: studiedToday ? 'Done today' : streak > 0 ? 'Study to keep it' : 'Start one today',
+        tint: tints.tasks,
+      },
+      {
+        key: 'goal',
+        icon: 'checkmark-done' as const,
+        value: `${Math.min(reviewedToday, 999)}/${goal}`,
+        label: 'Daily goal',
+        caption: reviewedToday >= goal ? 'Goal reached' : `${goal - reviewedToday} to go`,
+        tint: tints.attendance,
+      },
+      {
+        key: 'retention',
+        icon: 'pulse' as const,
+        value: retention === null ? '—' : `${Math.round(retention * 100)}%`,
+        label: 'Retention',
+        caption: retention === null ? 'No reviews yet' : 'Last 30 days',
+        tint: tints.schedule,
+      },
+    ];
+
+    const bandButton = (icon: keyof typeof Ionicons.glyphMap, label: string, onPress: () => void) => (
+      <TouchableOpacity
+        onPress={onPress}
+        activeOpacity={0.75}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        style={{
+          width: 38,
+          height: 38,
+          borderRadius: 19,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: brand.well,
+          borderWidth: 1,
+          borderColor: brand.wellLine,
+        }}
+      >
+        <Ionicons name={icon} size={18} color={brand.onHero} />
+      </TouchableOpacity>
+    );
+
+    return (
+      <SafeAreaView edges={['left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+        {/* ══ App bar, on the band ═══════════════════════════════════════════
+            The study tab opens the way the dashboard does: an azure band that
+            runs under the status bar, carrying the one number that matters —
+            how much is due today — with the headline stats on a card that
+            straddles its edge. The two tabs a student opens most now read as
+            the same app. */}
+        <View style={{ backgroundColor: brand.heroFrom, paddingTop: insets.top, zIndex: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10, gap: 8 }}>
+            <View style={{ flex: 1 }}>
+              <Text accessibilityRole="header" style={{ fontFamily: 'Nunito_900Black', fontSize: 20, color: brand.onHero, letterSpacing: -0.4 }}>
+                Study
+              </Text>
+              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: brand.onHeroMuted }}>
+                {decks.length} deck{decks.length !== 1 ? 's' : ''} · {totalCards} card{totalCards !== 1 ? 's' : ''}
+              </Text>
+            </View>
+            {bandButton('stats-chart', 'Statistics', () => setShowStats(true))}
+            {bandButton('options-outline', 'Study options', () => router.push('/study-options'))}
+            <SpotlightTarget id={SPOTLIGHT_IDS.studyCreateDeck}>
+              <AnimatedPressable
+                onPress={() => setShowCreateSheet(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Create a deck, folder or cards"
+                style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ffffff' }}
+              >
+                <Ionicons name="add" size={22} color={brand.heroTo} />
+              </AnimatedPressable>
+            </SpotlightTarget>
+          </View>
+        </View>
+
+        {loading ? (
+          <ListSkeleton count={4} cardHeight={80} />
+        ) : (
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* ══ Today, in the band ══ */}
+            <View style={{ height: decks.length > 0 ? HERO_H : 110 }}>
+              <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+                <HeroBackdrop width={SCREEN_WIDTH} height={decks.length > 0 ? HERO_H : 110} curve={HERO_CURVE} isDark={isDark} />
+              </View>
+              <View style={{ paddingHorizontal: GUTTER + 4, paddingTop: 6 }}>
+                {decks.length === 0 ? (
+                  <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, lineHeight: 20, color: brand.onHeroMuted, maxWidth: 300 }}>
+                    Flashcards that schedule themselves — review each card right before you would forget it.
+                  </Text>
+                ) : (
+                  <>
+                    <Text style={{ ...microLabel, color: brand.onHeroMuted }}>{allDue > 0 ? 'Due today' : 'All caught up'}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                      <View style={{ flex: 1 }}>
+                        {allDue > 0 ? (
+                          <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 38, color: brand.onHero, letterSpacing: -1.2 }}>
+                            {allDue}
+                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15, color: brand.onHeroMuted, letterSpacing: 0 }}>
+                              {' '}card{allDue !== 1 ? 's' : ''} · ~{estMin} min
+                            </Text>
+                          </Text>
+                        ) : (
+                          <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: brand.onHero, letterSpacing: -0.4, marginTop: 4 }}>
+                            {totalCards === 0
+                              ? 'Add cards to begin'
+                              : nextDue < Infinity
+                              ? `Next review ${relativeDue(nextDue, clock)}`
+                              : 'Nothing scheduled'}
+                          </Text>
+                        )}
+                      </View>
+                      {allDue > 0 ? (
+                        <AnimatedPressable
+                          onPress={() => startSession(null)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Study now, ${allDue} cards`}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 6,
+                            paddingHorizontal: 18,
+                            height: 44,
+                            borderRadius: Radius.full,
+                            backgroundColor: '#ffffff',
+                            borderBottomWidth: 3,
+                            borderBottomColor: 'rgba(0,0,0,0.18)',
+                          }}
+                        >
+                          <Ionicons name="play" size={16} color={brand.heroTo} />
+                          <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 15, color: brand.heroTo }}>Study</Text>
+                        </AnimatedPressable>
+                      ) : totalCards > 0 ? (
+                        <TouchableOpacity
+                          onPress={() => setCustomPath(null)}
+                          activeOpacity={0.75}
+                          accessibilityRole="button"
+                          accessibilityLabel="Custom study"
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 5,
+                            paddingHorizontal: 14,
+                            height: 38,
+                            borderRadius: Radius.full,
+                            backgroundColor: brand.well,
+                            borderWidth: 1,
+                            borderColor: brand.wellLine,
+                          }}
+                        >
+                          <Ionicons name="flash-outline" size={14} color={brand.onHero} />
+                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: brand.onHero }}>Custom</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                    {allDue > 0 && (
+                      <View style={{ marginTop: 6 }}>
+                        <QueueCounts c={allCounts} size={12} onBand />
+                      </View>
+                    )}
+                  </>
+                )}
+              </View>
+            </View>
+
+            {/* ══ Momentum, straddling the band ══ */}
+            {decks.length > 0 && (
+              <View style={{ paddingHorizontal: GUTTER, marginTop: -STAT_LIFT, marginBottom: 20 }}>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'stretch',
+                    backgroundColor: theme.surface,
+                    borderRadius: Radius['3xl'],
+                    borderWidth: 1,
+                    borderColor: theme.cardBorder,
+                    borderBottomWidth: 2,
+                    borderBottomColor: theme.lip,
+                    paddingVertical: 13,
+                  }}
+                >
+                  {statTiles.map((tile, idx) => (
+                    <React.Fragment key={tile.key}>
+                      {idx > 0 && <View style={{ width: 1, marginVertical: 8, backgroundColor: theme.cardBorder }} />}
+                      <TouchableOpacity
+                        onPress={() => setShowStats(true)}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${tile.label}: ${tile.value}. ${tile.caption}. Opens statistics.`}
+                        style={{ flex: 1, alignItems: 'center', paddingHorizontal: 6 }}
+                      >
+                        <View style={{ width: 28, height: 28, borderRadius: 10, marginBottom: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: tile.tint.fill }}>
+                          <Ionicons name={tile.icon} size={15} color={tile.tint.ink} />
+                        </View>
+                        <Text numberOfLines={1} adjustsFontSizeToFit style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: theme.text, letterSpacing: -0.8 }}>
+                          {tile.value}
+                        </Text>
+                        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={{ ...microLabel, letterSpacing: 0.4, marginTop: 3 }}>
+                          {tile.label}
+                        </Text>
+                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: tile.tint.ink, marginTop: 3 }}>
+                          {tile.caption}
+                        </Text>
+                      </TouchableOpacity>
+                    </React.Fragment>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            <View style={{ paddingHorizontal: GUTTER }}>
+              {decks.length === 0 ? (
+                /* ══ First run ══ */
+                <Card padding={0} radius={Radius['3xl']} style={{ overflow: 'hidden', marginTop: 12 }}>
+                  <View style={{ alignItems: 'center', paddingTop: 20, paddingBottom: 12, backgroundColor: brand.wash, borderBottomWidth: 1, borderBottomColor: brand.washLine }}>
+                    <Image source={require('../../assets/images/studying.png')} style={{ width: 118, height: 118 }} resizeMode="contain" />
+                  </View>
+                  <View style={{ padding: 20 }}>
+                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 20, color: theme.text, textAlign: 'center', letterSpacing: -0.4 }}>
+                      Your study space
+                    </Text>
+                    <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 13.5, color: theme.textSecondary, textAlign: 'center', lineHeight: 20, marginTop: 6, marginBottom: 16 }}>
+                      Make cards, then come back each day. Fin shows every card again right before you would forget it — the way Anki does, minus the setup.
+                    </Text>
+                    {[
+                      { icon: 'add-circle-outline' as const, text: 'Add cards — plain, both ways, cloze or type-in' },
+                      { icon: 'eye-outline' as const, text: 'Recall the answer, then reveal it' },
+                      { icon: 'checkmark-circle-outline' as const, text: 'Rate how it went — Fin picks the next date' },
+                    ].map((s, i) => (
+                      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 9 }}>
+                        <View style={{ width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: brand.wash }}>
+                          <Ionicons name={s.icon} size={15} color={brand.ink} />
+                        </View>
+                        <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.text }}>{s.text}</Text>
+                      </View>
+                    ))}
+                    <View style={{ height: 8 }} />
+                    <PrimaryButton label="Create your first deck" onPress={() => openAddDeck()} />
+                    <TouchableOpacity
+                      onPress={addSampleDeck}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Try a sample deck"
+                      style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 13 }}
+                    >
+                      <Ionicons name="sparkles-outline" size={15} color={theme.primary} />
+                      <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.primary }}>Try a sample deck first</Text>
+                    </TouchableOpacity>
+                  </View>
+                </Card>
+              ) : (
+                <>
+                  <View style={{ paddingHorizontal: 2, marginBottom: 24 }}>
+                    <ToolTiles node={null} />
+                  </View>
+
+                  <SectionHeader
+                    title="Decks"
+                    count={tree.length}
+                    railColor={brand.solid}
+                    actionLabel="New deck"
+                    actionIcon="add"
+                    actionColor={brand.ink}
+                    onAction={() => openAddDeck()}
+                  />
+
+                  {decks.length >= 5 && (
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingHorizontal: 12,
+                        height: 42,
+                        borderRadius: Radius.lg,
+                        marginBottom: 10,
+                        backgroundColor: theme.inputBg,
+                        borderWidth: 1,
+                        borderColor: theme.inputBorder,
+                      }}
+                    >
+                      <Ionicons name="search" size={16} color={theme.textTertiary} />
+                      <TextInput
+                        value={search}
+                        onChangeText={setSearch}
+                        placeholder="Search decks…"
+                        placeholderTextColor={theme.textTertiary}
+                        accessibilityLabel="Search decks"
+                        style={{ flex: 1, marginLeft: 8, fontFamily: 'Nunito_600SemiBold', fontSize: 13.5, color: theme.text, padding: 0 }}
+                      />
+                      {search.length > 0 && (
+                        <TouchableOpacity onPress={() => setSearch('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                          <Ionicons name="close-circle" size={16} color={theme.textTertiary} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  )}
+
+                  {visibleTree.length === 0 ? (
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textTertiary, textAlign: 'center', paddingVertical: 18 }}>
+                      No decks match "{search}".
+                    </Text>
+                  ) : (
+                    <DeckList
+                      nodes={visibleTree}
+                      isDark={isDark}
+                      expanded={q ? new Set(allNodes(visibleTree).map((x) => x.node.fullPath)) : expanded}
+                      onToggle={toggleNode}
+                      onOpen={openNode}
+                      onLongPress={(n) => setActionPath(n.fullPath)}
+                      countsFor={countsFor}
+                      totalFor={totalFor}
+                      examLabelFor={examLabelFor}
+                    />
+                  )}
+                  <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, textAlign: 'center', marginTop: 10 }}>
+                    Long-press a deck for more options
+                  </Text>
+                </>
+              )}
+            </View>
+          </ScrollView>
+        )}
+      </SafeAreaView>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render: deck overview
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * The deck screen: Anki's overview on top (the three numbers and Study now),
+   * the browser underneath. It absorbed the old separate `manage` view — the
+   * two were ~90% the same screen with different halves of the features, so
+   * which half you got depended on which button you pressed.
+   */
+  const renderDetail = () => {
+    if (!activeNode) return null;
+    const node = activeNode;
+    const deck = node.deck ? deckById(node.deck.id) : null;
+    const color = deck?.color || theme.primary;
+    const c = countsFor(node);
+    const due = c.new + c.learn + c.review;
+    const scopeDecks = collectDecksFromNode(node);
+    const allCards = scopeDecks.flatMap((d) => d.cards || []);
+    const comp = composition(allCards);
+    const examLeft = scopeDecks.map((d) => examDaysLeft(d, clock)).filter((x): x is number => x !== null).sort((a, b) => a - b)[0];
+    let nextDue = Infinity;
+    for (const card of allCards) if (card && !isSidelined(card, clock) && cardState(card) !== 'new' && card.nextDue > clock && card.nextDue < nextDue) nextDue = card.nextDue;
+
+    // Notes, per deck, for the browser.
+    const notes = scopeDecks.flatMap((d) => groupNotes(d.cards || []).map((n) => ({ ...n, deckId: d.id, deckName: d.name })));
+    const matches = (n: NoteRow, f: DetailFilter) => {
+      if (f === 'all') return true;
+      return n.cards.some((card) => {
+        if (f === 'suspended') return card.suspended;
+        if (f === 'flagged') return card.flagged;
+        if (f === 'leech') return card.leech;
+        if (card.suspended) return false;
+        const st = cardState(card);
+        if (f === 'new') return st === 'new';
+        if (f === 'learning') return st === 'learning' || st === 'relearning';
+        return st === 'review' && card.nextDue <= clock;
+      });
+    };
+    const filterDefs: { key: DetailFilter; label: string; color: string }[] = [
+      { key: 'all', label: 'All', color: theme.primary },
+      { key: 'new', label: 'New', color: qt.new.solid },
+      { key: 'learning', label: 'Learning', color: qt.learn.solid },
+      { key: 'due', label: 'Due', color: qt.review.solid },
+      { key: 'flagged', label: 'Flagged', color: tints.danger.solid },
+      { key: 'suspended', label: 'Suspended', color: theme.textTertiary },
+      { key: 'leech', label: 'Leeches', color: tints.tasks.solid },
+    ];
+    const filterCounts = new Map(filterDefs.map((f) => [f.key, notes.filter((n) => matches(n, f.key)).length]));
+    const qd = detailSearch.trim().toLowerCase();
+    const visible = notes.filter(
+      (n) =>
+        matches(n, detailFilter) &&
+        (!qd || n.front.toLowerCase().includes(qd) || n.back.toLowerCase().includes(qd) || n.tags.some((t) => t.toLowerCase().includes(qd)))
+    );
+    const selKey = (n: { deckId: string; noteId: string }) => `${n.deckId}:${n.noteId}`;
+    const allSelected = visible.length > 0 && visible.every((n) => selectedNotes.has(selKey(n)));
+    const selectedAllSuspended =
+      selectedNotes.size > 0 && notes.filter((n) => selectedNotes.has(selKey(n))).every((n) => n.cards.every((card) => card.suspended));
+
+    const legend = [
+      { key: 'new', label: 'New', n: comp.new, color: qt.new.solid },
+      { key: 'learning', label: 'Learning', n: comp.learning, color: qt.learn.solid },
+      { key: 'young', label: 'Young', n: comp.young, color: brand.solid },
+      { key: 'mature', label: 'Mature', n: comp.mature, color: qt.review.solid },
+      { key: 'suspended', label: 'Suspended', n: comp.suspended, color: theme.textTertiary },
+    ];
+
+    return (
+      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10 }}>
+          {iconButton('chevron-back', 'Back to all decks', () => {
+            endSelection();
+            setView('decks');
+          })}
+          <View style={{ flex: 1 }}>
+            <Text numberOfLines={1} accessibilityRole="header" style={{ fontFamily: 'Nunito_900Black', fontSize: 18, color: theme.text, letterSpacing: -0.4 }}>
+              {node.name}
+            </Text>
+            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary }}>
+              {node.fullPath !== node.name ? `${node.fullPath} · ` : ''}
+              {comp.total} card{comp.total !== 1 ? 's' : ''}
+              {scopeDecks.length > 1 ? ` · ${scopeDecks.length} decks` : ''}
+            </Text>
+          </View>
+          {iconButton('ellipsis-horizontal', 'Deck options', () => setActionPath(node.fullPath))}
+        </View>
+
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingHorizontal: GUTTER, paddingBottom: tabBarHeight + 28 }}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* ══ Overview ══ */}
+          <Card padding={0} radius={Radius['3xl']} style={{ overflow: 'hidden', marginBottom: 18 }}>
+            <View style={{ flexDirection: 'row', paddingVertical: 16, paddingHorizontal: 8 }}>
+              {[
+                { key: 'new', n: c.new, label: 'New', tint: qt.new },
+                { key: 'learn', n: c.learn, label: 'Learning', tint: qt.learn },
+                { key: 'review', n: c.review, label: 'To review', tint: qt.review },
+              ].map((x, i) => (
+                <React.Fragment key={x.key}>
+                  {i > 0 && <View style={{ width: 1, marginVertical: 6, backgroundColor: theme.cardBorder }} />}
+                  <View style={{ flex: 1, alignItems: 'center' }} accessible accessibilityLabel={`${x.n} ${x.label}`}>
+                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 28, letterSpacing: -1, color: x.n > 0 ? x.tint.ink : theme.textTertiary }}>{x.n}</Text>
+                    <Text style={{ ...microLabel, marginTop: 1 }}>{x.label}</Text>
+                  </View>
+                </React.Fragment>
+              ))}
+            </View>
+
+            {examLeft !== undefined && (
+              <View
+                style={{
+                  flexDirection: 'row', alignItems: 'center', gap: 8,
+                  marginHorizontal: 14, marginBottom: 12, paddingHorizontal: 12, paddingVertical: 9, borderRadius: Radius.md,
+                  backgroundColor: tints.danger.fill, borderWidth: 1, borderColor: tints.danger.line,
+                }}
+              >
+                <Ionicons name="calendar" size={15} color={tints.danger.ink} />
+                <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 12, color: tints.danger.ink, lineHeight: 16 }}>
+                  {examLeft === 0 ? 'Exam today — good luck!' : `Exam in ${examLeft} day${examLeft !== 1 ? 's' : ''}. Every card will be seen before then.`}
+                </Text>
+                <TouchableOpacity onPress={() => openExam(node)} accessibilityRole="button" accessibilityLabel="Change exam plan" hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 12, color: tints.danger.ink }}>Edit</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            <View style={{ paddingHorizontal: 14, paddingBottom: 14 }}>
+              {due > 0 ? (
+                <AnimatedPressable
+                  onPress={() => startSession(node)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Study now, ${due} cards`}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    paddingVertical: 14, borderRadius: Radius.lg,
+                    backgroundColor: color, borderBottomWidth: 3, borderBottomColor: 'rgba(0,0,0,0.25)',
+                  }}
+                >
+                  <Ionicons name="play" size={17} color="#ffffff" />
+                  <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 15.5, color: '#ffffff' }}>Study now</Text>
+                </AnimatedPressable>
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <Image source={require('../../assets/images/sleeping.png')} style={{ width: 52, height: 52 }} resizeMode="contain" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: theme.text }}>
+                      {comp.total === 0 ? 'No cards yet' : 'Done for today'}
+                    </Text>
+                    <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textSecondary, marginTop: 1 }}>
+                      {comp.total === 0
+                        ? 'Add a few cards to start studying.'
+                        : nextDue < Infinity
+                        ? `Next review ${relativeDue(nextDue, clock)}.`
+                        : 'Every card here is suspended or new-card limits are used up.'}
+                    </Text>
+                  </View>
+                  {comp.total > 0 ? (
+                    <TouchableOpacity
+                      onPress={() => setCustomPath(node.fullPath)}
+                      activeOpacity={0.75}
+                      accessibilityRole="button"
+                      style={{ paddingHorizontal: 12, height: 34, borderRadius: Radius.full, justifyContent: 'center', backgroundColor: tints.schedule.fill, borderWidth: 1, borderColor: tints.schedule.line }}
+                    >
+                      <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: tints.schedule.ink }}>Custom</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              )}
+            </View>
+          </Card>
+
+          <View style={{ paddingHorizontal: 2, marginBottom: 22 }}>
+            <ToolTiles node={node} />
+          </View>
+
+          {/* ══ Composition ══ */}
+          {comp.total > 0 && (
+            <View style={{ marginBottom: 22 }}>
+              <View style={{ flexDirection: 'row', height: 9, borderRadius: 5, overflow: 'hidden', backgroundColor: theme.surfaceSecondary }}>
+                {legend.map((l) => (l.n > 0 ? <View key={l.key} style={{ flex: l.n, backgroundColor: l.color }} /> : null))}
+              </View>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: 12, rowGap: 4, marginTop: 8 }}>
+                {legend.filter((l) => l.n > 0).map((l) => (
+                  <View key={l.key} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: l.color }} />
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>
+                      {l.label} <Text style={{ fontFamily: 'Nunito_900Black', color: theme.text }}>{l.n}</Text>
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* ══ Browser ══ */}
+          <SectionHeader title="Cards" count={notes.length} railColor={tints.tools.solid} />
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: -2, marginBottom: 10 }}>
+            <AnimatedPressable
+              onPress={() => openAddNote(deck?.id || scopeDecks[0]?.id || null)}
+              accessibilityRole="button"
+              accessibilityLabel="Add cards"
+              style={{
+                flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+                height: 40, borderRadius: Radius.lg, backgroundColor: theme.primary,
+                borderBottomWidth: 2, borderBottomColor: theme.primaryDark,
+              }}
+            >
+              <Ionicons name="add" size={17} color="#ffffff" />
+              <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: '#ffffff' }}>Add cards</Text>
+            </AnimatedPressable>
+            <TouchableOpacity
+              onPress={() => openImport(deck?.id || scopeDecks[0]?.id || '')}
+              disabled={scopeDecks.length === 0}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel="Import cards from text or a file"
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, height: 40, borderRadius: Radius.lg,
+                backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip,
+              }}
+            >
+              <Ionicons name="cloud-upload-outline" size={16} color={theme.textSecondary} />
+              <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: theme.textSecondary }}>Import</Text>
+            </TouchableOpacity>
+          </View>
+
+          {notes.length > 0 && (
+            <>
+              <View
+                style={{
+                  flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, height: 42, borderRadius: Radius.lg, marginBottom: 10,
+                  backgroundColor: theme.inputBg, borderWidth: 1, borderColor: theme.inputBorder,
+                }}
+              >
+                <Ionicons name="search" size={16} color={theme.textTertiary} />
+                <TextInput
+                  value={detailSearch}
+                  onChangeText={setDetailSearch}
+                  placeholder="Search cards and tags…"
+                  placeholderTextColor={theme.textTertiary}
+                  accessibilityLabel="Search cards"
+                  style={{ flex: 1, marginLeft: 8, fontFamily: 'Nunito_600SemiBold', fontSize: 13.5, color: theme.text, padding: 0 }}
+                />
+                {detailSearch.length > 0 && (
+                  <TouchableOpacity onPress={() => setDetailSearch('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Ionicons name="close-circle" size={16} color={theme.textTertiary} />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
+                <View style={{ flexDirection: 'row', gap: 7 }}>
+                  {filterDefs
+                    .filter((f) => f.key === 'all' || (filterCounts.get(f.key) || 0) > 0 || detailFilter === f.key)
+                    .map((f) => {
+                      const active = detailFilter === f.key;
+                      return (
+                        <TouchableOpacity
+                          key={f.key}
+                          onPress={() => setDetailFilter(f.key)}
+                          activeOpacity={0.75}
+                          accessibilityRole="tab"
+                          accessibilityState={{ selected: active }}
+                          accessibilityLabel={`${f.label}, ${filterCounts.get(f.key) || 0}`}
+                          style={{
+                            flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, height: 30, borderRadius: Radius.full,
+                            backgroundColor: active ? f.color + (isDark ? '2e' : '1a') : theme.surfaceSecondary,
+                            borderWidth: 1, borderColor: active ? f.color + '77' : theme.cardBorder,
+                          }}
+                        >
+                          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: f.color }} />
+                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: active ? theme.text : theme.textSecondary }}>{f.label}</Text>
+                          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textTertiary }}>{filterCounts.get(f.key) || 0}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                </View>
+              </ScrollView>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 12, minHeight: 30 }}>
+                {isSelectionMode ? (
+                  <>
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text }}>{selectedNotes.size} selected</Text>
+                    <TouchableOpacity
+                      onPress={() => setSelectedNotes(allSelected ? new Set() : new Set(visible.map(selKey)))}
+                      accessibilityRole="button"
+                      hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                    >
+                      <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.primary }}>{allSelected ? 'None' : 'All'}</Text>
+                    </TouchableOpacity>
+                    {selectedNotes.size > 0 && (
+                      <>
+                        <TouchableOpacity onPress={() => handleBulkSuspend(!selectedAllSuspended)} accessibilityRole="button" hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+                          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.primary }}>{selectedAllSuspended ? 'Unsuspend' : 'Suspend'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={handleBulkReverse} accessibilityRole="button" hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+                          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.primary }}>Swap</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={handleBulkDelete} accessibilityRole="button" hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}>
+                          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: tints.danger.ink }}>Delete</Text>
+                        </TouchableOpacity>
+                      </>
+                    )}
+                    <View style={{ flex: 1 }} />
+                    <TouchableOpacity
+                      onPress={endSelection}
+                      accessibilityRole="button"
+                      style={{ paddingHorizontal: 14, height: 30, borderRadius: Radius.full, justifyContent: 'center', backgroundColor: theme.primary }}
+                    >
+                      <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: '#ffffff' }}>Done</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <TouchableOpacity
+                    onPress={() => setIsSelectionMode(true)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Select cards"
+                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                  >
+                    <Ionicons name="checkbox-outline" size={15} color={theme.textSecondary} />
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary }}>Select</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </>
+          )}
+
+          {visible.length === 0 ? (
+            <View
+              style={{
+                flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: Radius.lg,
+                backgroundColor: brand.wash, borderWidth: 1, borderColor: brand.washLine,
+              }}
+            >
+              <Ionicons name={notes.length === 0 ? 'documents-outline' : 'search-outline'} size={18} color={brand.ink} style={{ marginRight: 10 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>{notes.length === 0 ? 'No cards yet' : 'Nothing matches'}</Text>
+                <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 1, lineHeight: 16 }}>
+                  {notes.length === 0 ? 'Add cards one at a time, or import a list you already have.' : 'Try a different search or filter.'}
+                </Text>
+              </View>
+            </View>
+          ) : (
+            visible.map((n) => {
+              const first = n.cards.find((card) => !card.suspended) || n.cards[0];
+              const st = cardState(first);
+              const allSuspended = n.cards.every((card) => card.suspended);
+              const flagged = n.cards.some((card) => card.flagged);
+              const leech = n.cards.some((card) => card.leech);
+              const tint = st === 'new' ? qt.new : st === 'review' ? qt.review : qt.learn;
+              const soonest = Math.min(...n.cards.filter((card) => !card.suspended).map((card) => card.nextDue));
+              const dueText =
+                allSuspended ? 'Suspended' : st === 'new' ? 'New' : soonest <= clock ? 'Due now' : new Date(soonest).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+              const sel = selectedNotes.has(selKey(n));
+              const kind = n.kind;
+              return (
+                <Card
+                  key={selKey(n)}
+                  padding={12}
+                  radius={Radius.lg}
+                  onPress={() => {
+                    if (isSelectionMode) {
+                      const next = new Set(selectedNotes);
+                      if (next.has(selKey(n))) next.delete(selKey(n));
+                      else next.add(selKey(n));
+                      setSelectedNotes(next);
+                    } else openEditNote(n.deckId, n.noteId);
+                  }}
+                  accessibilityLabel={`${kind === 'cloze' ? clozePlain(n.front) : n.front}. ${dueText}. ${n.cards.length} card${n.cards.length !== 1 ? 's' : ''}.`}
+                  accessibilityHint={isSelectionMode ? 'Toggles selection' : 'Opens the note for editing'}
+                  style={{ marginBottom: 8, borderColor: sel ? theme.primary : theme.cardBorder, opacity: allSuspended ? 0.62 : 1 }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                    {isSelectionMode && (
+                      <View
+                        style={{
+                          width: 22, height: 22, borderRadius: 7, marginRight: 11, marginTop: 1, alignItems: 'center', justifyContent: 'center',
+                          borderWidth: 2, borderColor: sel ? theme.primary : isDark ? '#464d75' : '#cbd5e1', backgroundColor: sel ? theme.primary : 'transparent',
+                        }}
+                      >
+                        {sel && <Ionicons name="checkmark" size={14} color="#ffffff" />}
+                      </View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5, gap: 6, flexWrap: 'wrap' }}>
+                        <View style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: allSuspended ? theme.surfaceSecondary : tint.fill }}>
+                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 9.5, letterSpacing: 0.3, color: allSuspended ? theme.textTertiary : tint.ink }}>
+                            {dueText.toUpperCase()}
+                          </Text>
+                        </View>
+                        {kind !== 'basic' && (
+                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 10, color: theme.textTertiary }}>
+                            {kindLabel(kind)}
+                            {n.cards.length > 1 ? ` · ${n.cards.length} cards` : ''}
+                          </Text>
+                        )}
+                        {flagged && <Ionicons name="flag" size={11} color={tints.danger.solid} />}
+                        {leech && (
+                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 9.5, color: tints.tasks.ink }}>LEECH</Text>
+                        )}
+                        {scopeDecks.length > 1 && (
+                          <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 10.5, color: theme.textTertiary }}>
+                            · {n.deckName.split('::').pop()}
+                          </Text>
+                        )}
+                      </View>
+                      {kind === 'cloze' ? (
+                        <FaceText
+                          segments={clozeOverview(n.front)}
+                          color={color}
+                          isDark={isDark}
+                          numberOfLines={3}
+                          style={{ fontFamily: 'Nunito_700Bold', fontSize: 13.5, color: theme.text, lineHeight: 19 }}
+                        />
+                      ) : (
+                        <Text numberOfLines={2} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text, lineHeight: 18 }}>
+                          {n.front}
+                        </Text>
+                      )}
+                      {n.back ? (
+                        <Text numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textSecondary, marginTop: 2, lineHeight: 17 }}>
+                          {n.back}
+                        </Text>
+                      ) : null}
+                      {n.tags.length > 0 && (
+                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: theme.textTertiary, marginTop: 4 }}>
+                          {n.tags.map((t) => `#${t}`).join('  ')}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                </Card>
+              );
+            })
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render: review
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderStudy = () => {
+    if (!session) return null;
+    const s = session;
+
+    if (s.done || !currentCard) {
+      const secs = Math.max(1, Math.round((Date.now() - s.startedAt) / 1000));
+      const mins = Math.floor(secs / 60);
+      const pct = s.answered > 0 ? Math.round(((s.answered - s.again) / s.answered) * 100) : 0;
+      const xpGained = Math.max(0, (flashcardStats.totalXp || 0) - s.xpBefore);
+      const moreDue = allDue;
+      const scopedNode = s.returnTo === 'detail' ? activeNode : null;
+      return (
+        <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 22, paddingTop: 16, paddingBottom: tabBarHeight + 24 }}
+            showsVerticalScrollIndicator={false}
+          >
+            <Image source={require('../../assets/images/happy.png')} style={{ width: 118, height: 118, marginBottom: 12 }} resizeMode="contain" />
+            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 26, color: theme.text, textAlign: 'center', letterSpacing: -0.6 }}>
+              {s.answered > 0 ? 'Congratulations!' : 'All done'}
+            </Text>
+            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 14, color: theme.textSecondary, textAlign: 'center', marginTop: 4, marginBottom: 20, lineHeight: 20 }}>
+              {s.mode === 'cram'
+                ? `You went through every card in ${s.title.replace(/^Cram · /, '')}. Cramming does not change their schedule.`
+                : `You have finished ${s.title === 'All decks' ? 'everything due' : s.title} for now.`}
+            </Text>
+
+            {s.answered > 0 && (
+              <View
+                style={{
+                  width: '100%', flexDirection: 'row', paddingVertical: 16, borderRadius: Radius['3xl'], marginBottom: 12,
+                  backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip,
+                }}
+              >
+                {[
+                  { key: 'cards', value: `${s.answered}`, label: 'Answered', color: theme.text },
+                  { key: 'time', value: mins > 0 ? `${mins}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`, label: 'Time', color: theme.text },
+                  { key: 'pct', value: `${pct}%`, label: 'Recalled', color: pct >= 80 ? tints.attendance.ink : pct >= 60 ? tints.tasks.ink : tints.danger.ink },
+                ].map((x, i) => (
+                  <React.Fragment key={x.key}>
+                    {i > 0 && <View style={{ width: 1, marginVertical: 4, backgroundColor: theme.cardBorder }} />}
+                    <View style={{ flex: 1, alignItems: 'center' }}>
+                      <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 24, color: x.color, letterSpacing: -0.8 }}>{x.value}</Text>
+                      <Text style={{ ...microLabel, marginTop: 2 }}>{x.label}</Text>
+                    </View>
+                  </React.Fragment>
+                ))}
+              </View>
+            )}
+
+            {s.answered > 0 && (
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 18 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, height: 30, borderRadius: Radius.full, backgroundColor: tints.grades.fill }}>
+                  <Ionicons name="star" size={13} color={tints.grades.ink} />
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: tints.grades.ink }}>+{xpGained} XP</Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, height: 30, borderRadius: Radius.full, backgroundColor: tints.tasks.fill }}>
+                  <Ionicons name="flame" size={13} color={tints.tasks.ink} />
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: tints.tasks.ink }}>
+                    {flashcardStats.currentStreak || 1} day streak
+                  </Text>
+                </View>
+                {s.graduated > 0 && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, height: 30, borderRadius: Radius.full, backgroundColor: tints.attendance.fill }}>
+                    <Ionicons name="school" size={13} color={tints.attendance.ink} />
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: tints.attendance.ink }}>{s.graduated} learned</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {s.nextLearningAt ? (
+              <View
+                style={{
+                  width: '100%', flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: Radius.lg, marginBottom: 16,
+                  backgroundColor: qt.learn.fill, borderWidth: 1, borderColor: qt.learn.line,
+                }}
+              >
+                <Ionicons name="time-outline" size={18} color={qt.learn.ink} />
+                <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: qt.learn.ink, lineHeight: 17 }}>
+                  Cards you are still learning come back {relativeDue(s.nextLearningAt, Date.now())}.
+                </Text>
+                <TouchableOpacity onPress={continueLearning} accessibilityRole="button" accessibilityLabel="Study them now" hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 12.5, color: qt.learn.ink }}>Now</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={exitSession}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                style={{
+                  flex: 1, paddingVertical: 14, borderRadius: Radius.lg, alignItems: 'center',
+                  backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip,
+                }}
+              >
+                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: theme.textSecondary }}>
+                  {scopedNode ? 'Back to deck' : 'All decks'}
+                </Text>
+              </TouchableOpacity>
+              {moreDue > 0 && s.mode !== 'cram' ? (
+                <View style={{ flex: 1 }}>
+                  <PrimaryButton label={`Study all due · ${moreDue}`} onPress={() => startSession(null)} />
+                </View>
+              ) : null}
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      );
+    }
+
+    const { deck, card } = currentCard;
+    const color = deck.color || theme.primary;
+    const faces = cardFaces(card, s.flip);
+    const st = cardState(card);
+    const ctx = { examDate: examDaysLeft(deck, clock) !== null ? deck.examDate : null };
+    const previews = revealed && s.mode !== 'cram' ? previewIntervals(card, srSettings, Date.now(), ctx) : null;
+    const rem = s.mode === 'cram' ? null : sessionRemaining(decks, scopeOf(s), s.queue, s.pos, Date.now());
+    if (rem) {
+      if (st === 'new') rem.new += 1;
+      else if (st === 'review') rem.review += 1;
+    }
+    const remaining = rem ? rem.new + rem.learn + rem.review : Math.max(1, s.queue.length - s.pos + 1);
+    const progress = s.answered / Math.max(1, s.answered + remaining);
+    const queueKey = st === 'new' ? 'new' : st === 'review' ? 'review' : 'learn';
+    const queueLabel = st === 'new' ? 'New' : st === 'review' ? 'Review' : st === 'relearning' ? 'Relearning' : 'Learning';
+    const multiDeck = !s.deckIds || s.deckIds.length > 1;
+
+    return (
+      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 8 }}>
+          {iconButton('close', 'End session', exitSession)}
+          <View style={{ flex: 1, alignItems: 'center' }}>
+            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>
+              {s.title}
+            </Text>
+            {rem ? (
+              <View style={{ flexDirection: 'row', gap: 12, marginTop: 1 }} accessible accessibilityLabel={`${rem.new} new, ${rem.learn} learning, ${rem.review} to review`}>
+                {(['new', 'learn', 'review'] as const).map((k) => (
+                  <Text
+                    key={k}
+                    style={{
+                      fontFamily: 'Nunito_900Black',
+                      fontSize: 13,
+                      color: qt[k].ink,
+                      textDecorationLine: queueKey === k ? 'underline' : 'none',
+                      opacity: rem[k] > 0 || queueKey === k ? 1 : 0.4,
+                    }}
+                  >
+                    {rem[k]}
+                  </Text>
+                ))}
+              </View>
+            ) : (
+              <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: theme.textTertiary }}>{remaining} left · not rescheduled</Text>
+            )}
+          </View>
+          {iconButton('arrow-undo-outline', 'Undo last answer', handleUndo, { disabled: !undo })}
+          {iconButton('ellipsis-horizontal', 'Card options', () => setShowReviewMore(true))}
+        </View>
+
+        <View style={{ paddingHorizontal: GUTTER, marginBottom: 12 }}>
+          <ProgressBar progress={progress} height={6} color={color} accessibilityLabel={`${s.answered} answered, ${remaining} left`} />
+        </View>
+
+        <View style={{ flex: 1, paddingHorizontal: GUTTER }}>
+          <ReviewCard
+            key={card.id + ':' + s.answered}
+            card={card}
+            faces={faces}
+            revealed={revealed}
+            onReveal={revealAnswer}
+            color={color}
+            isDark={isDark}
+            queueLabel={queueLabel}
+            queueTint={qt[queueKey]}
+            deckName={multiDeck ? deck.name.split('::').pop() : undefined}
+            typed={typed}
+            onChangeTyped={setTyped}
+          />
+        </View>
+
+        <View style={{ paddingHorizontal: GUTTER, paddingTop: 12, paddingBottom: tabBarHeight + 10 }}>
+          <AnswerBar
+            revealed={revealed}
+            onShow={revealAnswer}
+            onRate={rate}
+            previews={previews}
+            color={color}
+            isDark={isDark}
+            cram={s.mode === 'cram'}
+            checkLabel={faces.typeTarget !== null ? 'Check' : undefined}
+          />
+        </View>
+      </SafeAreaView>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render: practice test
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const practiceNode = practicePath ? findNode(tree, practicePath) : null;
+
+  const renderQuiz = () => {
+    if (quizQuestions.length === 0) return null;
+    const back = () => setView(practiceNode && activePath === practicePath ? 'detail' : 'decks');
+
+    if (quizDone) {
+      const pct = Math.round((quizScore / quizQuestions.length) * 100);
+      const good = pct >= 70;
+      return (
+        <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 22, paddingTop: 16, paddingBottom: tabBarHeight + 24 }}
+            showsVerticalScrollIndicator={false}
+          >
+            <Image
+              source={good ? require('../../assets/images/happy.png') : require('../../assets/images/studying.png')}
+              style={{ width: 110, height: 110, marginBottom: 12 }}
+              resizeMode="contain"
+            />
+            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 30, color: theme.text, letterSpacing: -0.8 }}>{pct}%</Text>
+            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 14, color: theme.textSecondary, marginTop: 2, marginBottom: 20 }}>
+              {quizScore} of {quizQuestions.length} correct
+            </Text>
+
+            {quizMissed.length > 0 && (
+              <Card padding={16} radius={Radius['3xl']} style={{ width: '100%', marginBottom: 18 }}>
+                <Text style={{ ...microLabel, marginBottom: 10 }}>To review · {quizMissed.length}</Text>
+                {quizMissed.map((q, i) => (
+                  <View key={i} style={{ paddingVertical: 9, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: theme.cardBorder }}>
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>{q.question}</Text>
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: tints.attendance.ink, marginTop: 2 }}>{q.correctAnswer}</Text>
+                  </View>
+                ))}
+              </Card>
+            )}
+
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={back}
+                activeOpacity={0.8}
+                style={{
+                  flex: 1, paddingVertical: 14, borderRadius: Radius.lg, alignItems: 'center',
+                  backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip,
+                }}
+              >
+                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: theme.textSecondary }}>Done</Text>
+              </TouchableOpacity>
+              {quizMissed.length > 0 && practiceNode ? (
+                <View style={{ flex: 1 }}>
+                  <PrimaryButton label={`Retry missed · ${quizMissed.length}`} onPress={() => generateQuiz(practiceNode, quizMissed)} color={tints.attendance.solid} />
+                </View>
+              ) : null}
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      );
+    }
+
+    const q = quizQuestions[quizIndex];
+    return (
+      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 8 }}>
+          {iconButton('close', 'End practice test', back)}
+          <View style={{ flex: 1, alignItems: 'center' }}>
+            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>Practice test</Text>
+            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: theme.textTertiary }}>
+              Question {quizIndex + 1} of {quizQuestions.length}
+            </Text>
+          </View>
+          <View style={{ width: 36 }} />
+        </View>
+        <View style={{ paddingHorizontal: GUTTER, marginBottom: 16 }}>
+          <ProgressBar progress={quizIndex / quizQuestions.length} height={6} color={tints.attendance.solid} />
+        </View>
+
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: GUTTER, paddingBottom: 20 }} showsVerticalScrollIndicator={false}>
+          <Card padding={20} radius={Radius['3xl']} style={{ marginBottom: 18 }}>
+            <Text style={{ ...microLabel, marginBottom: 8 }}>Question {quizIndex + 1}</Text>
+            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 18, lineHeight: 26, color: theme.text }}>{q.question}</Text>
+          </Card>
+          <View style={{ gap: 10 }}>
+            {q.options.map((option, idx) => {
+              const showResult = quizSelected !== null;
+              const isCorrect = option === q.correctAnswer;
+              const isSel = quizSelected === option;
+              const state = showResult ? (isCorrect ? 'right' : isSel ? 'wrong' : 'dim') : 'idle';
+              const t = state === 'right' ? tints.attendance : state === 'wrong' ? tints.danger : null;
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  onPress={() => handleQuizAnswer(option)}
+                  disabled={showResult}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Option ${String.fromCharCode(65 + idx)}: ${option}`}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: Radius.xl,
+                    backgroundColor: t ? t.fill : theme.surface, borderWidth: 1, borderColor: t ? t.line : theme.cardBorder,
+                    borderBottomWidth: 2, borderBottomColor: t ? t.line : theme.lip, opacity: state === 'dim' ? 0.55 : 1,
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 28, height: 28, borderRadius: 14, marginRight: 12, alignItems: 'center', justifyContent: 'center',
+                      borderWidth: 1.5, borderColor: t ? t.ink : theme.cardBorder,
+                    }}
+                  >
+                    {state === 'right' ? (
+                      <Ionicons name="checkmark" size={16} color={t!.ink} />
+                    ) : state === 'wrong' ? (
+                      <Ionicons name="close" size={16} color={t!.ink} />
+                    ) : (
+                      <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: theme.textSecondary }}>{String.fromCharCode(65 + idx)}</Text>
+                    )}
+                  </View>
+                  <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 14, color: t ? t.ink : theme.text }}>{option}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </ScrollView>
+
+        <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 16, paddingTop: 10, paddingBottom: tabBarHeight + 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Ionicons name="checkmark-circle" size={16} color={tints.attendance.solid} />
+            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: theme.textSecondary }}>{quizScore}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Ionicons name="close-circle" size={16} color={tints.danger.solid} />
+            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: theme.textSecondary }}>{quizMissed.length}</Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render: speed match
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const renderMatch = () => {
+    if (matchCards.length === 0) return null;
+    const back = () => setView(practiceNode && activePath === practicePath ? 'detail' : 'decks');
+    const totalPairs = matchCards.length / 2;
+    const clockText = `${Math.floor(matchElapsed / 60)}:${String(matchElapsed % 60).padStart(2, '0')}`;
+
+    if (matchDone) {
+      const accuracy = matchMoves > 0 ? Math.round((totalPairs / matchMoves) * 100) : 100;
+      return (
+        <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 22, paddingTop: 16, paddingBottom: tabBarHeight + 24 }}
+            showsVerticalScrollIndicator={false}
+          >
+            <Image source={require('../../assets/images/happy.png')} style={{ width: 110, height: 110, marginBottom: 12 }} resizeMode="contain" />
+            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 26, color: theme.text, letterSpacing: -0.6 }}>All matched!</Text>
+            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 14, color: theme.textSecondary, marginTop: 2, marginBottom: 20 }}>
+              {totalPairs} pairs
+            </Text>
+            <View
+              style={{
+                width: '100%', flexDirection: 'row', paddingVertical: 16, borderRadius: Radius['3xl'], marginBottom: 20,
+                backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip,
+              }}
+            >
+              {[
+                { key: 't', value: clockText, label: 'Time' },
+                { key: 'm', value: `${matchMoves}`, label: 'Moves' },
+                { key: 'a', value: `${accuracy}%`, label: 'Accuracy' },
+              ].map((x, i) => (
+                <React.Fragment key={x.key}>
+                  {i > 0 && <View style={{ width: 1, marginVertical: 4, backgroundColor: theme.cardBorder }} />}
+                  <View style={{ flex: 1, alignItems: 'center' }}>
+                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: theme.text }}>{x.value}</Text>
+                    <Text style={{ ...microLabel, marginTop: 2 }}>{x.label}</Text>
+                  </View>
+                </React.Fragment>
+              ))}
+            </View>
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={back}
+                activeOpacity={0.8}
+                style={{
+                  flex: 1, paddingVertical: 14, borderRadius: Radius.lg, alignItems: 'center',
+                  backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder, borderBottomWidth: 2, borderBottomColor: theme.lip,
+                }}
+              >
+                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: theme.textSecondary }}>Done</Text>
+              </TouchableOpacity>
+              {practiceNode ? (
+                <View style={{ flex: 1 }}>
+                  <PrimaryButton label="Play again" onPress={() => startMatch(practiceNode)} color={tints.tasks.solid} />
+                </View>
+              ) : null}
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      );
+    }
+
+    const cols = 3;
+    const tileW = (SCREEN_WIDTH - GUTTER * 2 - (cols - 1) * 8) / cols;
+    return (
+      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 8 }}>
+          {iconButton('close', 'End speed match', back)}
+          <View style={{ flex: 1, alignItems: 'center' }}>
+            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>Speed match</Text>
+            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: theme.textTertiary }}>
+              {clockText} · {matchMoves} moves
+            </Text>
+          </View>
+          <View style={{ width: 36 }} />
+        </View>
+        <View style={{ paddingHorizontal: GUTTER, marginBottom: 14 }}>
+          <ProgressBar progress={matchMatched.size / totalPairs} height={6} color={tints.tasks.solid} />
+        </View>
+        <ScrollView contentContainerStyle={{ paddingHorizontal: GUTTER, paddingBottom: tabBarHeight + 24 }} showsVerticalScrollIndicator={false}>
+          <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textTertiary, textAlign: 'center', marginBottom: 12 }}>
+            Tap a question, then its answer.
+          </Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {matchCards.map((tile) => {
+              const isRev = matchRevealed.includes(tile.id);
+              const isMatched = matchMatched.has(tile.pairId);
+              const wrong = matchRevealed.length === 2 && isRev && (() => {
+                const [a, b] = matchRevealed.map((id) => matchCards.find((c) => c.id === id));
+                return !(a && b && a.pairId === b.pairId && a.isTerm !== b.isTerm);
+              })();
+              const t = isMatched ? tints.attendance : wrong ? tints.danger : isRev ? tints.tasks : null;
+              return (
+                <TouchableOpacity
+                  key={tile.id}
+                  onPress={() => handleMatchTap(tile.id)}
+                  disabled={isMatched || isRev}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${tile.isTerm ? 'Question' : 'Answer'}: ${tile.text}`}
+                  style={{
+                    width: tileW, minHeight: 92, padding: 8, borderRadius: Radius.lg, alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: t ? t.fill : theme.surface, borderWidth: 1, borderColor: t ? t.line : theme.cardBorder,
+                    borderBottomWidth: 2, borderBottomColor: t ? t.line : theme.lip, opacity: isMatched ? 0.45 : 1,
+                  }}
+                >
+                  <Text
+                    numberOfLines={5}
+                    style={{
+                      fontFamily: tile.isTerm ? 'Nunito_800ExtraBold' : 'Nunito_600SemiBold',
+                      fontSize: 12,
+                      lineHeight: 16,
+                      textAlign: 'center',
+                      color: t ? t.ink : theme.text,
+                    }}
+                  >
+                    {tile.text}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Sheets
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const sheetRow = (opts: {
+    key: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    tint: { fill: string; line: string; ink: string };
+    label: string;
+    desc: string;
+    onPress: () => void;
+    destructive?: boolean;
+    right?: React.ReactNode;
+  }) => (
+    <TouchableOpacity
+      key={opts.key}
+      onPress={opts.onPress}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={`${opts.label}. ${opts.desc}`}
+      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }}
+    >
+      <View
+        style={{
+          width: 36, height: 36, borderRadius: 12, marginRight: 12, alignItems: 'center', justifyContent: 'center',
+          backgroundColor: opts.tint.fill, borderWidth: 1, borderColor: opts.tint.line,
+        }}
+      >
+        <Ionicons name={opts.icon} size={17} color={opts.tint.ink} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: opts.destructive ? opts.tint.ink : theme.text }}>{opts.label}</Text>
+        <Text numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
+          {opts.desc}
+        </Text>
+      </View>
+      {opts.right}
+    </TouchableOpacity>
+  );
+
+  /** Let a sheet finish dismissing before an alert or another sheet lands on it. */
+  const after = (close: () => void, fn: () => void) => {
+    close();
+    setTimeout(fn, 240);
+  };
 
   const renderCreateSheet = () => (
     <KeyboardSheet
       visible={showCreateSheet}
       onClose={() => setShowCreateSheet(false)}
       title="Create"
-      subtitle="A deck holds cards. A folder groups decks."
+      subtitle="Cards live in decks. Folders group decks."
       icon="add-circle-outline"
       tint={tints.grades}
       maxHeightRatio={0.6}
     >
-      {[
-        {
-          key: 'deck',
-          icon: 'albums-outline' as const,
+      {decks.length > 0 &&
+        sheetRow({
+          key: 'cards',
+          icon: 'documents-outline',
           tint: tints.grades,
-          title: 'New deck',
-          desc: 'A set of flashcards you study together',
-          onPress: () => openAddDeck(),
-        },
-        {
-          key: 'folder',
-          icon: 'folder-outline' as const,
-          tint: tints.tasks,
-          title: 'New folder',
-          desc: 'Group decks under a subject, using ::',
-          onPress: () => openAddDeck('::'),
-        },
-      ].map((opt) => (
-        <TouchableOpacity
-          key={opt.key}
-          onPress={opt.onPress}
-          activeOpacity={0.75}
-          accessibilityRole="button"
-          accessibilityLabel={`${opt.title}. ${opt.desc}`}
-          style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 11 }}
-        >
-          <View style={{
-            width: 40, height: 40, borderRadius: 13, marginRight: 12,
-            alignItems: 'center', justifyContent: 'center',
-            backgroundColor: opt.tint.fill, borderWidth: 1, borderColor: opt.tint.line,
-          }}>
-            <Ionicons name={opt.icon} size={19} color={opt.tint.ink} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: theme.text }}>{opt.title}</Text>
-            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
-              {opt.desc}
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={17} color={theme.textTertiary} />
-        </TouchableOpacity>
-      ))}
+          label: 'Add cards',
+          desc: 'Basic, both ways, cloze or type-in',
+          onPress: () => after(() => setShowCreateSheet(false), () => openAddNote(null)),
+        })}
+      {sheetRow({ key: 'deck', icon: 'albums-outline', tint: tints.schedule, label: 'New deck', desc: 'A set of cards you study together', onPress: () => openAddDeck() })}
+      {sheetRow({ key: 'folder', icon: 'folder-outline', tint: tints.tasks, label: 'New folder', desc: 'Group decks, e.g. BIOL101::Unit 2', onPress: () => openAddDeck('::') })}
+      {sheetRow({
+        key: 'sample',
+        icon: 'sparkles-outline',
+        tint: tints.tools,
+        label: 'Sample deck',
+        desc: 'Six cards that show every card type',
+        onPress: () => after(() => setShowCreateSheet(false), addSampleDeck),
+      })}
     </KeyboardSheet>
   );
 
-  // ─── Deck actions ────────────────────────────────────────────────────────
-
   const renderDeckActionSheet = () => {
-    const node = actionNode;
-    const deck = node?.deck ? decks.find((d) => d.id === node.deck!.id) || node.deck : null;
-
-    const run = (fn: () => void) => {
-      setActionNode(null);
-      // Let the sheet finish dismissing before an alert or a view change lands.
-      setTimeout(fn, 220);
-    };
-
-    const groups: { key: string; items: any[] }[] = node
+    const node = actionPath ? findNode(tree, actionPath) : null;
+    const deck = node?.deck ? deckById(node.deck.id) : null;
+    const close = () => setActionPath(null);
+    const inExam = node ? collectDecksFromNode(node).some((d) => examDaysLeft(d) !== null) : false;
+    const groups = node
       ? [
-          {
-            key: 'study',
-            items: [
-              { key: 'study', icon: 'play-circle-outline', tint: tints.grades, label: 'Study now', desc: 'Review what is due', onPress: () => startStudy(node) },
-              { key: 'ahead', icon: 'flash-outline', tint: tints.schedule, label: 'Study ahead', desc: 'Include cards that are not due yet', onPress: () => startStudy(node, true) },
-              {
-                key: 'exam', icon: 'calendar-outline', tint: tints.danger, label: 'Exam prep', desc: 'Plan reviews up to an exam date',
-                onPress: () => { setActiveNode(node); setActiveDeck(deck); setExamPlan(null); setExamReviewsPerDay(0); setShowExamModal(true); },
-              },
-            ],
-          },
-          {
-            key: 'organise',
-            items: [
-              { key: 'cards', icon: 'list-outline', tint: tints.tools, label: 'Manage cards', desc: 'Browse, edit and bulk-select', onPress: () => { setActiveNode(node); setActiveDeck(deck); setDetailSearch(''); setDetailFilter('all'); setView('detail'); } },
-              { key: 'sub', icon: 'git-branch-outline', tint: tints.tools, label: 'Add sub-deck', desc: 'Nest a new deck under this one', onPress: () => openAddSubNode(node) },
-              ...(deck ? [
-                { key: 'edit', icon: 'create-outline', tint: tints.tools, label: 'Edit deck', desc: 'Name, subject, colour and icon', onPress: () => openEditDeck(deck) },
-                { key: 'dup', icon: 'copy-outline', tint: tints.tools, label: 'Duplicate deck', desc: 'Copy the deck and all its cards', onPress: () => handleDuplicateDeck(deck) },
-                { key: 'move', icon: 'move-outline', tint: tints.tools, label: 'Move deck', desc: 'Put it under a different folder', onPress: () => handleMoveDeck(node) },
-              ] : []),
-              { key: 'export', icon: 'share-outline', tint: tints.tools, label: 'Export deck', desc: 'Share the cards as CSV text', onPress: () => handleExportDeck(node) },
-            ],
-          },
-          {
-            key: 'danger',
-            items: [
-              { key: 'reset', icon: 'refresh-outline', tint: tints.tasks, label: 'Reset progress', desc: 'Keeps the cards, clears all scheduling', onPress: () => handleResetProgress(node) },
-              { key: 'delete', icon: 'trash-outline', tint: tints.danger, label: deck && node.children.size === 0 ? 'Delete deck' : 'Delete folder', desc: 'Removes the cards permanently', onPress: () => handleDeleteNode(node), destructive: true },
-            ],
-          },
+          [
+            { key: 'study', icon: 'play-circle-outline' as const, tint: tints.grades, label: 'Study now', desc: 'Review what is due', onPress: () => startSession(node) },
+            { key: 'custom', icon: 'flash-outline' as const, tint: tints.schedule, label: 'Custom study', desc: 'Review ahead, extra new cards, or cram', onPress: () => setCustomPath(node.fullPath) },
+            {
+              key: 'exam', icon: 'calendar-outline' as const, tint: tints.danger,
+              label: inExam ? 'Exam plan' : 'Exam prep', desc: inExam ? 'Change the date or end exam mode' : 'Have every card reviewed before a date', onPress: () => openExam(node),
+            },
+          ],
+          [
+            ...(view !== 'detail' ? [{ key: 'open', icon: 'list-outline' as const, tint: tints.tools, label: 'Browse cards', desc: 'Search, edit, suspend and bulk-select', onPress: () => openNode(node) }] : []),
+            ...(deck ? [{ key: 'add', icon: 'add-circle-outline' as const, tint: tints.tools, label: 'Add cards', desc: 'Basic, both ways, cloze or type-in', onPress: () => openAddNote(deck.id) }] : []),
+            ...(deck ? [{ key: 'import', icon: 'cloud-upload-outline' as const, tint: tints.tools, label: 'Import', desc: 'Paste a list or upload a .txt or .csv', onPress: () => openImport(deck.id) }] : []),
+            { key: 'sub', icon: 'git-branch-outline' as const, tint: tints.tools, label: 'Add sub-deck', desc: 'Nest a new deck under this one', onPress: () => openAddSubNode(node) },
+            ...(deck
+              ? [
+                  { key: 'edit', icon: 'create-outline' as const, tint: tints.tools, label: 'Edit deck', desc: 'Name, subject, colour and icon', onPress: () => openEditDeck(deck) },
+                  { key: 'dup', icon: 'copy-outline' as const, tint: tints.tools, label: 'Duplicate', desc: 'Copy the deck and all its cards', onPress: () => handleDuplicateDeck(deck) },
+                  { key: 'move', icon: 'move-outline' as const, tint: tints.tools, label: 'Move', desc: 'Put it under a different folder', onPress: () => handleMoveDeck(node) },
+                ]
+              : []),
+            { key: 'export', icon: 'share-outline' as const, tint: tints.tools, label: 'Export', desc: 'Share the cards as CSV text', onPress: () => handleExportDeck(node) },
+          ],
+          [
+            { key: 'reset', icon: 'refresh-outline' as const, tint: tints.tasks, label: 'Reset progress', desc: 'Keeps the cards, starts them over as new', onPress: () => handleResetProgress(node) },
+            {
+              key: 'delete', icon: 'trash-outline' as const, tint: tints.danger,
+              label: deck && node.children.size === 0 ? 'Delete deck' : 'Delete folder', desc: 'Removes the cards permanently', onPress: () => handleDeleteNode(node), destructive: true,
+            },
+          ],
         ]
       : [];
 
     return (
       <KeyboardSheet
-        visible={Boolean(actionNode)}
-        onClose={() => setActionNode(null)}
+        visible={Boolean(node)}
+        onClose={close}
         title={node?.name || ''}
-        subtitle={node?.fullPath}
+        subtitle={node && node.fullPath !== node.name ? node.fullPath : undefined}
         icon={deck ? 'albums-outline' : 'folder-outline'}
         tint={tints.grades}
       >
-        {groups.map((group, gi) => (
-          <View
-            key={group.key}
-            style={{
-              marginTop: gi === 0 ? 0 : 10,
-              paddingTop: gi === 0 ? 0 : 10,
-              borderTopWidth: gi === 0 ? 0 : 1,
-              borderTopColor: theme.cardBorder,
-            }}
-          >
-            {group.items.map((action: any) => (
-              <TouchableOpacity
-                key={action.key}
-                onPress={() => run(action.onPress)}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityLabel={`${action.label}. ${action.desc}`}
-                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10 }}
-              >
-                <View style={{
-                  width: 36, height: 36, borderRadius: 12, marginRight: 12,
-                  alignItems: 'center', justifyContent: 'center',
-                  backgroundColor: action.tint.fill, borderWidth: 1, borderColor: action.tint.line,
-                }}>
-                  <Ionicons name={action.icon} size={17} color={action.tint.ink} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: action.destructive ? action.tint.ink : theme.text }}>
-                    {action.label}
-                  </Text>
-                  <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
-                    {action.desc}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            ))}
+        {groups.map((items, gi) => (
+          <View key={gi} style={{ marginTop: gi === 0 ? 0 : 8, paddingTop: gi === 0 ? 0 : 8, borderTopWidth: gi === 0 ? 0 : 1, borderTopColor: theme.cardBorder }}>
+            {items.map((a: any) => sheetRow({ ...a, onPress: () => after(close, a.onPress) }))}
           </View>
         ))}
       </KeyboardSheet>
     );
   };
 
-  // ─── Deck form ───────────────────────────────────────────────────────────
-
-  const renderAddDeckModal = () => (
+  const renderDeckForm = () => (
     <KeyboardSheet
-      visible={showAddDeckModal}
-      onClose={() => setShowAddDeckModal(false)}
-      title={editingDeck ? 'Edit deck' : 'New deck'}
+      visible={showDeckForm}
+      onClose={() => setShowDeckForm(false)}
+      title={editingDeckId ? 'Edit deck' : 'New deck'}
       subtitle="Use :: in the name to nest it under a folder"
       icon="albums-outline"
       tint={tints.grades}
-      footer={<PrimaryButton label={editingDeck ? 'Save changes' : 'Create deck'} onPress={handleSaveDeck} />}
+      footer={<PrimaryButton label={editingDeckId ? 'Save changes' : 'Create deck'} onPress={handleSaveDeck} />}
     >
       <Text style={{ ...microLabel, marginBottom: 8 }}>Deck name</Text>
       <TextInput
@@ -3212,7 +2881,7 @@ export default function FlashcardsScreen() {
 
       <Text style={{ ...microLabel, marginBottom: 8 }}>Subject tag (optional)</Text>
       {currentSubjects.length > 0 && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }} keyboardShouldPersistTaps="handled">
           <View style={{ flexDirection: 'row', gap: 8 }}>
             {currentSubjects.map((sub: any) => {
               const active = deckForm.subject === sub.name;
@@ -3225,13 +2894,10 @@ export default function FlashcardsScreen() {
                   accessibilityState={{ selected: active }}
                   style={{
                     paddingHorizontal: 12, height: 30, borderRadius: Radius.full, justifyContent: 'center',
-                    backgroundColor: active ? tints.grades.fill : theme.surfaceSecondary,
-                    borderWidth: 1, borderColor: active ? tints.grades.line : theme.cardBorder,
+                    backgroundColor: active ? tints.grades.fill : theme.surfaceSecondary, borderWidth: 1, borderColor: active ? tints.grades.line : theme.cardBorder,
                   }}
                 >
-                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: active ? tints.grades.ink : theme.textSecondary }}>
-                    {sub.name}
-                  </Text>
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: active ? tints.grades.ink : theme.textSecondary }}>{sub.name}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -3260,11 +2926,8 @@ export default function FlashcardsScreen() {
               accessibilityLabel={`Accent colour ${c}`}
               accessibilityState={{ selected: active }}
               style={{
-                width: 38, height: 38, borderRadius: 13,
-                alignItems: 'center', justifyContent: 'center',
-                backgroundColor: c,
-                borderWidth: active ? 3 : 1,
-                borderColor: active ? theme.text : theme.cardBorder,
+                width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: c,
+                borderWidth: active ? 3 : 1, borderColor: active ? theme.text : theme.cardBorder,
               }}
             >
               {active && <Ionicons name="checkmark" size={17} color="#ffffff" />}
@@ -3286,11 +2949,9 @@ export default function FlashcardsScreen() {
               accessibilityLabel={`Icon ${iconName}`}
               accessibilityState={{ selected: active }}
               style={{
-                width: 42, height: 42, borderRadius: Radius.md,
-                alignItems: 'center', justifyContent: 'center',
+                width: 42, height: 42, borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center',
                 backgroundColor: active ? deckForm.color + (isDark ? '30' : '20') : theme.surfaceSecondary,
-                borderWidth: active ? 2 : 1,
-                borderColor: active ? deckForm.color : theme.cardBorder,
+                borderWidth: active ? 2 : 1, borderColor: active ? deckForm.color : theme.cardBorder,
               }}
             >
               <Ionicons name={iconName as any} size={19} color={active ? deckForm.color : theme.textSecondary} />
@@ -3301,235 +2962,193 @@ export default function FlashcardsScreen() {
     </KeyboardSheet>
   );
 
-  // ─── Card form ───────────────────────────────────────────────────────────
-
-  const renderAddCardModal = () => (
-    <KeyboardSheet
-      visible={showAddCardModal}
-      onClose={() => setShowAddCardModal(false)}
-      title={editingCard ? 'Edit card' : 'New card'}
-      subtitle={activeDeck?.name}
-      icon="documents-outline"
-      tint={tints.grades}
-      headerRight={
-        <TouchableOpacity
-          onPress={() => setCardForm({ front: cardForm.back, back: cardForm.front })}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel="Swap front and back"
-          style={{
-            flexDirection: 'row', alignItems: 'center', gap: 4,
-            paddingHorizontal: 10, height: 32, borderRadius: Radius.full,
-            backgroundColor: theme.surfaceSecondary,
-          }}
-        >
-          <Ionicons name="swap-vertical" size={14} color={theme.textSecondary} />
-          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: theme.textSecondary }}>Swap</Text>
-        </TouchableOpacity>
-      }
-      footer={
-        <View style={{ gap: 4 }}>
-          <PrimaryButton label={editingCard ? 'Save card' : 'Add card'} onPress={() => handleSaveCard(false)} />
-          {!editingCard && (
-            <TouchableOpacity
-              onPress={() => handleSaveCard(true)}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityLabel="Save this card and start another"
-              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 9 }}
-            >
-              <Ionicons name="add" size={15} color={theme.textSecondary} />
-              <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>
-                Save & add another
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      }
-    >
-      <Text style={{ ...microLabel, marginBottom: 8 }}>Front · the prompt</Text>
-      <TextInput
-        style={{ ...fieldStyle, minHeight: 88, textAlignVertical: 'top', marginBottom: 16 }}
-        placeholder="What is the capital of France?"
-        placeholderTextColor={theme.textTertiary}
-        value={cardForm.front}
-        onChangeText={(t) => setCardForm({ ...cardForm, front: t })}
-        accessibilityLabel="Front of card"
-        multiline
-      />
-
-      <Text style={{ ...microLabel, marginBottom: 8 }}>Back · the answer</Text>
-      <TextInput
-        style={{ ...fieldStyle, minHeight: 88, textAlignVertical: 'top', marginBottom: 8 }}
-        placeholder="Paris"
-        placeholderTextColor={theme.textTertiary}
-        value={cardForm.back}
-        onChangeText={(t) => setCardForm({ ...cardForm, back: t })}
-        accessibilityLabel="Back of card"
-        multiline
-      />
-    </KeyboardSheet>
-  );
-
-  // ─── Import ──────────────────────────────────────────────────────────────
-
-  const renderImportModal = () => (
-    <KeyboardSheet
-      visible={showImportModal}
-      onClose={closeImportModal}
-      title="Import cards"
-      subtitle={activeDeck ? `Into ${activeDeck.name}` : undefined}
-      icon="cloud-upload-outline"
-      tint={tints.tools}
-      footer={
-        parsedImport.length > 0 ? (
-          <PrimaryButton
-            label={`Import ${parsedImport.length} card${parsedImport.length !== 1 ? 's' : ''}`}
-            onPress={handleConfirmImport}
-          />
-        ) : importText.trim().length > 0 ? (
-          <PrimaryButton label="Preview cards" onPress={handleParseText} />
-        ) : undefined
-      }
-    >
-      <Text style={{ ...microLabel, marginBottom: 8 }}>1 · What separates front from back?</Text>
-      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 18 }}>
-        {(['comma', 'semicolon', 'pipe', 'tab'] as const).map((sep) => {
-          const active = importSeparator === sep;
-          const glyph = sep === 'comma' ? ',' : sep === 'semicolon' ? ';' : sep === 'pipe' ? '|' : '⇥';
-          return (
-            <TouchableOpacity
-              key={sep}
-              onPress={() => { setImportSeparator(sep); setParsedImport([]); }}
-              activeOpacity={0.75}
-              accessibilityRole="button"
-              accessibilityState={{ selected: active }}
-              accessibilityLabel={`Separate with ${sep}`}
-              style={{
-                flex: 1, height: 46, borderRadius: Radius.md,
-                alignItems: 'center', justifyContent: 'center',
-                backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary,
-                borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
-              }}
-            >
-              <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 15, color: active ? tints.tools.ink : theme.textSecondary }}>
-                {glyph}
-              </Text>
-              <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 9.5, color: active ? tints.tools.ink : theme.textTertiary }}>
-                {sep}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      <Text style={{ ...microLabel, marginBottom: 8 }}>2 · Paste your list</Text>
-      <TextInput
-        value={importText}
-        onChangeText={(t) => { setImportText(t); setParsedImport([]); }}
-        multiline
-        placeholder={'Front, Back\nQ2, A2…'}
-        placeholderTextColor={theme.textTertiary}
-        accessibilityLabel="Paste cards to import"
-        style={{ ...fieldStyle, minHeight: 104, textAlignVertical: 'top', fontSize: 14, marginBottom: 14 }}
-      />
-
-      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
-        <View style={{ flex: 1, height: 1, backgroundColor: theme.cardBorder }} />
-        <Text style={{ ...microLabel, marginHorizontal: 10 }}>or</Text>
-        <View style={{ flex: 1, height: 1, backgroundColor: theme.cardBorder }} />
-      </View>
-
-      <TouchableOpacity
-        onPress={handlePickFile}
-        disabled={importLoading}
-        activeOpacity={0.75}
-        accessibilityRole="button"
-        accessibilityLabel="Upload a text or CSV file"
-        style={{
-          flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-          height: 52, borderRadius: Radius.lg, marginBottom: 18,
-          borderWidth: 1, borderStyle: 'dashed',
-          borderColor: isDark ? '#3d4468' : '#cbd5e1',
-        }}
-      >
-        {importLoading ? (
-          <ActivityIndicator color={theme.primary} />
-        ) : (
-          <>
-            <Ionicons name="document-attach-outline" size={18} color={theme.textSecondary} />
-            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>
-              {importFileName || 'Upload a .txt or .csv file'}
-            </Text>
-          </>
-        )}
-      </TouchableOpacity>
-
-      {parsedImport.length > 0 && (
-        <>
-          <Text style={{ ...microLabel, marginBottom: 8 }}>
-            Preview · {parsedImport.length} card{parsedImport.length !== 1 ? 's' : ''} found
-          </Text>
-          {parsedImport.slice(0, 10).map((card, idx) => (
-            <Card key={idx} variant="sunken" padding={11} radius={Radius.md} style={{ marginBottom: 6 }}>
-              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text }}>
-                {card.front}
-              </Text>
-              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 2 }}>
-                {card.back}
-              </Text>
-            </Card>
-          ))}
-          {parsedImport.length > 10 && (
-            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, textAlign: 'center', paddingVertical: 6 }}>
-              …and {parsedImport.length - 10} more
-            </Text>
-          )}
-        </>
-      )}
-    </KeyboardSheet>
-  );
-
-  // ─── Exam prep ───────────────────────────────────────────────────────────
-
-  const renderExamModal = () => {
-    const daysLeft = Math.max(0, Math.ceil((examDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
-    const urgencyTint = daysLeft <= 1 ? tints.danger : daysLeft <= 7 ? tints.tasks : tints.attendance;
-    const paceLabel = daysLeft <= 1 ? 'Cram mode' : daysLeft <= 7 ? 'Intensive' : 'Standard pace';
-
+  const renderImportSheet = () => {
+    const deck = deckById(importDeckId);
+    const preview = () => {
+      if (!importText.trim()) return;
+      const notes = parseImportNotes(importText, importSeparator, importKind);
+      if (notes.length === 0) AlertService.alert('No cards found', 'Check the formatting and the separator.');
+      setParsedImport(notes);
+    };
+    const cardCount = parsedImport.reduce((s, n) => s + (n.kind === 'reversed' ? 2 : n.kind === 'cloze' ? Math.max(1, (n.front.match(/\{\{c\d+::/g) || []).length) : 1), 0);
     return (
       <KeyboardSheet
-        visible={showExamModal}
-        onClose={() => setShowExamModal(false)}
+        visible={showImport}
+        onClose={() => setShowImport(false)}
+        title="Import cards"
+        subtitle={deck ? `Into ${deck.name}` : undefined}
+        icon="cloud-upload-outline"
+        tint={tints.tools}
+        footer={
+          parsedImport.length > 0 ? (
+            <PrimaryButton label={`Import ${parsedImport.length} note${parsedImport.length !== 1 ? 's' : ''}`} onPress={handleConfirmImport} />
+          ) : importText.trim().length > 0 ? (
+            <PrimaryButton label="Preview" onPress={preview} />
+          ) : undefined
+        }
+      >
+        <Text style={{ ...microLabel, marginBottom: 8 }}>1 · Card type</Text>
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+          {NOTE_KINDS.filter((k) => k.kind !== 'cloze').map((k) => {
+            const active = importKind === k.kind;
+            return (
+              <TouchableOpacity
+                key={k.kind}
+                onPress={() => {
+                  setImportKind(k.kind as any);
+                  setParsedImport([]);
+                }}
+                activeOpacity={0.75}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active }}
+                style={{
+                  flex: 1, height: 40, borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 5,
+                  backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary, borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
+                }}
+              >
+                <Ionicons name={k.icon as any} size={13} color={active ? tints.tools.ink : theme.textSecondary} />
+                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: active ? tints.tools.ink : theme.textSecondary }}>{k.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <Text style={{ ...microLabel, marginBottom: 8 }}>2 · What separates front from back?</Text>
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+          {(['comma', 'semicolon', 'pipe', 'tab'] as const).map((sep) => {
+            const active = importSeparator === sep;
+            const glyph = sep === 'comma' ? ',' : sep === 'semicolon' ? ';' : sep === 'pipe' ? '|' : 'tab';
+            return (
+              <TouchableOpacity
+                key={sep}
+                onPress={() => {
+                  setImportSeparator(sep);
+                  setParsedImport([]);
+                }}
+                activeOpacity={0.75}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={`Separate with ${sep}`}
+                style={{
+                  flex: 1, height: 44, borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center',
+                  backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary, borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
+                }}
+              >
+                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: sep === 'tab' ? 12 : 15, color: active ? tints.tools.ink : theme.textSecondary }}>{glyph}</Text>
+                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 9.5, color: active ? tints.tools.ink : theme.textTertiary }}>{sep}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <Text style={{ ...microLabel, marginBottom: 8 }}>3 · Paste your list</Text>
+        <TextInput
+          value={importText}
+          onChangeText={(t) => {
+            setImportText(t);
+            setParsedImport([]);
+          }}
+          multiline
+          placeholder={'Front, Back\nThe {{c1::heart}} has four chambers'}
+          placeholderTextColor={theme.textTertiary}
+          accessibilityLabel="Paste cards to import"
+          style={{ ...fieldStyle, minHeight: 104, textAlignVertical: 'top', fontSize: 14, marginBottom: 6 }}
+        />
+        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, marginBottom: 14, lineHeight: 15 }}>
+          One card per line. Lines with {'{{c1::…}}'} become cloze cards automatically.
+        </Text>
+
+        <TouchableOpacity
+          onPress={handlePickFile}
+          disabled={importLoading}
+          activeOpacity={0.75}
+          accessibilityRole="button"
+          accessibilityLabel="Upload a text or CSV file"
+          style={{
+            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 50, borderRadius: Radius.lg, marginBottom: 16,
+            borderWidth: 1, borderStyle: 'dashed', borderColor: isDark ? '#3d4468' : '#cbd5e1',
+          }}
+        >
+          {importLoading ? (
+            <ActivityIndicator color={theme.primary} />
+          ) : (
+            <>
+              <Ionicons name="document-attach-outline" size={18} color={theme.textSecondary} />
+              <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>
+                {importFileName || 'Or upload a .txt or .csv file'}
+              </Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        {parsedImport.length > 0 && (
+          <>
+            <Text style={{ ...microLabel, marginBottom: 8 }}>
+              Preview · {parsedImport.length} note{parsedImport.length !== 1 ? 's' : ''} · {cardCount} card{cardCount !== 1 ? 's' : ''}
+            </Text>
+            {parsedImport.slice(0, 8).map((n, idx) => (
+              <Card key={idx} variant="sunken" padding={11} radius={Radius.md} style={{ marginBottom: 6 }}>
+                {n.kind === 'cloze' ? (
+                  <FaceText segments={clozeOverview(n.front)} color={deck?.color || theme.primary} isDark={isDark} numberOfLines={2} style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.text }} />
+                ) : (
+                  <>
+                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text }}>{n.front}</Text>
+                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textSecondary, marginTop: 2 }}>{n.back}</Text>
+                  </>
+                )}
+              </Card>
+            ))}
+            {parsedImport.length > 8 && (
+              <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, textAlign: 'center', paddingVertical: 6 }}>
+                …and {parsedImport.length - 8} more
+              </Text>
+            )}
+          </>
+        )}
+      </KeyboardSheet>
+    );
+  };
+
+  const renderExamSheet = () => {
+    const node = examPath ? findNode(tree, examPath) : null;
+    const key = getLocalDateString(examDate);
+    const scope = node ? collectDecksFromNode(node) : [];
+    const now = Date.now();
+    const daysLeft = Math.max(0, Math.round((studyDayStart(examDate.getTime()) - studyDayStart(now)) / 86400000));
+    const newCards = scope.reduce((s, d) => s + (d.cards || []).filter((c) => c && !c.suspended && cardState(c) === 'new').length, 0);
+    const pulled = scope.reduce((s, d) => s + examPullCount(d.cards || [], key, now), 0);
+    const perDay = Math.ceil(newCards / Math.max(1, daysLeft));
+    const inExam = scope.some((d) => examDaysLeft(d) !== null);
+    const urgency = daysLeft <= 1 ? tints.danger : daysLeft <= 7 ? tints.tasks : tints.attendance;
+    return (
+      <KeyboardSheet
+        visible={Boolean(node)}
+        onClose={() => setExamPath(null)}
         title="Exam prep"
-        subtitle="Reviews are spread with expanding intervals sized to your window"
+        subtitle={node ? node.name : undefined}
         icon="calendar-outline"
         tint={tints.danger}
         footer={
-          examPlan ? (
-            <PrimaryButton label="Apply exam schedule" onPress={applyExamSchedule} />
-          ) : (
-            <PrimaryButton
-              label="Generate study plan"
-              onPress={() => {
-                const d = Math.max(0.5, (examDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
-                const totalCards = activeNode ? collectCards(activeNode).length : 0;
-                const { plan } = computeExamPlan(d, totalCards, examReviewsPerDay);
-                setExamPlan(plan);
-              }}
-            />
-          )
+          node ? (
+            <View style={{ gap: 4 }}>
+              <PrimaryButton label={inExam ? 'Update exam plan' : 'Start exam mode'} onPress={() => applyExam(node)} color={tints.danger.solid} />
+              {inExam && (
+                <TouchableOpacity onPress={() => endExam(node)} accessibilityRole="button" style={{ alignItems: 'center', paddingVertical: 10 }}>
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: theme.textSecondary }}>End exam mode</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : undefined
         }
       >
-        <Text style={{ ...microLabel, marginBottom: 8 }}>When is your exam?</Text>
+        <Text style={{ ...microLabel, marginBottom: 8 }}>When is the exam?</Text>
         <TouchableOpacity
-          onPress={() => setExamShowDatePicker(true)}
+          onPress={() => setExamShowPicker(true)}
           activeOpacity={0.75}
           accessibilityRole="button"
           accessibilityLabel={`Exam date, ${examDate.toDateString()}. Tap to change.`}
           style={{
-            flexDirection: 'row', alignItems: 'center',
-            paddingHorizontal: 14, height: 52, borderRadius: Radius.lg, marginBottom: 10,
+            flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, height: 52, borderRadius: Radius.lg, marginBottom: 10,
             backgroundColor: theme.inputBg, borderWidth: 1, borderColor: theme.inputBorder,
           }}
         >
@@ -3539,118 +3158,74 @@ export default function FlashcardsScreen() {
           </Text>
           <Ionicons name="chevron-forward" size={16} color={theme.textTertiary} />
         </TouchableOpacity>
-
-        {examShowDatePicker && (
+        {examShowPicker && (
           <DateTimePicker
             value={examDate}
             mode="date"
             display="default"
             minimumDate={new Date()}
-            onChange={(e, d) => {
-              setExamShowDatePicker(false);
-              if (d) { setExamDate(d); setExamPlan(null); }
+            onChange={(_e, d) => {
+              setExamShowPicker(false);
+              if (d) setExamDate(new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12));
             }}
           />
         )}
-
-        <View style={{
-          flexDirection: 'row', alignItems: 'center',
-          paddingHorizontal: 12, paddingVertical: 10, borderRadius: Radius.md, marginBottom: 18,
-          backgroundColor: urgencyTint.fill, borderWidth: 1, borderColor: urgencyTint.line,
-        }}>
-          <Ionicons name={daysLeft <= 3 ? 'alert-circle-outline' : 'information-circle-outline'} size={16} color={urgencyTint.ink} />
-          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: urgencyTint.ink, marginLeft: 7 }}>
-            {daysLeft === 0 ? 'Exam is today!' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} left`}
+        <View
+          style={{
+            flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderRadius: Radius.md, marginBottom: 16,
+            backgroundColor: urgency.fill, borderWidth: 1, borderColor: urgency.line,
+          }}
+        >
+          <Ionicons name={daysLeft <= 3 ? 'alert-circle-outline' : 'information-circle-outline'} size={16} color={urgency.ink} />
+          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: urgency.ink, marginLeft: 7 }}>
+            {daysLeft === 0 ? 'The exam is today' : `${daysLeft} day${daysLeft !== 1 ? 's' : ''} to go`}
           </Text>
-          <View style={{ flex: 1 }} />
-          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: theme.textSecondary }}>{paceLabel}</Text>
         </View>
 
-        <Text style={{ ...microLabel, marginBottom: 8 }}>Review sessions</Text>
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 18 }}>
-          {([0, 3, 4, 5, 6] as const).map((n) => {
-            const active = examReviewsPerDay === n;
-            return (
-              <TouchableOpacity
-                key={n}
-                onPress={() => { setExamReviewsPerDay(n); setExamPlan(null); }}
-                activeOpacity={0.75}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
-                accessibilityLabel={n === 0 ? 'Automatic number of sessions' : `${n} sessions`}
-                style={{
-                  flex: 1, height: 40, borderRadius: Radius.md,
-                  alignItems: 'center', justifyContent: 'center',
-                  backgroundColor: active ? tints.danger.fill : theme.surfaceSecondary,
-                  borderWidth: 1, borderColor: active ? tints.danger.line : theme.cardBorder,
-                }}
-              >
-                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: active ? tints.danger.ink : theme.textSecondary }}>
-                  {n === 0 ? 'Auto' : `${n}×`}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {examPlan && (
-          <>
-            <Text style={{ ...microLabel, marginBottom: 8 }}>
-              Your schedule · {examPlan.length} session{examPlan.length !== 1 ? 's' : ''}
-            </Text>
-            <Card variant="sunken" padding={12} radius={Radius.lg} style={{ marginBottom: 6 }}>
-              {examPlan.map((slot, i) => (
-                <View key={i} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: i === examPlan.length - 1 ? 0 : 9 }}>
-                  <View style={{
-                    width: 22, height: 22, borderRadius: 8, marginRight: 10,
-                    alignItems: 'center', justifyContent: 'center',
-                    backgroundColor: i === 0 ? tints.danger.solid : theme.surfaceSecondary,
-                  }}>
-                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 10, color: i === 0 ? '#ffffff' : theme.textSecondary }}>
-                      {i + 1}
-                    </Text>
-                  </View>
-                  <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary }}>
-                    {slot.label}
-                  </Text>
-                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: theme.text }}>
-                    {slot.cardsPerSession} cards
-                  </Text>
-                </View>
-              ))}
-            </Card>
-            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, lineHeight: 15 }}>
-              Intervals expand over time for optimal retention — the spacing effect (Cepeda et al., 2008).
-            </Text>
-          </>
-        )}
+        <Text style={{ ...microLabel, marginBottom: 8 }}>What exam mode does</Text>
+        {[
+          {
+            icon: 'sparkles-outline' as const,
+            text: newCards > 0 ? `Introduces all ${newCards} new card${newCards !== 1 ? 's' : ''} before then — about ${perDay} a day` : 'Every card here has been studied at least once',
+          },
+          {
+            icon: 'arrow-undo-outline' as const,
+            text: pulled > 0 ? `Brings ${pulled} review${pulled !== 1 ? 's' : ''} that would land after the exam forward, spread across the days left` : 'No reviews need moving — nothing lands after the exam',
+          },
+          { icon: 'shield-checkmark-outline' as const, text: 'Never schedules a card past exam day. After the exam, spacing goes back to normal.' },
+        ].map((x, i) => (
+          <View key={i} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
+            <View style={{ width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: tints.danger.fill }}>
+              <Ionicons name={x.icon} size={14} color={tints.danger.ink} />
+            </View>
+            <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 13, lineHeight: 18, color: theme.text, marginTop: 4 }}>{x.text}</Text>
+          </View>
+        ))}
       </KeyboardSheet>
     );
   };
 
-  // ─── Move deck ───────────────────────────────────────────────────────────
-
-  const renderMoveModal = () => {
+  const renderMoveSheet = () => {
+    const deck = deckById(movingDeckId);
     const paths = new Set<string>();
     decks.forEach((d) => {
       const parts = (d.subject || '').split('::').filter(Boolean);
       for (let i = 1; i <= parts.length; i++) paths.add(parts.slice(0, i).join('::') + '::');
     });
-    const folderOptions = ['', ...Array.from(paths).slice(0, 12)];
-
+    const options = ['', ...Array.from(paths).slice(0, 12)];
     return (
       <KeyboardSheet
-        visible={showMoveModal}
-        onClose={() => setShowMoveModal(false)}
+        visible={Boolean(deck)}
+        onClose={() => setMovingDeckId(null)}
         title="Move deck"
-        subtitle={movingNode ? `Currently at ${movingNode.fullPath}` : undefined}
+        subtitle={deck ? deck.name : undefined}
         icon="move-outline"
         tint={tints.tools}
         footer={<PrimaryButton label="Move here" onPress={confirmMoveDeck} />}
       >
         <Text style={{ ...microLabel, marginBottom: 8 }}>Destination folder</Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 16 }}>
-          {folderOptions.map((path) => {
+          {options.map((path) => {
             const active = moveTargetPath === path;
             return (
               <TouchableOpacity
@@ -3661,25 +3236,16 @@ export default function FlashcardsScreen() {
                 accessibilityState={{ selected: active }}
                 accessibilityLabel={path ? `Move under ${path}` : 'Move to top level'}
                 style={{
-                  flexDirection: 'row', alignItems: 'center', gap: 5,
-                  paddingHorizontal: 11, height: 32, borderRadius: Radius.full,
-                  backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary,
-                  borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
+                  flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 11, height: 32, borderRadius: Radius.full,
+                  backgroundColor: active ? tints.tools.fill : theme.surfaceSecondary, borderWidth: 1, borderColor: active ? tints.tools.line : theme.cardBorder,
                 }}
               >
-                <Ionicons
-                  name={path ? 'folder-outline' : 'home-outline'}
-                  size={13}
-                  color={active ? tints.tools.ink : theme.textTertiary}
-                />
-                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: active ? tints.tools.ink : theme.textSecondary }}>
-                  {path || 'Top level'}
-                </Text>
+                <Ionicons name={path ? 'folder-outline' : 'home-outline'} size={13} color={active ? tints.tools.ink : theme.textTertiary} />
+                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: active ? tints.tools.ink : theme.textSecondary }}>{path || 'Top level'}</Text>
               </TouchableOpacity>
             );
           })}
         </View>
-
         <Text style={{ ...microLabel, marginBottom: 8 }}>Or type a path</Text>
         <TextInput
           value={moveTargetPath}
@@ -3696,26 +3262,206 @@ export default function FlashcardsScreen() {
     );
   };
 
+  const renderCustomStudySheet = () => {
+    const node = customNode;
+    const visible = customPath !== undefined;
+    const close = () => setCustomPath(undefined);
+    const now = Date.now();
+    const horizon = studyDayStart(now, 8);
+    const aheadCount = customScope.reduce(
+      (s, d) => s + (d.cards || []).filter((c) => c && !isSidelined(c, now) && cardState(c) === 'review' && c.nextDue > now && c.nextDue <= horizon).length,
+      0
+    );
+    const newLeft = customScope.reduce((s, d) => s + (d.cards || []).filter((c) => c && !isSidelined(c, now) && cardState(c) === 'new').length, 0);
+    const all = customScope.reduce((s, d) => s + (d.cards || []).filter((c) => c && !c.suspended).length, 0);
+    const scopeNode = node ?? null;
+    return (
+      <KeyboardSheet visible={visible} onClose={close} title="Custom study" subtitle={node ? node.name : 'All decks'} icon="flash-outline" tint={tints.schedule}>
+        {sheetRow({
+          key: 'ahead',
+          icon: 'play-forward-outline',
+          tint: tints.schedule,
+          label: 'Review ahead',
+          desc: aheadCount > 0 ? `${aheadCount} card${aheadCount !== 1 ? 's' : ''} due in the next 7 days. Early reviews count less, so use it before a break.` : 'Nothing is due in the next 7 days.',
+          onPress: () => aheadCount > 0 && after(close, () => startSession(scopeNode, 'ahead', 7)),
+        })}
+        {sheetRow({
+          key: 'new',
+          icon: 'add-circle-outline',
+          tint: qt.new,
+          label: 'Learn 10 more new cards',
+          desc: newLeft > 0 ? `Raises today's new-card limit. ${newLeft} unseen card${newLeft !== 1 ? 's' : ''} left.` : 'There are no new cards left here.',
+          onPress: () =>
+            newLeft > 0 &&
+            after(close, () => {
+              const nd = addNewBonus(scopeNode, 10);
+              startSession(scopeNode, 'normal', 7, nd);
+            }),
+        })}
+        {sheetRow({
+          key: 'cram',
+          icon: 'shuffle-outline',
+          tint: tints.tasks,
+          label: 'Cram everything',
+          desc: all > 0 ? `All ${all} cards, shuffled. Doesn't change when they come up next.` : 'No cards to cram.',
+          onPress: () => all > 0 && after(close, () => startSession(scopeNode, 'cram')),
+        })}
+      </KeyboardSheet>
+    );
+  };
+
+  const renderReviewMore = () => {
+    if (!session || !currentCard) return null;
+    const { deck, card } = currentCard;
+    const close = () => setShowReviewMore(false);
+    const st = cardState(card);
+    const now = Date.now();
+    const elapsed = card.lastReview ? Math.max(0, (now - card.lastReview) / 86400000) : 0;
+    const r = card.stability ? retrievability(elapsed, card.stability) : null;
+    const info: { label: string; value: string }[] = [
+      { label: 'Type', value: kindLabel(kindOf(card)) + (kindOf(card) === 'cloze' ? ` · blank ${card.ord || 1}` : kindOf(card) === 'reversed' ? (card.ord === 1 ? ' · back → front' : ' · front → back') : '') },
+      { label: 'State', value: st === 'new' ? 'New' : st === 'review' ? 'Review' : st === 'relearning' ? 'Relearning' : 'Learning' },
+      { label: 'Reviews', value: `${card.reviewCount || 0}` + (card.lapses ? ` · forgotten ${card.lapses}×` : '') },
+      ...(card.interval > 0 ? [{ label: 'Interval', value: formatInterval(card.interval * 1440) }] : []),
+      ...(st !== 'new' ? [{ label: 'Due', value: new Date(card.nextDue).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) }] : []),
+      ...(card.stability ? [{ label: 'Memory', value: `lasts ~${formatInterval(card.stability * 1440)} at 90%` }] : []),
+      ...(r !== null && st !== 'new' ? [{ label: 'Recall now', value: `${Math.round(r * 100)}%` }] : []),
+      ...(card.difficulty ? [{ label: 'Difficulty', value: `${Math.round(card.difficulty * 10) / 10} / 10` }] : []),
+    ];
+    return (
+      <KeyboardSheet visible={showReviewMore} onClose={close} title="This card" subtitle={deck.name} icon="albums-outline" tint={tints.grades}>
+        {sheetRow({
+          key: 'edit', icon: 'create-outline', tint: tints.grades, label: 'Edit note', desc: 'Fix the wording — its progress is kept',
+          onPress: () => after(close, () => openEditNote(deck.id, noteIdOf(card))),
+        })}
+        {sheetRow({
+          key: 'flag', icon: card.flagged ? 'flag' : 'flag-outline', tint: tints.danger,
+          label: card.flagged ? 'Remove flag' : 'Flag', desc: 'Mark it to find later in the card browser',
+          onPress: () => {
+            close();
+            patchCurrent((c) => {
+              if (c.flagged) {
+                const { flagged: _f, ...rest } = c;
+                return rest;
+              }
+              return { ...c, flagged: true };
+            }, false);
+          },
+        })}
+        {sheetRow({
+          key: 'bury', icon: 'moon-outline', tint: tints.schedule, label: 'Bury until tomorrow', desc: 'Skip it today; it comes back tomorrow',
+          onPress: () => {
+            close();
+            patchCurrent((c) => ({ ...c, buriedUntil: studyDayKey(studyDayStart(Date.now(), 1)) }), true);
+          },
+        })}
+        {sheetRow({
+          key: 'suspend', icon: 'pause-circle-outline', tint: tints.tasks, label: 'Suspend', desc: 'Stop showing it until you unsuspend it in the browser',
+          onPress: () => {
+            close();
+            patchCurrent((c) => ({ ...c, suspended: true }), true);
+          },
+        })}
+        {kindOf(card) !== 'cloze' &&
+          sheetRow({
+            key: 'flip', icon: 'swap-vertical', tint: tints.tools, label: session.flip ? 'Question first' : 'Answer first',
+            desc: 'Flip the sides for the rest of this session',
+            onPress: () => {
+              close();
+              setSession({ ...session, flip: !session.flip });
+              setRevealed(false);
+            },
+          })}
+
+        <View style={{ marginTop: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: theme.cardBorder }}>
+          <Text style={{ ...microLabel, marginBottom: 8 }}>Card info</Text>
+          {info.map((row) => (
+            <View key={row.label} style={{ flexDirection: 'row', paddingVertical: 5 }}>
+              <Text style={{ width: 96, fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textTertiary }}>{row.label}</Text>
+              <Text style={{ flex: 1, fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text }}>{row.value}</Text>
+            </View>
+          ))}
+        </View>
+      </KeyboardSheet>
+    );
+  };
+
+  const renderDeckPicker = () => {
+    const rows = allNodes(tree);
+    const titles: Record<PracticeAction, string> = { quiz: 'Practice test', match: 'Speed match', exam: 'Exam prep', custom: 'Custom study' };
+    return (
+      <KeyboardSheet
+        visible={pickerAction !== null}
+        onClose={() => setPickerAction(null)}
+        title={pickerAction ? titles[pickerAction] : ''}
+        subtitle="Which deck?"
+        icon="albums-outline"
+        tint={tints.grades}
+      >
+        {rows.map(({ node, depth }) => (
+          <TouchableOpacity
+            key={node.fullPath}
+            onPress={() => {
+              const action = pickerAction;
+              after(() => setPickerAction(null), () => action && runPractice(action, node));
+            }}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingLeft: depth * 18 }}
+          >
+            <View
+              style={{
+                width: 32, height: 32, borderRadius: 10, marginRight: 11, alignItems: 'center', justifyContent: 'center',
+                backgroundColor: (node.deck?.color || theme.primary) + (isDark ? '2e' : '1a'),
+              }}
+            >
+              <Ionicons
+                name={(node.children.size > 0 && !node.deck ? 'folder-outline' : node.deck?.icon || getDeckThematicIcon(node.deck?.subject, node.name)) as any}
+                size={16}
+                color={node.deck?.color || theme.primary}
+              />
+            </View>
+            <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: theme.text }}>{node.name}</Text>
+            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: theme.textTertiary }}>{totalFor(node)}</Text>
+          </TouchableOpacity>
+        ))}
+      </KeyboardSheet>
+    );
+  };
+
   // ─────────────────────────────────────────────────────────────────────────
-  // Root render
+  // Root
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <>
-      {view === 'decks' && renderDecks()}
-      {view === 'detail' && renderDetail()}
+      {view === 'decks' && renderHome()}
+      {view === 'detail' && (activeNode ? renderDetail() : renderHome())}
       {view === 'study' && renderStudy()}
       {view === 'quiz' && renderQuiz()}
       {view === 'match' && renderMatch()}
 
       {renderCreateSheet()}
       {renderDeckActionSheet()}
-      {renderAddDeckModal()}
-      {renderAddCardModal()}
-      {renderImportModal()}
-
-      {renderExamModal()}
-      {renderMoveModal()}
+      {renderDeckForm()}
+      {renderImportSheet()}
+      {renderExamSheet()}
+      {renderMoveSheet()}
+      {renderCustomStudySheet()}
+      {renderReviewMore()}
+      {renderDeckPicker()}
+      <StatsSheet visible={showStats} onClose={() => setShowStats(false)} isDark={isDark} decks={decks} stats={flashcardStats} />
+      <NoteEditorSheet
+        visible={noteEditor.visible}
+        onClose={() => setNoteEditor((prev) => ({ ...prev, visible: false }))}
+        isDark={isDark}
+        decks={decks}
+        deckId={noteEditor.deckId}
+        note={noteEditor.note}
+        defaultKind={lastKind}
+        onSave={handleSaveNote}
+        onDelete={handleDeleteNote}
+      />
     </>
   );
 }

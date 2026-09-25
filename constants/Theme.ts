@@ -265,6 +265,12 @@ export const Brand = {
     well: 'rgba(255,255,255,0.16)',
     wellStrong: 'rgba(255,255,255,0.26)',
     wellLine: 'rgba(255,255,255,0.32)',
+    /**
+     * Ring around Fin's avatar in the app bar. The avatar's own azure sits a
+     * few steps from `heroFrom`, so without a near-opaque edge the disc
+     * dissolves into the band.
+     */
+    markRing: 'rgba(255,255,255,0.92)',
     onHero: '#ffffff',
     onHeroMuted: 'rgba(255,255,255,0.88)',
     /** Pale wash for brand-tinted panels sitting on the page, not on the band. */
@@ -281,6 +287,7 @@ export const Brand = {
     well: 'rgba(255,255,255,0.10)',
     wellStrong: 'rgba(255,255,255,0.18)',
     wellLine: 'rgba(255,255,255,0.18)',
+    markRing: 'rgba(255,255,255,0.6)',
     onHero: '#ffffff',
     onHeroMuted: 'rgba(255,255,255,0.82)',
     wash: 'rgba(90,166,251,0.13)',

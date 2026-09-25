@@ -795,21 +795,25 @@ export default function DashboardScreen() {
                         accessibilityLabel={`${greeting}, ${displayName}`}
                         style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}
                     >
-                        {/* Fin, in the frosted well the icon's highlight suggests.
+                        {/* Fin as an avatar, cropped from the launcher icon — the
+                            same face the user tapped to open the app. The full-body
+                            sticker (FinLogo) used to sit here shrunk to 27dp in a
+                            frosted well: cap, books and outline all collapsed into
+                            something that read as an emoji pasted on the band. A
+                            face that fills its disc stays legible at this size.
+                            `fin-avatar` is a pre-cropped @1x–@3x set, so the bar
+                            does not decode the 512px icon to draw 36dp of it.
                             Small on purpose: the illustrated 152pt greeting banner
                             this screen used to open with carried no information and
-                            pushed everything real below the fold. Colour does that
-                            job now — the mascot stays a mark, not a scene. */}
+                            pushed everything real below the fold. */}
                         <View style={{
-                            width: 38, height: 38, borderRadius: 19,
-                            alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: brand.well,
-                            borderWidth: 1, borderColor: brand.wellLine,
+                            width: 40, height: 40, borderRadius: 20,
+                            padding: 2, backgroundColor: brand.markRing,
                         }}>
                             <Image
-                                source={require('../../assets/images/FinLogo.png')}
-                                style={{ width: 27, height: 27 }}
-                                resizeMode="contain"
+                                source={require('../../assets/images/fin-avatar.png')}
+                                style={{ width: 36, height: 36, borderRadius: 18 }}
+                                accessible={false}
                             />
                         </View>
                         <View style={{ flex: 1 }}>

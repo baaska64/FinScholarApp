@@ -6,22 +6,22 @@ import {
   NodeStats,
   SRSettings,
   FlashcardStats,
+  DayLog,
   LevelInfo,
   DayActivity,
   ExamScheduleSlot,
 } from './types';
+import { cardState } from './scheduler';
+import { clozeNumbers } from './notes';
+
+// The scheduler and the note model are re-exported from here so the tab — and
+// its tests — keep one import path for the study engine.
+export * from './scheduler';
+export * from './notes';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 export const generateId = (): string => Math.random().toString(36).substring(2, 11);
-
-export const DEFAULT_SR_SETTINGS: SRSettings = {
-  learningSteps: '1 10',
-  graduatingInterval: 1,
-  easyInterval: 4,
-  studyTimeHour: 8,
-  studyTimeMinute: 0,
-};
 
 export const DECK_COLORS = [
   '#4f46e5', // Indigo
@@ -89,96 +89,19 @@ export function getColorWithAlpha(color: string, alpha: number = 1): string {
   return color;
 }
 
-export function applyRating(
-  card: Flashcard,
-  rating: 1 | 2 | 3 | 4,
-  sr: SRSettings = DEFAULT_SR_SETTINGS
-): Flashcard {
-  if (!card) return card;
-  const safeInterval = typeof card.interval === 'number' && Number.isFinite(card.interval) ? Math.max(0, card.interval) : 0;
-  const safeEase = typeof card.easeFactor === 'number' && Number.isFinite(card.easeFactor) ? Math.min(4.0, Math.max(1.3, card.easeFactor)) : 2.5;
-  const safeReviewCount = typeof card.reviewCount === 'number' && Number.isFinite(card.reviewCount) ? Math.max(0, card.reviewCount) : 0;
-
-  let interval = safeInterval;
-  let easeFactor = safeEase;
-  let nextDueOffsetMs = 0;
-
-  const parseSteps = (str: string | undefined): number[] => {
-    const parsed = (str || '1 10')
-      .split(' ')
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => !isNaN(n) && n > 0);
-    return parsed.length > 0 ? parsed : [1, 10];
-  };
-
-  const steps = parseSteps(sr?.learningSteps);
-  let stepIndex = typeof card.stepIndex === 'number' && Number.isFinite(card.stepIndex) ? Math.max(0, card.stepIndex) : 0;
-  const validStepIndex = Math.min(steps.length - 1, stepIndex);
-
-  if (interval === 0) {
-    if (rating === 1) {
-      stepIndex = 0;
-      nextDueOffsetMs = steps[0] * 60 * 1000;
-      easeFactor = Math.max(1.3, easeFactor - 0.2);
-    } else if (rating === 2) {
-      stepIndex = validStepIndex;
-      nextDueOffsetMs = steps[validStepIndex] * 60 * 1000;
-      easeFactor = Math.max(1.3, easeFactor - 0.15);
-    } else if (rating === 3) {
-      stepIndex = validStepIndex + 1;
-      if (stepIndex >= steps.length) {
-        interval = Math.max(1, sr?.graduatingInterval || 1);
-        nextDueOffsetMs = interval * 24 * 60 * 60 * 1000;
-      } else {
-        nextDueOffsetMs = steps[stepIndex] * 60 * 1000;
-      }
-    } else {
-      interval = Math.max(1, sr?.easyInterval || 4);
-      nextDueOffsetMs = interval * 24 * 60 * 60 * 1000;
-      easeFactor = Math.min(4.0, easeFactor + 0.1);
-    }
-  } else {
-    if (rating === 1) {
-      interval = 0;
-      stepIndex = 0;
-      nextDueOffsetMs = steps[0] * 60 * 1000;
-      easeFactor = Math.max(1.3, easeFactor - 0.2);
-    } else if (rating === 2) {
-      interval = Math.max(1, Math.round(interval * 1.2));
-      nextDueOffsetMs = interval * 24 * 60 * 60 * 1000;
-      easeFactor = Math.max(1.3, easeFactor - 0.15);
-    } else if (rating === 3) {
-      interval = Math.max(1, Math.round(interval * easeFactor));
-      nextDueOffsetMs = interval * 24 * 60 * 60 * 1000;
-    } else {
-      interval = Math.max(1, Math.round(interval * easeFactor * 1.3));
-      nextDueOffsetMs = interval * 24 * 60 * 60 * 1000;
-      easeFactor = Math.min(4.0, easeFactor + 0.1);
-    }
-  }
-
-  const safeOffset = Number.isFinite(nextDueOffsetMs) ? nextDueOffsetMs : 60 * 1000;
-
-  return {
-    ...card,
-    interval,
-    easeFactor: Math.round(easeFactor * 100) / 100,
-    stepIndex,
-    nextDue: Date.now() + safeOffset,
-    reviewCount: safeReviewCount + 1,
-  };
-}
-
 export function makeNewCard(front: string, back: string): Flashcard {
+  const now = Date.now();
   return {
     id: generateId(),
     front: (front || '').trim(),
     back: (back || '').trim(),
     interval: 0,
     easeFactor: 2.5,
-    nextDue: Date.now(),
+    nextDue: now,
     reviewCount: 0,
     stepIndex: 0,
+    state: 'new',
+    createdAt: now,
   };
 }
 
@@ -246,8 +169,9 @@ export function getNodeStats(node: DeckNode): NodeStats {
     for (const c of cards) {
       if (!c) continue;
       stats.total++;
-      if (c.reviewCount === 0) stats.new++;
-      else if (c.interval === 0) stats.learning++;
+      const st = cardState(c);
+      if (st === 'new') stats.new++;
+      else if (st === 'learning' || st === 'relearning') stats.learning++;
       else if (c.nextDue <= now) stats.due++;
       else stats.mastered++;
     }
@@ -293,10 +217,10 @@ export function collectDecksFromNode(node: DeckNode): FlashcardDeck[] {
 
 export function getCardStatus(card: Flashcard): 'new' | 'learning' | 'due' | 'mastered' {
   if (!card) return 'new';
-  const now = Date.now();
-  if (card.reviewCount === 0) return 'new';
-  if (card.interval === 0) return 'learning';
-  if (card.nextDue <= now) return 'due';
+  const st = cardState(card);
+  if (st === 'new') return 'new';
+  if (st === 'learning' || st === 'relearning') return 'learning';
+  if (card.nextDue <= Date.now()) return 'due';
   return 'mastered';
 }
 
@@ -467,6 +391,9 @@ export function updateStudyStats(
   const cleanHistory = Array.from(historySet).filter((d) => d >= cutoffStr).sort();
 
   return {
+    // Carry through fields this function does not own — the review log lives
+    // on the same object, and rebuilding it from scratch wiped it every answer.
+    ...safeCurrent,
     lastStudyDate: todayStr,
     currentStreak: streak,
     masteredToday,
@@ -475,6 +402,48 @@ export function updateStudyStats(
     dailyGoal: typeof safeCurrent.dailyGoal === 'number' && Number.isFinite(safeCurrent.dailyGoal) && safeCurrent.dailyGoal > 0 ? safeCurrent.dailyGoal : 20,
     weeklyHistory: cleanHistory,
   };
+}
+
+const LOG_DAYS = 120;
+
+/**
+ * Adds one answer to the per-day log behind the stats sheet. Only answers to
+ * review cards count towards retention — Anki's "true retention" — because a
+ * learning card is supposed to be failed while it is being learned.
+ */
+export function recordAnswer(
+  stats: FlashcardStats | undefined,
+  entry: { dayKey: string; wasReview: boolean; passed: boolean; ms: number }
+): FlashcardStats {
+  const base: FlashcardStats = stats || { lastStudyDate: '', currentStreak: 0, masteredToday: 0 };
+  const log: Record<string, DayLog> = { ...(base.log || {}) };
+  const prev = log[entry.dayKey] || { reviews: 0, passed: 0, matureTried: 0, ms: 0 };
+  const ms = Number.isFinite(entry.ms) ? Math.min(Math.max(0, entry.ms), 5 * 60 * 1000) : 0;
+  log[entry.dayKey] = {
+    reviews: prev.reviews + 1,
+    passed: prev.passed + (entry.wasReview && entry.passed ? 1 : 0),
+    matureTried: prev.matureTried + (entry.wasReview ? 1 : 0),
+    ms: prev.ms + ms,
+  };
+  const keys = Object.keys(log).sort();
+  for (const k of keys.slice(0, Math.max(0, keys.length - LOG_DAYS))) delete log[k];
+  return { ...base, log };
+}
+
+/** Share of review-card answers that were remembered over the last `days` days, or null with no data. */
+export function trueRetention(stats: FlashcardStats | undefined, days: number = 30, now: Date = new Date()): number | null {
+  const log = stats?.log || {};
+  const cutoff = new Date(now);
+  cutoff.setDate(cutoff.getDate() - days);
+  const from = getLocalDateString(cutoff);
+  let tried = 0;
+  let passed = 0;
+  for (const [k, v] of Object.entries(log)) {
+    if (k < from || !v) continue;
+    tried += v.matureTried || 0;
+    passed += v.passed || 0;
+  }
+  return tried > 0 ? passed / tried : null;
 }
 
 export function isStreakLive(
@@ -620,6 +589,29 @@ export function parseImport(
   }
 
   return cards;
+}
+
+/**
+ * The import parser, note-aware: a line with `{{c1::…}}` in it becomes a cloze
+ * note on its own (no separator needed), and every other line becomes a note
+ * of `kind` from its front and back.
+ */
+export function parseImportNotes(
+  content: string,
+  separator: 'comma' | 'pipe' | 'tab' | 'semicolon' | 'auto' = 'auto',
+  kind: 'basic' | 'reversed' | 'typein' = 'basic'
+): { kind: 'basic' | 'reversed' | 'typein' | 'cloze'; front: string; back: string }[] {
+  if (!content || typeof content !== 'string') return [];
+  const out: { kind: 'basic' | 'reversed' | 'typein' | 'cloze'; front: string; back: string }[] = [];
+  const rest: string[] = [];
+  for (const raw of content.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith('//')) continue;
+    if (/\{\{c\d+::/.test(line) && clozeNumbers(line).length > 0) out.push({ kind: 'cloze', front: line, back: '' });
+    else rest.push(line);
+  }
+  for (const c of parseImport(rest.join('\n'), separator)) out.push({ kind, front: c.front, back: c.back });
+  return out;
 }
 
 // ─── Exam Prep Scheduling Algorithm (Cepeda et al. 2008) ──────────────────────

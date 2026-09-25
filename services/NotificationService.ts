@@ -134,8 +134,9 @@ export const NotificationService = {
       // Count how many cards will be due by that time tomorrow
       let dueCount = 0;
       ledgerData.flashcards.decks.forEach((deck: any) => {
-        deck.cards.forEach((card: any) => {
-          if (card.nextDue <= tomorrowStudyTime.getTime()) {
+        (deck.cards || []).forEach((card: any) => {
+          // Suspended cards never come up, so they must not make the reminder fire.
+          if (card && !card.suspended && card.nextDue <= tomorrowStudyTime.getTime()) {
             dueCount++;
           }
         });

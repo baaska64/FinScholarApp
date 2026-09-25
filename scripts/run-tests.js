@@ -146,6 +146,9 @@ async function run() {
     const { runChallengerStudyAdversarialTests } = await import('../__tests__/challenger-study-adversarial.test.js');
     runChallengerStudyAdversarialTests(harness.describe, harness.test);
 
+    const { runStudyAnkiTests } = await import('../__tests__/study-anki.test.js');
+    runStudyAnkiTests(harness.describe, harness.test);
+
     const { runGamificationPersistenceStressTests } = await import('../__tests__/challenger-gamification-persistence-stress.test.js');
     runGamificationPersistenceStressTests(harness.describe, harness.test);
 

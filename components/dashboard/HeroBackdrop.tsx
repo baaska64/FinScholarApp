@@ -46,7 +46,12 @@ export default function HeroBackdrop({ width, height, curve = 22, isDark }: Hero
             importantForAccessibility="no-hide-descendants"
         >
             <Defs>
-                <LinearGradient id="heroFill" x1="0" y1="0" x2="0.35" y2="1">
+                {/* Strictly vertical. It was angled (x2=0.35), and in bounding-box
+                    units on a band ~1.5x wider than tall that tilts the isolines
+                    enough that the top-right corner starts ~30% of the way to
+                    `heroTo` — a visible step under the flat app bar. The
+                    off-centre glow below already supplies the asymmetry. */}
+                <LinearGradient id="heroFill" x1="0" y1="0" x2="0" y2="1">
                     <Stop offset="0" stopColor={brand.heroFrom} />
                     <Stop offset="1" stopColor={brand.heroTo} />
                 </LinearGradient>

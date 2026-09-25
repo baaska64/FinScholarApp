@@ -29,10 +29,15 @@ import {
 
 export function runStudyRedesignTests(describe, test) {
   // ───────────────────────────────────────────────────────────────────────────
-  // Suite 1: SM-2 Spaced Repetition Engine
+  // Suite 1: FSRS Scheduling Engine
   // ───────────────────────────────────────────────────────────────────────────
-  describe('Study Redesign Suite 1: SM-2 Spaced Repetition Engine', () => {
-    test('1.1 makeNewCard creates initial card with correct SM-2 defaults', () => {
+  describe('Study Redesign Suite 1: FSRS Scheduling Engine (Anki-style)', () => {
+    // A fixed afternoon, so study-day boundaries (4 AM) are predictable.
+    const T = new Date(2026, 8, 23, 14, 0).getTime();
+    const MIN = 60 * 1000;
+    const DAY = 24 * 60 * MIN;
+
+    test('1.1 makeNewCard creates a new card with neutral defaults', () => {
       const card = makeNewCard('What is photosynthesis?', 'Process of converting light to energy');
       assert.strictEqual(card.front, 'What is photosynthesis?');
       assert.strictEqual(card.back, 'Process of converting light to energy');
@@ -40,96 +45,86 @@ export function runStudyRedesignTests(describe, test) {
       assert.strictEqual(card.easeFactor, 2.5);
       assert.strictEqual(card.reviewCount, 0);
       assert.strictEqual(card.stepIndex, 0);
+      assert.strictEqual(card.state, 'new');
       assert.ok(card.id && typeof card.id === 'string');
       assert.ok(card.nextDue <= Date.now() + 100);
     });
 
-    test('1.2 Learning card rating 1 (Again) resets stepIndex and decreases easeFactor', () => {
-      const card = makeNewCard('Q', 'A');
-      card.stepIndex = 1;
-      const updated = applyRating(card, 1, DEFAULT_SR_SETTINGS);
+    test('1.2 Again on a new card enters learning at the first step (1 minute)', () => {
+      const card = { ...makeNewCard('Q', 'A'), id: 'n1' };
+      const updated = applyRating(card, 1, DEFAULT_SR_SETTINGS, T);
+      assert.strictEqual(updated.state, 'learning');
       assert.strictEqual(updated.interval, 0);
       assert.strictEqual(updated.stepIndex, 0);
       assert.strictEqual(updated.reviewCount, 1);
-      assert.strictEqual(updated.easeFactor, 2.3);
-      assert.ok(updated.nextDue > Date.now());
+      assert.strictEqual(updated.nextDue, T + 1 * MIN);
+      assert.ok(updated.stability > 0 && updated.difficulty >= 1 && updated.difficulty <= 10);
     });
 
-    test('1.3 Learning card rating 3 (Good) advances steps and graduates to graduatingInterval', () => {
-      const card = makeNewCard('Q', 'A');
-      // Step 0 -> Step 1 (1 min -> 10 min)
-      const step1 = applyRating(card, 3, { ...DEFAULT_SR_SETTINGS, learningSteps: '1 10', graduatingInterval: 1 });
-      assert.strictEqual(step1.interval, 0);
+    test('1.3 Good walks the learning steps, then graduates to a day interval due at 4 AM', () => {
+      const sr = { ...DEFAULT_SR_SETTINGS, learningSteps: '1 10' };
+      const step1 = applyRating({ ...makeNewCard('Q', 'A'), id: 'n2' }, 3, sr, T);
+      assert.strictEqual(step1.state, 'learning');
       assert.strictEqual(step1.stepIndex, 1);
-      assert.strictEqual(step1.reviewCount, 1);
+      assert.strictEqual(step1.nextDue, T + 10 * MIN);
 
-      // Step 1 -> Graduation (interval = graduatingInterval = 1 day)
-      const graduated = applyRating(step1, 3, { ...DEFAULT_SR_SETTINGS, learningSteps: '1 10', graduatingInterval: 1 });
-      assert.strictEqual(graduated.interval, 1);
+      const graduated = applyRating(step1, 3, sr, T + 11 * MIN);
+      assert.strictEqual(graduated.state, 'review');
+      assert.ok(graduated.interval >= 1);
       assert.strictEqual(graduated.reviewCount, 2);
-      assert.ok(graduated.nextDue >= Date.now() + 23 * 60 * 60 * 1000);
+      const due = new Date(graduated.nextDue);
+      assert.strictEqual(due.getHours(), 4, 'review cards come due at the start of a study day');
+      assert.strictEqual(due.getMinutes(), 0);
     });
 
-    test('1.4 Learning card rating 4 (Easy) immediately jumps to easyInterval', () => {
-      const card = makeNewCard('Q', 'A');
-      const updated = applyRating(card, 4, { ...DEFAULT_SR_SETTINGS, easyInterval: 4 });
-      assert.strictEqual(updated.interval, 4);
-      assert.strictEqual(updated.reviewCount, 1);
-      assert.strictEqual(updated.easeFactor, 2.6); // 2.5 + 0.1
-      assert.ok(updated.nextDue >= Date.now() + 3.5 * 24 * 60 * 60 * 1000);
+    test('1.4 Easy on a new card graduates at once, further out than Good would', () => {
+      const card = { ...makeNewCard('Q', 'A'), id: 'n3' };
+      const easy = applyRating(card, 4, DEFAULT_SR_SETTINGS, T);
+      assert.strictEqual(easy.state, 'review');
+      assert.ok(easy.interval >= 4, `easy interval ${easy.interval} should be several days`);
+      const good = applyRating(applyRating(card, 3, DEFAULT_SR_SETTINGS, T), 3, DEFAULT_SR_SETTINGS, T + 11 * MIN);
+      assert.ok(easy.interval > good.interval);
     });
 
-    test('1.5 Graduated card rating 3 (Good) multiplies interval by easeFactor', () => {
-      const graduatedCard = {
-        id: 'c1',
-        front: 'Q',
-        back: 'A',
-        interval: 10,
-        easeFactor: 2.5,
-        nextDue: Date.now() - 1000,
-        reviewCount: 3,
-      };
-      const updated = applyRating(graduatedCard, 3, DEFAULT_SR_SETTINGS);
-      assert.strictEqual(updated.interval, 25); // 10 * 2.5 = 25
-      assert.strictEqual(updated.reviewCount, 4);
-      assert.strictEqual(updated.easeFactor, 2.5);
+    test('1.5 A review card grows its interval, with Hard <= Good < Easy', () => {
+      const card = { id: 'r1', front: 'Q', back: 'A', interval: 10, easeFactor: 2.5, nextDue: T - 1000, reviewCount: 3 };
+      const hard = applyRating(card, 2, DEFAULT_SR_SETTINGS, T);
+      const good = applyRating(card, 3, DEFAULT_SR_SETTINGS, T);
+      const easy = applyRating(card, 4, DEFAULT_SR_SETTINGS, T);
+      assert.ok(good.interval > 10, `good ${good.interval} should exceed the last interval`);
+      assert.ok(hard.interval <= good.interval);
+      assert.ok(good.interval < easy.interval);
+      assert.strictEqual(good.reviewCount, 4);
+      assert.strictEqual(good.state, 'review');
     });
 
-    test('1.6 Graduated card rating 1 (Again) relapses to interval 0 and step 0', () => {
-      const graduatedCard = {
-        id: 'c1',
-        front: 'Q',
-        back: 'A',
-        interval: 30,
-        easeFactor: 2.5,
-        nextDue: Date.now() - 1000,
-        reviewCount: 5,
-      };
-      const updated = applyRating(graduatedCard, 1, DEFAULT_SR_SETTINGS);
+    test('1.6 Again on a review card lapses into relearning for 10 minutes', () => {
+      const card = { id: 'r2', front: 'Q', back: 'A', interval: 30, easeFactor: 2.5, nextDue: T - 1000, reviewCount: 5 };
+      const updated = applyRating(card, 1, DEFAULT_SR_SETTINGS, T);
+      assert.strictEqual(updated.state, 'relearning');
       assert.strictEqual(updated.interval, 0);
       assert.strictEqual(updated.stepIndex, 0);
-      assert.strictEqual(updated.easeFactor, 2.3);
+      assert.strictEqual(updated.lapses, 1);
+      assert.strictEqual(updated.nextDue, T + 10 * MIN);
       assert.strictEqual(updated.reviewCount, 6);
+      // The forgotten card remembers less than it did.
+      assert.ok(updated.stability < 30);
     });
 
-    test('1.7 Ease factor is clamped between 1.3 and 4.0', () => {
-      let card = {
-        id: 'c1',
-        front: 'Q',
-        back: 'A',
-        interval: 10,
-        easeFactor: 1.35,
-        nextDue: Date.now() - 1000,
-        reviewCount: 1,
-      };
-      // Reduce below 1.3 -> should clamp to 1.3
-      card = applyRating(card, 1, DEFAULT_SR_SETTINGS);
-      assert.strictEqual(card.easeFactor, 1.3);
-
-      // Increase above 4.0 -> should clamp to 4.0
-      card.easeFactor = 3.95;
-      card = applyRating(card, 4, DEFAULT_SR_SETTINGS);
-      assert.strictEqual(card.easeFactor, 4.0);
+    test('1.7 Difficulty stays in 1..10 and stability stays positive under any rating sequence', () => {
+      let card = { ...makeNewCard('Q', 'A'), id: 'n4' };
+      let t = T;
+      const seq = [1, 4, 2, 3, 1, 1, 4, 4, 2, 3, 3, 1, 4, 2, 2, 3, 1, 4, 3, 3];
+      for (const g of seq) {
+        card = applyRating(card, g, DEFAULT_SR_SETTINGS, t);
+        assert.ok(card.difficulty >= 1 && card.difficulty <= 10, `difficulty ${card.difficulty}`);
+        assert.ok(card.stability > 0 && Number.isFinite(card.stability), `stability ${card.stability}`);
+        assert.ok(Number.isFinite(card.nextDue) && card.nextDue > t);
+        t = Math.max(card.nextDue, t + MIN);
+      }
+      assert.strictEqual(card.reviewCount, seq.length);
+      assert.ok(card.easeFactor >= 1.3 && card.easeFactor <= 4.0);
+      void DAY;
     });
   });
 
@@ -876,9 +871,9 @@ export function runStudyRedesignTests(describe, test) {
   });
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Suite 20: SM-2 Engine Corrupt Data & Out-of-Bounds Step Protection
+  // Suite 20: Scheduler Corrupt Data & Out-of-Bounds Step Protection
   // ───────────────────────────────────────────────────────────────────────────
-  describe('Study Redesign Suite 20: SM-2 Engine Corrupt Data & Step Bounds', () => {
+  describe('Study Redesign Suite 20: Scheduler Corrupt Data & Step Bounds', () => {
     test('20.1 applyRating safely handles out-of-bounds stepIndex without producing NaN', () => {
       const card = {
         id: 'c1',
@@ -1429,9 +1424,9 @@ export function runStudyRedesignTests(describe, test) {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Suite 28: Spaced Repetition (SM-2) Session Lifecycle Simulation
+  // Suite 28: Spaced Repetition Session Lifecycle Simulation
   // ─────────────────────────────────────────────────────────────────────────
-  describe('Study Redesign Suite 28: Spaced Repetition (SM-2) Session Lifecycle Simulation', () => {
+  describe('Study Redesign Suite 28: Spaced Repetition Session Lifecycle Simulation', () => {
     test('28.1 Due Card Filtering & Session Initialization', () => {
       const now = Date.now();
       const allCards = [
@@ -1453,46 +1448,50 @@ export function runStudyRedesignTests(describe, test) {
     });
 
     test('28.2 Rating Trajectory Across 1-4 (Again, Hard, Good, Easy)', () => {
-      const card = makeNewCard('CAPM Model', 'E(R) = Rf + Beta(Rm - Rf)');
+      const T = new Date(2026, 8, 23, 14, 0).getTime();
+      const MIN = 60 * 1000;
+      const card = { ...makeNewCard('CAPM Model', 'E(R) = Rf + Beta(Rm - Rf)'), id: 'capm' };
       assert.strictEqual(card.interval, 0);
-      assert.strictEqual(card.easeFactor, 2.5);
       assert.strictEqual(card.stepIndex, 0);
 
-      // 1. Rating 2 (Hard) on learning card
-      const stepHard = applyRating(card, 2, DEFAULT_SR_SETTINGS);
+      // 1. Hard on a new card stays on the first step, halfway to the second (1m, 10m -> 5.5m)
+      const stepHard = applyRating(card, 2, DEFAULT_SR_SETTINGS, T);
       assert.strictEqual(stepHard.interval, 0);
       assert.strictEqual(stepHard.stepIndex, 0);
-      assert.strictEqual(stepHard.easeFactor, 2.35); // 2.5 - 0.15
+      assert.strictEqual(stepHard.nextDue, T + 5.5 * MIN);
       assert.strictEqual(stepHard.reviewCount, 1);
 
-      // 2. Rating 3 (Good) on learning card advances step 0 -> 1 (10 min)
-      const stepGood1 = applyRating(stepHard, 3, DEFAULT_SR_SETTINGS);
+      // 2. Good advances step 0 -> 1 (10 min)
+      const stepGood1 = applyRating(stepHard, 3, DEFAULT_SR_SETTINGS, T + 6 * MIN);
       assert.strictEqual(stepGood1.interval, 0);
       assert.strictEqual(stepGood1.stepIndex, 1);
-      assert.strictEqual(stepGood1.easeFactor, 2.35);
       assert.strictEqual(stepGood1.reviewCount, 2);
 
-      // 3. Rating 3 (Good) on step 1 graduates the card (interval = graduatingInterval = 1)
-      const stepGraduated = applyRating(stepGood1, 3, DEFAULT_SR_SETTINGS);
-      assert.strictEqual(stepGraduated.interval, 1);
+      // 3. Good on the last step graduates to a day interval
+      const stepGraduated = applyRating(stepGood1, 3, DEFAULT_SR_SETTINGS, T + 17 * MIN);
+      assert.strictEqual(stepGraduated.state, 'review');
+      assert.ok(stepGraduated.interval >= 1);
       assert.strictEqual(stepGraduated.reviewCount, 3);
 
-      // 4. Rating 3 (Good) on graduated card multiplies interval by easeFactor
-      const stepReviewGood = applyRating(stepGraduated, 3, DEFAULT_SR_SETTINGS);
-      assert.strictEqual(stepReviewGood.interval, 2); // Math.round(1 * 2.35) = 2
+      // 4. Good on time grows the interval
+      const onTime = stepGraduated.nextDue + 60 * MIN;
+      const stepReviewGood = applyRating(stepGraduated, 3, DEFAULT_SR_SETTINGS, onTime);
+      assert.ok(stepReviewGood.interval > stepGraduated.interval);
       assert.strictEqual(stepReviewGood.reviewCount, 4);
 
-      // 5. Rating 4 (Easy) on graduated card multiplies interval by easeFactor * 1.3
-      const stepReviewEasy = applyRating(stepReviewGood, 4, DEFAULT_SR_SETTINGS);
-      assert.strictEqual(stepReviewEasy.interval, 6); // Math.round(2 * 2.35 * 1.3) = 6
-      assert.strictEqual(stepReviewEasy.easeFactor, 2.45); // 2.35 + 0.1
+      // 5. Easy grows it further than Good would have
+      const next = stepReviewGood.nextDue + 60 * MIN;
+      const stepReviewEasy = applyRating(stepReviewGood, 4, DEFAULT_SR_SETTINGS, next);
+      const wouldBeGood = applyRating(stepReviewGood, 3, DEFAULT_SR_SETTINGS, next);
+      assert.ok(stepReviewEasy.interval > wouldBeGood.interval);
       assert.strictEqual(stepReviewEasy.reviewCount, 5);
 
-      // 6. Rating 1 (Again) on graduated card relapses to interval 0 and step 0
-      const stepRelapse = applyRating(stepReviewEasy, 1, DEFAULT_SR_SETTINGS);
+      // 6. Again on a review card relapses into relearning
+      const stepRelapse = applyRating(stepReviewEasy, 1, DEFAULT_SR_SETTINGS, stepReviewEasy.nextDue + 60 * MIN);
       assert.strictEqual(stepRelapse.interval, 0);
       assert.strictEqual(stepRelapse.stepIndex, 0);
-      assert.strictEqual(stepRelapse.easeFactor, 2.25); // 2.45 - 0.2
+      assert.strictEqual(stepRelapse.state, 'relearning');
+      assert.strictEqual(stepRelapse.lapses, 1);
       assert.strictEqual(stepRelapse.reviewCount, 6);
     });
 
@@ -1504,23 +1503,24 @@ export function runStudyRedesignTests(describe, test) {
 
       const REQUEUE_WINDOW_MS = 20 * 60 * 1000;
 
-      // Card A: user rates 1 (Again) -> 1 min offset < 20m window -> requeued
+      // Card A: Again -> 1 min step, inside the learn-ahead window
       const updatedA = applyRating(sessionQueue[0], 1, DEFAULT_SR_SETTINGS);
       const shouldRequeueA = updatedA.interval === 0 && updatedA.nextDue - Date.now() < REQUEUE_WINDOW_MS;
       assert.strictEqual(shouldRequeueA, true);
       sessionQueue.push({ ...updatedA, deckId: 'deck-1' });
       assert.strictEqual(sessionQueue.length, 3);
 
-      // Card B: user rates 4 (Easy) -> interval = 4 days -> not requeued
+      // Card B: Easy graduates straight to days
       const updatedB = applyRating(sessionQueue[1], 4, DEFAULT_SR_SETTINGS);
       const shouldRequeueB = updatedB.interval === 0 && updatedB.nextDue - Date.now() < REQUEUE_WINDOW_MS;
       assert.strictEqual(shouldRequeueB, false);
 
-      // Requeued Card A (at index 2): user rates 4 (Easy) -> graduates -> not requeued
+      // Card A again: Easy graduates it too
       const finalA = applyRating(sessionQueue[2], 4, DEFAULT_SR_SETTINGS);
       const shouldRequeueFinalA = finalA.interval === 0 && finalA.nextDue - Date.now() < REQUEUE_WINDOW_MS;
       assert.strictEqual(shouldRequeueFinalA, false);
-      assert.strictEqual(finalA.interval, 4);
+      assert.strictEqual(finalA.state, 'review');
+      assert.ok(finalA.interval >= 1);
     });
 
     test('28.4 Reversed Card Review Mode', () => {

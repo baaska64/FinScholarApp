@@ -145,7 +145,7 @@ export const STUDY_TOUR: SpotlightStep[] = [
         targetId: SPOTLIGHT_IDS.studyCreateDeck,
         icon: 'albums',
         title: 'Make your first deck',
-        body: 'Create a deck per subject, add cards, then review daily to build your streak.',
+        body: 'Create a deck, add cards — or try the sample deck. Then come back daily: each card returns right before you would forget it.',
     },
 ];
 

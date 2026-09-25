@@ -28,35 +28,38 @@ import {
 
 export function runChallengerStudyAdversarialTests(describe, test) {
   // ───────────────────────────────────────────────────────────────────────────
-  // Suite C1: SM-2 Spaced Repetition Clamping & Extreme Trajectory Stress
+  // Suite C1: Scheduler Clamping & Extreme Trajectory Stress
   // ─────────────────────────────────────────────────────────────────────────
-  describe('Challenger Study Suite 1: SM-2 Extreme Ratings & Clamping Stress', () => {
-    test('C1.1 100 consecutive rating 1 (Again) clamping at lower bound 1.3', () => {
+  describe('Challenger Study Suite 1: Scheduler Extreme Ratings & Clamping Stress', () => {
+    test('C1.1 100 consecutive rating 1 (Again) keeps the card on step 0 with bounded difficulty', () => {
       let card = makeNewCard('Continuous Again Test', 'Def');
       assert.strictEqual(card.easeFactor, 2.5);
 
       for (let i = 0; i < 100; i++) {
         card = applyRating(card, 1, DEFAULT_SR_SETTINGS);
-        assert.ok(card.easeFactor >= 1.3, `Ease factor ${card.easeFactor} fell below 1.3 at iteration ${i}`);
+        assert.ok(card.difficulty >= 1 && card.difficulty <= 10, `Difficulty ${card.difficulty} left 1..10 at iteration ${i}`);
+        assert.ok(card.stability > 0, `Stability ${card.stability} not positive at iteration ${i}`);
         assert.strictEqual(card.interval, 0);
         assert.strictEqual(card.stepIndex, 0);
         assert.strictEqual(card.reviewCount, i + 1);
       }
-      assert.strictEqual(card.easeFactor, 1.3);
+      // Failing over and over pushes difficulty to the top of the scale.
+      assert.ok(card.difficulty > 9.5);
       assert.strictEqual(card.reviewCount, 100);
     });
 
-    test('C1.2 50 consecutive rating 4 (Easy) clamping at upper bound 4.0 and interval explosion safety', () => {
+    test('C1.2 50 consecutive rating 4 (Easy) stays finite and inside the maximum interval', () => {
       let card = makeNewCard('Continuous Easy Test', 'Def');
 
       for (let i = 0; i < 50; i++) {
         card = applyRating(card, 4, DEFAULT_SR_SETTINGS);
-        assert.ok(card.easeFactor <= 4.0, `Ease factor ${card.easeFactor} exceeded 4.0 at iteration ${i}`);
+        assert.ok(card.difficulty >= 1 && card.difficulty <= 10, `Difficulty ${card.difficulty} left 1..10 at iteration ${i}`);
         assert.ok(Number.isFinite(card.interval), `Interval became non-finite at iteration ${i}`);
+        assert.ok(card.interval <= DEFAULT_SR_SETTINGS.maximumInterval, `Interval ${card.interval} passed the maximum`);
         assert.ok(Number.isFinite(card.nextDue), `NextDue became non-finite at iteration ${i}`);
         assert.strictEqual(card.reviewCount, i + 1);
       }
-      assert.strictEqual(card.easeFactor, 4.0);
+      assert.strictEqual(card.difficulty, 1);
       assert.ok(card.interval > 1000);
       assert.ok(card.nextDue > Date.now());
     });
@@ -65,16 +68,18 @@ export function runChallengerStudyAdversarialTests(describe, test) {
       let card = makeNewCard('Oscillation Test', 'Def');
 
       for (let i = 0; i < 20; i++) {
-        card = applyRating(card, 4, DEFAULT_SR_SETTINGS); // Easy -> interval > 0, ease + 0.1
-        const easeAfterEasy = card.easeFactor;
-        assert.ok(easeAfterEasy <= 4.0);
+        card = applyRating(card, 4, DEFAULT_SR_SETTINGS);
+        assert.ok(card.easeFactor <= 4.0);
+        assert.ok(card.interval >= 1);
 
-        card = applyRating(card, 1, DEFAULT_SR_SETTINGS); // Again -> interval = 0, ease - 0.2
+        card = applyRating(card, 1, DEFAULT_SR_SETTINGS);
         assert.ok(card.easeFactor >= 1.3);
         assert.strictEqual(card.interval, 0);
       }
       assert.ok(card.easeFactor >= 1.3 && card.easeFactor <= 4.0);
+      assert.ok(card.difficulty >= 1 && card.difficulty <= 10);
       assert.strictEqual(card.reviewCount, 40);
+      assert.strictEqual(card.lapses, 20);
     });
 
     test('C1.4 Extreme initial values (negative ease, huge ease, negative interval, NaN step)', () => {
@@ -95,9 +100,10 @@ export function runChallengerStudyAdversarialTests(describe, test) {
       assert.ok(fixed.interval >= 0);
       assert.ok(fixed.reviewCount >= 1);
       assert.ok(Number.isFinite(fixed.nextDue));
+      assert.ok(Number.isFinite(fixed.stability) && fixed.stability > 0);
     });
 
-    test('C1.5 Custom SRSettings with 5 learning steps and extreme step progression', () => {
+    test('C1.5 Custom settings with 5 learning steps walk every step before graduating', () => {
       const customSR = {
         learningSteps: '1 5 15 60 1440',
         graduatingInterval: 3,
@@ -105,31 +111,24 @@ export function runChallengerStudyAdversarialTests(describe, test) {
         studyTimeHour: 8,
         studyTimeMinute: 0,
       };
+      const T = new Date(2026, 8, 23, 9, 0).getTime();
+      const MIN = 60 * 1000;
+      const delays = [5, 15, 60, 1440];
 
-      let card = makeNewCard('5 Steps', 'Ans');
-      // Step 0 -> Step 1
-      card = applyRating(card, 3, customSR);
-      assert.strictEqual(card.interval, 0);
-      assert.strictEqual(card.stepIndex, 1);
+      let card = { ...makeNewCard('5 Steps', 'Ans'), id: 'five' };
+      let t = T;
+      for (let step = 1; step <= 4; step++) {
+        card = applyRating(card, 3, customSR, t);
+        assert.strictEqual(card.interval, 0);
+        assert.strictEqual(card.stepIndex, step);
+        assert.strictEqual(card.nextDue, t + delays[step - 1] * MIN);
+        t = card.nextDue;
+      }
 
-      // Step 1 -> Step 2
-      card = applyRating(card, 3, customSR);
-      assert.strictEqual(card.interval, 0);
-      assert.strictEqual(card.stepIndex, 2);
-
-      // Step 2 -> Step 3
-      card = applyRating(card, 3, customSR);
-      assert.strictEqual(card.interval, 0);
-      assert.strictEqual(card.stepIndex, 3);
-
-      // Step 3 -> Step 4
-      card = applyRating(card, 3, customSR);
-      assert.strictEqual(card.interval, 0);
-      assert.strictEqual(card.stepIndex, 4);
-
-      // Step 4 -> Graduation (interval = graduatingInterval = 3)
-      card = applyRating(card, 3, customSR);
-      assert.strictEqual(card.interval, 3);
+      // Step 4 -> graduation into a day-level review interval
+      card = applyRating(card, 3, customSR, t);
+      assert.strictEqual(card.state, 'review');
+      assert.ok(card.interval >= 1);
       assert.strictEqual(card.reviewCount, 5);
     });
   });
