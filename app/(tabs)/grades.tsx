@@ -8,14 +8,16 @@ import { SyncService } from '@/services/SyncService';
 import { Calculator } from '@/utils/calculator';
 import { useColorScheme } from 'nativewind';
 import { useFocusEffect, router } from 'expo-router';
+import { setStatusBarStyle } from 'expo-status-bar';
 
-import GwaSummary from '@/components/ledger/GwaSummary';
+import GwaHero from '@/components/ledger/GwaHero';
+import BandSurface from '@/components/dashboard/BandSurface';
 import Tabs from '@/components/ledger/Tabs';
 import SubjectCard from '@/components/ledger/SubjectCard';
 import ActiveSubjectView from '@/components/ledger/ActiveSubjectView';
 import { AlertService } from '@/components/CustomAlert';
 import { useSemesterContext } from '@/components/SemesterContext';
-import { getTheme, getTints, Typography, Radius } from '@/constants/Theme';
+import { getTheme, getTints, getBrand, Typography, Radius } from '@/constants/Theme';
 import Card from '@/components/ui/Card';
 import AnimatedPressable from '@/components/ui/AnimatedPressable';
 import { ListSkeleton } from '@/components/ui/LoadingSkeleton';
@@ -63,6 +65,11 @@ const GRADING_SYSTEMS: { key: string; label: string; hint: string }[] = [
 ];
 
 const GUTTER = 14;
+/**
+ * Rise of the band's slanted lower edge. Each tab's band ends in its own
+ * shape — dome on the dashboard, flat under a sheet on study, a slant here.
+ */
+const BAND_SLANT = 22;
 
 export default function GradeLedgerTab() {
   const [data, setData] = useState<any>(null);
@@ -81,8 +88,18 @@ export default function GradeLedgerTab() {
   const isDark = colorScheme === 'dark';
   const theme = getTheme(isDark);
   const tints = getTints(isDark);
+  const brand = getBrand(isDark);
   const insets = useSafeAreaInsets();
   const tabBarHeight = useTabBarHeight();
+
+  // The band runs under the status bar, so its icons go light while this tab
+  // is focused — the subject screen has a band too, so this holds for both.
+  useFocusEffect(
+    useCallback(() => {
+      setStatusBarStyle('light', true);
+      return () => setStatusBarStyle(isDark ? 'light' : 'dark', true);
+    }, [isDark])
+  );
 
   // ── Add Subject modal state
   const [showAddSubjectModal, setShowAddSubjectModal] = useState(false);
@@ -171,8 +188,9 @@ export default function GradeLedgerTab() {
   useScreenTour(TOUR_KEYS.grades, GRADES_TOUR, data !== null);
 
   if (!data) return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
-      <ListSkeleton count={3} cardHeight={140} />
+    <SafeAreaView edges={['left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+      <View style={{ height: insets.top + 150, backgroundColor: brand.heroFrom }} />
+      <ListSkeleton count={3} cardHeight={84} />
     </SafeAreaView>
   );
 
@@ -201,6 +219,10 @@ export default function GradeLedgerTab() {
   const trackedSubjects = currentSem ? getTrackedSubjects(currentSem) : [];
   const pausedCount = allSubjects.length - trackedSubjects.length;
   const displayedSubjects = activeTab === 'tracked' ? trackedSubjects : allSubjects;
+
+  const unitsCounted = trackedSubjects.reduce((n: number, s: any) => n + (Number(s.units) || 0), 0);
+  const yearTerms = currentYear?.semesters?.length || 0;
+  const allTerms = (data.years || []).reduce((n: number, y: any) => n + (y.semesters?.length || 0), 0);
 
   const sortedSubjects = [...displayedSubjects].sort((a: any, b: any) => {
     const aTracked = a.gradeTrackingEnabled !== false;
@@ -346,7 +368,7 @@ export default function GradeLedgerTab() {
      ══════════════════════════════════════════════════════════════════════════ */
   if (activeSubject && currentSem) {
     return (
-      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+      <SafeAreaView edges={['left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
         <ActiveSubjectView
           subject={activeSubject}
           system={system}
@@ -378,73 +400,65 @@ export default function GradeLedgerTab() {
   }
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
-      {/* ══ App bar — flush with the page, term switcher as the subtitle chip,
-             matching the schedule tab. The old bar was a bordered, shadowed
-             panel with two near-identical gear icons; grading options moved to
-             the summary card they configure, so only one gear is left. ══════ */}
-      <View
-        style={{
-          flexDirection: 'row', alignItems: 'center',
-          paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10, zIndex: 10,
-          backgroundColor: theme.background,
-        }}
-      >
-        <View style={{ flex: 1, marginRight: 10 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
-            <View style={{
-              width: 32, height: 32, borderRadius: 10,
-              backgroundColor: tints.grades.fill,
-              borderWidth: 1, borderColor: tints.grades.line,
-              alignItems: 'center', justifyContent: 'center',
-            }}>
-              <Ionicons name="school" size={17} color={tints.grades.ink} />
-            </View>
-            <Text
-              accessibilityRole="header"
-              numberOfLines={1}
-              style={{ fontFamily: 'Nunito_900Black', fontSize: 19, color: theme.text, letterSpacing: -0.4, flexShrink: 1 }}
-            >
-              Grade Ledger
+    <SafeAreaView edges={['left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
+      {/* ══ App bar, on the band ══════════════════════════════════════════
+             Same brand field as the dashboard and study tabs, same pinned
+             anatomy (title, term switcher as the subtitle, one gear), so the
+             tabs read as one app. What differs is below it. ═══════════════ */}
+      <View style={{ backgroundColor: brand.heroFrom, paddingTop: insets.top, zIndex: 10 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 8, gap: 8 }}>
+          <View style={{ flex: 1 }}>
+            <Text accessibilityRole="header" numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 20, color: brand.onHero, letterSpacing: -0.4 }}>
+              Grades
             </Text>
-            {isPremium ? (
-              <View style={{ backgroundColor: tints.attendance.solid, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                <Text style={{ fontSize: 9.5, fontFamily: 'Nunito_800ExtraBold', color: '#fff', letterSpacing: 0.3 }}>PRO</Text>
-              </View>
-            ) : (
-              <TouchableOpacity
-                onPress={() => setShowPaywall(true)}
-                accessibilityRole="button"
-                accessibilityLabel="Upgrade to FinScholar Pro"
-                style={{ backgroundColor: theme.primary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', gap: 3 }}
-              >
-                <Ionicons name="diamond" size={9} color="#fff" />
-                <Text style={{ fontSize: 9.5, fontFamily: 'Nunito_800ExtraBold', color: '#fff' }}>GET PRO</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          <View style={{ paddingLeft: 41, marginTop: 1 }}>
             <Tabs
-              compact
               years={data.years}
               activeYearId={activeYearId}
               activeSemId={activeSemId}
               onSelectYear={() => { setActiveSubId(null); setIsEditing(false); setSelectedSubjects(new Set()); }}
               onSelectSem={() => { setActiveSubId(null); setIsEditing(false); setSelectedSubjects(new Set()); }}
+              renderTrigger={(open, label) => (
+                <TouchableOpacity
+                  onPress={open}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Active term: ${label}. Tap to switch term.`}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 10 }}
+                  style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', paddingVertical: 2, paddingRight: 4 }}
+                >
+                  <Text numberOfLines={1} style={{ maxWidth: 190, fontFamily: 'Nunito_700Bold', fontSize: 12, color: brand.onHeroMuted }}>
+                    {label}
+                  </Text>
+                  <Ionicons name="chevron-down" size={12} color={brand.onHeroMuted} style={{ marginLeft: 3 }} />
+                </TouchableOpacity>
+              )}
             />
           </View>
-        </View>
 
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {isPremium ? (
+            <View style={{ paddingHorizontal: 8, height: 24, borderRadius: 999, justifyContent: 'center', backgroundColor: brand.well, borderWidth: 1, borderColor: brand.wellLine }}>
+              <Text style={{ fontSize: 9.5, fontFamily: 'Nunito_800ExtraBold', color: brand.onHero, letterSpacing: 0.4 }}>PRO</Text>
+            </View>
+          ) : (
+            <TouchableOpacity
+              onPress={() => setShowPaywall(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Upgrade to FinScholar Pro"
+              style={{ backgroundColor: '#ffffff', paddingHorizontal: 10, height: 27, borderRadius: Radius.full, flexDirection: 'row', alignItems: 'center', gap: 3.5 }}
+            >
+              <Ionicons name="diamond" size={9} color={brand.heroTo} />
+              <Text style={{ fontSize: 9.5, fontFamily: 'Nunito_800ExtraBold', color: brand.heroTo }}>GET PRO</Text>
+            </TouchableOpacity>
+          )}
+
           <View
             accessible
             accessibilityLabel={syncStatus === 'syncing' ? 'Syncing' : syncStatus === 'saved' ? 'Synced' : 'Offline'}
             style={{ width: 22, alignItems: 'center' }}
           >
-            {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={19} color={theme.textTertiary} />}
-            {syncStatus === 'saved' && <Ionicons name="cloud-done" size={19} color={tints.attendance.solid} />}
-            {(syncStatus === 'offline' || syncStatus === 'error') && <Ionicons name="cloud-offline" size={19} color={theme.textTertiary} />}
+            {syncStatus === 'syncing' && <Ionicons name="cloud-upload" size={18} color={brand.onHeroMuted} />}
+            {syncStatus === 'saved' && <Ionicons name="cloud-done" size={18} color={brand.onHero} />}
+            {(syncStatus === 'offline' || syncStatus === 'error') && <Ionicons name="cloud-offline" size={18} color={brand.onHeroMuted} />}
           </View>
 
           <TouchableOpacity
@@ -452,13 +466,11 @@ export default function GradeLedgerTab() {
             accessibilityRole="button"
             accessibilityLabel="Settings"
             style={{
-              width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
-              backgroundColor: theme.surface,
-              borderWidth: 1, borderColor: theme.cardBorder,
-              borderBottomWidth: 2, borderBottomColor: theme.lip,
+              width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center',
+              backgroundColor: brand.well, borderWidth: 1, borderColor: brand.wellLine,
             }}
           >
-            <Ionicons name="settings-outline" size={18} color={theme.textSecondary} />
+            <Ionicons name="settings-outline" size={18} color={brand.onHero} />
           </TouchableOpacity>
         </View>
       </View>
@@ -466,23 +478,45 @@ export default function GradeLedgerTab() {
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}
-        removeClippedSubviews={true}
         showsVerticalScrollIndicator={false}
       >
-        <View style={{ width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: GUTTER, paddingTop: 2 }}>
+        {/* ══ Standing, in the band ══════════════════════════════════════ */}
+        <BandSurface isDark={isDark} motif="bars" slant={BAND_SLANT} style={{ paddingBottom: BAND_SLANT + 18 }}>
+          <View style={{ width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: GUTTER + 4, paddingTop: 6 }}>
+            {currentSem ? (
+              <GwaHero
+                isDark={isDark}
+                system={system}
+                systemLabel={systemLabel}
+                sem={{
+                  value: system === 'PERCENT' ? semPercent : semEq,
+                  percent: semPercent,
+                  hasData: Boolean(semEq || semPercent),
+                  caption: `${trackedSubjects.length} of ${allSubjects.length} subject${allSubjects.length !== 1 ? 's' : ''} counted · ${unitsCounted} unit${unitsCounted !== 1 ? 's' : ''}`,
+                }}
+                year={{
+                  value: system === 'PERCENT' ? yearPercent : yearEq,
+                  percent: yearPercent,
+                  hasData: Boolean(yearEq || yearPercent),
+                  caption: `${currentYear?.name || 'This year'} · ${yearTerms} term${yearTerms !== 1 ? 's' : ''}`,
+                }}
+                cum={{
+                  value: system === 'PERCENT' ? cumPercent : cumEq,
+                  percent: cumPercent,
+                  hasData: Boolean(cumEq || cumPercent),
+                  caption: `Every term so far · ${allTerms} term${allTerms !== 1 ? 's' : ''}`,
+                }}
+                onOpenSettings={() => setShowSettings(true)}
+              />
+            ) : (
+              <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, lineHeight: 20, color: brand.onHeroMuted, maxWidth: 300 }}>
+                Every score you log rolls up into your subject grades, your semester GWA and your standing overall.
+              </Text>
+            )}
+          </View>
+        </BandSurface>
 
-          {/* ══ Standing: semester leads, year and overall follow ═══════════ */}
-          <GwaSummary
-            semGwa={system === 'PERCENT' ? semPercent : semEq}
-            yearGwa={system === 'PERCENT' ? yearPercent : yearEq}
-            cumGwa={system === 'PERCENT' ? cumPercent : cumEq}
-            semPercent={semPercent}
-            yearPercent={yearPercent}
-            cumPercent={cumPercent}
-            system={system}
-            systemLabel={systemLabel}
-            onOpenSettings={() => setShowSettings(true)}
-          />
+        <View style={{ width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: GUTTER, paddingTop: 10 }}>
 
           {!currentSem ? (
             /* ══ No term, or none picked ═════════════════════════════════ */

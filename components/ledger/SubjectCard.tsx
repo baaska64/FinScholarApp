@@ -4,9 +4,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { Calculator } from '../../utils/calculator';
 import { useColorScheme } from 'nativewind';
 import Card from '@/components/ui/Card';
-import ProgressBar from '@/components/ui/ProgressBar';
 import { getTheme, getTints, Radius } from '@/constants/Theme';
-import { getGradeTierColor } from '@/utils/gradeTiers';
+import { getGradeTierColor, getGradeTierWash } from '@/utils/gradeTiers';
+import { countScores } from '@/utils/gradeEntry';
 
 export interface SubjectCardProps {
     subject: any;
@@ -28,13 +28,12 @@ export interface SubjectCardProps {
 }
 
 /**
- * One subject, in one glance: name, grade, how far through it you are.
+ * One subject as a report-card line: the grade in a tier-tinted tile, then the
+ * name, how many scores are in, and where the percentage sits against the
+ * subject's own passing mark.
  *
- * The previous card stacked five bands (paused banner, name + three buttons,
- * three status chips, two stat boxes, progress bar, footer note) into ~200pt,
- * printed the grade twice, and fit two subjects on a phone screen. This one is
- * ~96pt and fits five, with everything that was dropped from the surface
- * reachable from the overflow menu.
+ * The tile is the difference from every other list in the app — the dashboard
+ * and study rows lead with an icon or a time; a grade leads with the grade.
  */
 export default function SubjectCard({
     subject,
@@ -63,147 +62,129 @@ export default function SubjectCard({
     const res = Calculator.calculateSubject(subject, system);
     const rawPercent = isNaN(res.percent) ? 0 : res.percent;
     const p = Math.max(0, Math.min(100, rawPercent));
+    const showGrade = isTracked && res.hasData;
+    const passPct = Math.max(0, Math.min(100, Number(subject?.passingPercent) || 60));
 
-    const tierColor = getGradeTierColor(p, isDark, isTracked && res.hasData);
-    const railColor = isTracked ? tierColor : (isDark ? '#3d4468' : '#cbd5e1');
+    const tierColor = getGradeTierColor(p, isDark, showGrade);
+    const wash = getGradeTierWash(p, isDark, showGrade);
 
-    const displayVal = system === 'PERCENT' ? `${p.toFixed(1)}%` : res.equivalent.toFixed(2);
-    const periodsCount = subject?.periods ? subject.periods.length : 0;
+    const displayVal = system === 'PERCENT' ? `${Math.round(p)}%` : res.equivalent.toFixed(2);
     const units = Number(subject?.units) || 0;
 
-    const loadLabel = units > 0
-        ? `${units} unit${units !== 1 ? 's' : ''}`
-        : `${periodsCount} period${periodsCount !== 1 ? 's' : ''}`;
+    let filled = 0, total = 0;
+    for (const per of subject?.periods || []) for (const c of per?.components || []) for (const it of c?.items || []) {
+        const n = countScores(it);
+        filled += n.filled;
+        total += n.total;
+    }
+    const scoresLabel = total === 0 ? 'No grading setup' : `${filled} of ${total} score${total !== 1 ? 's' : ''} in`;
 
     const accessibilityLabel = [
         subject?.name,
         isTracked
             ? (res.hasData ? `grade ${displayVal}, score ${p.toFixed(1)} percent` : 'no scores yet')
             : 'paused, excluded from GWA',
-        loadLabel,
+        units > 0 ? `${units} units` : null,
+        scoresLabel,
         hasSchedule ? 'scheduled' : 'no class times yet',
-    ].join(', ');
+    ].filter(Boolean).join(', ');
 
     return (
         <Card
             padding={0}
-            radius={Radius.lg}
+            radius={Radius.xl}
             onPress={handleCardPress}
             accessibilityLabel={accessibilityLabel}
             accessibilityHint={effectiveEditMode ? 'Toggles selection' : 'Opens this subject'}
             style={{
                 marginBottom: 10,
-                overflow: 'hidden',
                 borderColor: isSelected ? theme.primary : theme.cardBorder,
             }}
         >
-            <View style={{ flexDirection: 'row', alignItems: 'center', padding: 12 }}>
-                {/* Selection box in edit mode, otherwise the grade-tier rail. */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', padding: 11, gap: 12 }}>
+                {/* ── The grade, as a tile ─────────────────────────────── */}
+                <View
+                    style={{
+                        width: 60, height: 60, borderRadius: 16,
+                        alignItems: 'center', justifyContent: 'center',
+                        backgroundColor: isTracked ? wash.fill : theme.surfaceSecondary,
+                        borderWidth: 1, borderColor: isTracked ? wash.line : theme.cardBorder,
+                    }}
+                >
+                    {isTracked ? (
+                        <Text
+                            numberOfLines={1}
+                            adjustsFontSizeToFit
+                            style={{ fontFamily: 'Nunito_900Black', fontSize: 18, letterSpacing: -0.6, color: showGrade ? tierColor : theme.textTertiary, maxWidth: 52 }}
+                        >
+                            {showGrade ? displayVal : '—'}
+                        </Text>
+                    ) : (
+                        <Ionicons name="pause" size={18} color={tints.tasks.ink} />
+                    )}
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 8.5, letterSpacing: 0.6, color: isTracked ? (showGrade ? tierColor : theme.textTertiary) : tints.tasks.ink, marginTop: 1 }}>
+                        {!isTracked ? 'PAUSED' : showGrade ? (system === 'PERCENT' ? 'SCORE' : 'GRADE') : 'NO DATA'}
+                    </Text>
+                </View>
+
+                {/* ── Name, meta, and the percentage against the pass mark ── */}
+                <View style={{ flex: 1 }}>
+                    <Text
+                        numberOfLines={1}
+                        style={{ fontFamily: 'Nunito_900Black', fontSize: 15, letterSpacing: -0.3, color: isTracked ? theme.text : theme.textTertiary }}
+                    >
+                        {subject?.name}
+                    </Text>
+
+                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary, marginTop: 2 }}>
+                        {units > 0 ? `${units} unit${units !== 1 ? 's' : ''} · ` : ''}
+                        {isTracked ? scoresLabel : 'Not counted in GWA'}
+                        {!hasSchedule && <Text style={{ fontFamily: 'Nunito_700Bold', color: tints.tasks.ink }}> · No class times</Text>}
+                    </Text>
+
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 8 }}>
+                        <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: theme.surfaceSecondary }}>
+                            {showGrade && <View style={{ width: `${p}%`, height: '100%', borderRadius: 3, backgroundColor: tierColor }} />}
+                            {isTracked && (
+                                <View style={{ position: 'absolute', left: `${passPct}%`, top: -2, bottom: -2, width: 2, marginLeft: -1, borderRadius: 1, backgroundColor: theme.textTertiary, opacity: 0.7 }} />
+                            )}
+                        </View>
+                        <Text style={{ minWidth: 38, textAlign: 'right', fontFamily: 'Nunito_800ExtraBold', fontSize: 11, color: showGrade ? theme.textSecondary : theme.textTertiary }}>
+                            {showGrade ? `${p.toFixed(1)}%` : '—'}
+                        </Text>
+                    </View>
+                </View>
+
+                {/* ── Selection, or the overflow that holds every action ── */}
                 {effectiveEditMode ? (
                     <TouchableOpacity
                         onPress={handleSelectToggle}
                         activeOpacity={0.7}
                         accessibilityRole="checkbox"
                         accessibilityState={{ checked: Boolean(isSelected) }}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 6 }}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                         style={{
-                            width: 22, height: 22, borderRadius: 7, marginRight: 11,
+                            width: 24, height: 24, borderRadius: 8,
                             alignItems: 'center', justifyContent: 'center',
                             borderWidth: 2,
                             borderColor: isSelected ? theme.primary : (isDark ? '#464d75' : '#cbd5e1'),
                             backgroundColor: isSelected ? theme.primary : 'transparent',
                         }}
                     >
-                        {isSelected && <Ionicons name="checkmark" size={14} color="#ffffff" />}
+                        {isSelected && <Ionicons name="checkmark" size={15} color="#ffffff" />}
                     </TouchableOpacity>
-                ) : (
-                    <View style={{ width: 4, alignSelf: 'stretch', minHeight: 46, borderRadius: 2, backgroundColor: railColor, marginRight: 11 }} />
-                )}
-
-                <View style={{ flex: 1 }}>
-                    {/* Name + the grade in the student's own system */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Text
-                            numberOfLines={1}
-                            style={{
-                                flex: 1,
-                                fontFamily: 'Nunito_900Black',
-                                fontSize: 15.5,
-                                letterSpacing: -0.3,
-                                marginRight: 8,
-                                color: isTracked ? theme.text : theme.textTertiary,
-                            }}
-                        >
-                            {subject?.name}
-                        </Text>
-
-                        {!isTracked && (
-                            <View style={{
-                                flexDirection: 'row', alignItems: 'center',
-                                paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6,
-                                backgroundColor: tints.tasks.fill,
-                                borderWidth: 1, borderColor: tints.tasks.line,
-                            }}>
-                                <Ionicons name="pause" size={9} color={tints.tasks.ink} style={{ marginRight: 3 }} />
-                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 9.5, color: tints.tasks.ink, letterSpacing: 0.2 }}>
-                                    PAUSED
-                                </Text>
-                            </View>
-                        )}
-
-                        {isTracked && (
-                            <Text
-                                numberOfLines={1}
-                                style={{ fontFamily: 'Nunito_900Black', fontSize: 17, letterSpacing: -0.5, color: res.hasData ? tierColor : theme.textTertiary }}
-                            >
-                                {res.hasData ? displayVal : '—'}
-                            </Text>
-                        )}
-                    </View>
-
-                    {/* One quiet meta line instead of three chip pills */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
-                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, flexShrink: 1 }}>
-                            {loadLabel}
-                            {isTracked && res.hasData ? ` · ${p.toFixed(1)}% earned` : ''}
-                            {!isTracked ? ' · Excluded from GWA' : ''}
-                            {' · '}
-                        </Text>
-                        <Text
-                            numberOfLines={1}
-                            style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: hasSchedule ? theme.textTertiary : tints.tasks.ink }}
-                        >
-                            {hasSchedule ? 'Scheduled' : 'No class times'}
-                        </Text>
-                    </View>
-
-                    <ProgressBar
-                        progress={isTracked ? p / 100 : 1}
-                        height={5}
-                        color={isTracked ? tierColor : (isDark ? 'rgba(255,255,255,0.06)' : '#e2e8f0')}
-                        animate={false}
-                        style={{ marginTop: 9 }}
-                        accessibilityLabel={`${subject?.name} score`}
-                    />
-                </View>
-
-                {/* Every action the card used to wear on its sleeve now lives here. */}
-                {!effectiveEditMode && onOpenMenu && (
+                ) : onOpenMenu ? (
                     <TouchableOpacity
                         onPress={onOpenMenu}
                         activeOpacity={0.7}
                         accessibilityRole="button"
                         accessibilityLabel={`More options for ${subject?.name}`}
                         hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
-                        style={{
-                            width: 30, height: 30, borderRadius: 10, marginLeft: 8,
-                            alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: theme.surfaceSecondary,
-                        }}
+                        style={{ width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center' }}
                     >
-                        <Ionicons name="ellipsis-horizontal" size={16} color={theme.textSecondary} />
+                        <Ionicons name="ellipsis-vertical" size={16} color={theme.textTertiary} />
                     </TouchableOpacity>
-                )}
+                ) : null}
             </View>
         </Card>
     );

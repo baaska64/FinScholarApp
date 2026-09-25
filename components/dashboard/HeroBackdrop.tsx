@@ -14,10 +14,16 @@ interface HeroBackdropProps {
     curve?: number;
     /**
      * What floats in the glow. The dashboard gets Fin's bubbles; the study tab
-     * gets a fanned stack of cards, so the two bands share a colour without
-     * being the same picture.
+     * gets a fanned stack of cards and the grades tab a rising bar chart, so the
+     * bands share a colour without being the same picture.
      */
-    motif?: 'bubbles' | 'cards';
+    motif?: 'bubbles' | 'cards' | 'bars';
+    /**
+     * Rise of a straight, slanted bottom edge from left to right, in dp. Used
+     * instead of `curve` by the grades tab, so each tab's band ends in its own
+     * shape: dome (dashboard), flat (study), slant (grades).
+     */
+    slant?: number;
     isDark: boolean;
 }
 
@@ -32,7 +38,7 @@ interface HeroBackdropProps {
  * Purely decorative: it takes no children and reports nothing to accessibility.
  * Content is positioned over it by the caller.
  */
-export default function HeroBackdrop({ width, height, curve = 22, motif = 'bubbles', isDark }: HeroBackdropProps) {
+export default function HeroBackdrop({ width, height, curve = 22, motif = 'bubbles', slant = 0, isDark }: HeroBackdropProps) {
     const brand = getBrand(isDark);
     const w = Math.max(1, width);
     const h = Math.max(1, height);
@@ -41,7 +47,10 @@ export default function HeroBackdrop({ width, height, curve = 22, motif = 'bubbl
 
     // A quadratic with its control point at (w/2, h + sag) passes through
     // exactly (w/2, h), so `sag` is the depth of the dome, not a control offset.
-    const path = `M0,0 H${w} V${edge} Q${w / 2},${h + sag} 0,${edge} Z`;
+    const rise = Math.max(0, Math.min(slant, h - 1));
+    const path = rise > 0
+        ? `M0,0 H${w} V${h - rise} L0,${h} Z`
+        : `M0,0 H${w} V${edge} Q${w / 2},${h + sag} 0,${edge} Z`;
 
     return (
         <Svg
@@ -85,7 +94,28 @@ export default function HeroBackdrop({ width, height, curve = 22, motif = 'bubbl
             <Path d={path} fill="url(#heroFill)" />
             <Path d={path} fill="url(#heroGlow)" />
 
-            {motif === 'cards' ? (
+            {motif === 'bars' ? (
+                // Four rising bars, bottoms aligned at 0.64h so none reaches the
+                // slanted edge or the flat strip under the app bar.
+                [0.16, 0.24, 0.32, 0.42].map((frac, i) => {
+                    const bw = 16;
+                    const gap = 9;
+                    const base = h * 0.64;
+                    const bh = Math.min(h * frac, h * 0.44);
+                    return (
+                        <Rect
+                            key={i}
+                            x={w * 0.62 + i * (bw + gap)}
+                            y={base - bh}
+                            width={bw}
+                            height={bh}
+                            rx={5}
+                            fill="#ffffff"
+                            opacity={0.045 + i * 0.012}
+                        />
+                    );
+                })
+            ) : motif === 'cards' ? (
                 // Three cards fanned from a common pivot, kept inside the same
                 // 0.2h-0.65h window as the bubbles for the same reasons.
                 [-16, -4, 8].map((deg, i) => {

@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { getGradeTier, getGradeTierColor, getGradeTierLabel } from '../utils/gradeTiers.ts';
+import { getGradeTier, getGradeTierColor, getGradeTierLabel, getGradeTierWash } from '../utils/gradeTiers.ts';
 
 export function runGradeTierTests(describe, test) {
   describe('Grade Tiers Suite 1: Band boundaries', () => {
@@ -65,6 +65,14 @@ export function runGradeTierTests(describe, test) {
       assert.strictEqual(getGradeTierLabel(62), 'Passing');
       assert.strictEqual(getGradeTierLabel(40), 'Needs work');
       assert.strictEqual(getGradeTierLabel(0), 'No grades yet');
+    });
+
+    test('GT3.2 The tier wash is the tier colour at low alpha, stronger on its line', () => {
+      // #16a34a is the light Outstanding green.
+      const w = getGradeTierWash(95, false);
+      assert.strictEqual(w.fill, 'rgba(22,163,74,0.1)');
+      assert.strictEqual(w.line, 'rgba(22,163,74,0.26)');
+      assert.match(getGradeTierWash(0, true).fill, /^rgba\(\d+,\d+,\d+,0\.16\)$/);
     });
   });
 }

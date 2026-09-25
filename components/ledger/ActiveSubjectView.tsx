@@ -1,124 +1,206 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Image, LayoutAnimation, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Image, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Calculator } from '../../utils/calculator';
 import { useColorScheme } from 'nativewind';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import { Calculator } from '../../utils/calculator';
 import { supabase } from '../../services/supabaseClient';
 import { AlertService } from '@/components/CustomAlert';
 import Card from '@/components/ui/Card';
 import AnimatedPressable from '@/components/ui/AnimatedPressable';
-import { getTheme, getTints, Radius } from '@/constants/Theme';
-import { getGradeTierColor } from '@/utils/gradeTiers';
+import KeyboardSheet from '@/components/ui/KeyboardSheet';
+import SectionHeader from '@/components/ui/SectionHeader';
+import BandSurface from '@/components/dashboard/BandSurface';
+import GradeScale, { ScaleMark } from '@/components/ledger/GradeScale';
+import ScoreSheet from '@/components/ledger/ScoreSheet';
+import GroupSheet from '@/components/ledger/GroupSheet';
+import SubjectSheet, { SubjectDraft } from '@/components/ledger/SubjectSheet';
+import { getTheme, getTints, getBrand, Radius } from '@/constants/Theme';
+import { getGradeTierColor, getGradeTierLabel, getGradeTierWash } from '@/utils/gradeTiers';
 import { useTabBarHeight } from '@/components/CustomTabBar';
-
-// Removed LayoutAnimation config as it causes warnings in the New Architecture
-
-const generateId = () => Math.random().toString(36).substr(2, 9);
+import {
+    generateId,
+    weightSummary,
+    effectiveWeight,
+    formatWeight,
+    formatGrade,
+    getItemAt,
+    siblingsAt,
+    updateItemAt,
+    removeItemAt,
+    addItem,
+    addPeriod,
+    updatePeriod,
+    removePeriod,
+    addComponent,
+    updateComponent,
+    removeComponent,
+    suggestItemName,
+    scorePercent,
+    countScores,
+    subjectOutlook,
+    MAX_ITEM_DEPTH,
+    ItemPath,
+    ItemDraft,
+    NodeDraft,
+    OutlookKind,
+} from '@/utils/gradeEntry';
 
 const GUTTER = 14;
+const BAND_SLANT = 22;
 
-const getWeightWarning = (explicitSum: number, blankCount: number, arrValues: any[]) => {
-    let msgs = [];
-    if (blankCount === 0 && Math.abs(explicitSum - 100) > 0.1) msgs.push(`Total ${explicitSum}% (should be 100%)`);
-    if (explicitSum > 100) msgs.push(`Exceeds 100%`);
-    if (arrValues.some(w => w !== '' && w !== null && w !== undefined && Number(w) === 0)) msgs.push(`A weight is 0%`);
-    return msgs.length ? msgs.join(' | ') : null;
+type ScoreTarget =
+    | { mode: 'create'; period: number; component: number; parentItems: number[] | null }
+    | { mode: 'edit'; path: ItemPath };
+
+type GroupTarget =
+    | { kind: 'period'; mode: 'create' }
+    | { kind: 'period'; mode: 'edit'; period: number }
+    | { kind: 'component'; mode: 'create'; period: number }
+    | { kind: 'component'; mode: 'edit'; period: number; component: number };
+
+/** Weight totals that do not add to 100 are a data problem, not a style. */
+function WeightWarning({ tints, text }: { tints: any; text: string }) {
+    return (
+        <View style={{
+            flexDirection: 'row', alignItems: 'center',
+            paddingHorizontal: 11, paddingVertical: 8, borderRadius: Radius.md, marginBottom: 12,
+            backgroundColor: tints.danger.fill, borderWidth: 1, borderColor: tints.danger.line,
+        }}>
+            <Ionicons name="warning" size={13} color={tints.danger.ink} style={{ marginRight: 7 }} />
+            <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: tints.danger.ink }}>{text}</Text>
+        </View>
+    );
+}
+
+/**
+ * One score row, and its parts beneath it. Read-only on purpose: tapping opens
+ * the score sheet. Module scope so a re-render never remounts the rows.
+ */
+function ItemRow({
+    item, depth, index, siblings, path, theme, tints, isDark, collapsed, onToggle, onOpen, isLast,
+}: {
+    item: any; depth: number; index: number; siblings: any[]; path: ItemPath; theme: any; tints: any; isDark: boolean;
+    collapsed: Record<string, boolean>; onToggle: (id: string) => void; onOpen: (path: ItemPath) => void; isLast: boolean;
+}) {
+    const parts: any[] = item.subItems || [];
+    const hasParts = parts.length > 0;
+    const isOpen = hasParts && !collapsed[item.id];
+    const ws = weightSummary(siblings.map((s: any) => s.weight));
+    const typedWeight = item.weight !== '' && item.weight !== null && item.weight !== undefined;
+
+    const ip = Calculator.computeItemPercent(item);
+    const pct = hasParts ? (ip.isEmpty ? null : ip.percent * 100) : scorePercent(item.score, item.max);
+    const color = pct === null ? theme.textTertiary : getGradeTierColor(pct, isDark, true);
+    const name = item.name || (depth === 0 ? `Item ${index + 1}` : `Part ${index + 1}`);
+    const counts = countScores(item);
+
+    return (
+        <View>
+            <TouchableOpacity
+                onPress={() => onOpen(path)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`${name}. ${pct === null ? 'Not graded yet' : `${pct.toFixed(1)} percent`}. Weight ${formatWeight(effectiveWeight(item.weight, ws))} percent. Opens editor.`}
+                style={{
+                    flexDirection: 'row', alignItems: 'center', minHeight: 46,
+                    paddingLeft: 14 + depth * 16, paddingRight: 12, paddingVertical: 8,
+                    borderTopWidth: 1, borderTopColor: theme.cardBorder,
+                }}
+            >
+                {depth > 0 && (
+                    <View style={{ position: 'absolute', left: 14 + (depth - 1) * 16 + 4, top: 0, bottom: isLast ? '50%' : 0, width: 2, backgroundColor: theme.cardBorder }} />
+                )}
+
+                {hasParts ? (
+                    <TouchableOpacity
+                        onPress={() => onToggle(item.id)}
+                        accessibilityRole="button"
+                        accessibilityLabel={isOpen ? 'Hide parts' : 'Show parts'}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 6 }}
+                        style={{ width: 18, marginRight: 8, alignItems: 'center' }}
+                    >
+                        <Ionicons name={isOpen ? 'chevron-down' : 'chevron-forward'} size={14} color={theme.textTertiary} />
+                    </TouchableOpacity>
+                ) : (
+                    <View style={{
+                        width: 10, height: 10, borderRadius: 5, marginLeft: 4, marginRight: 12,
+                        backgroundColor: pct === null ? 'transparent' : color,
+                        borderWidth: pct === null ? 2 : 0, borderColor: theme.textTertiary,
+                    }} />
+                )}
+
+                <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text numberOfLines={1} style={{ fontFamily: depth === 0 ? 'Nunito_700Bold' : 'Nunito_600SemiBold', fontSize: depth === 0 ? 13.5 : 12.5, color: theme.text }}>
+                        {name}
+                    </Text>
+                    {(hasParts || typedWeight) && (
+                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11, color: theme.textTertiary, marginTop: 1 }}>
+                            {hasParts ? `${parts.length} parts · ${counts.filled} of ${counts.total} in` : ''}
+                            {hasParts && typedWeight ? ' · ' : ''}
+                            {typedWeight ? `weight ${formatWeight(Number(item.weight) || 0)}%` : ''}
+                        </Text>
+                    )}
+                </View>
+
+                {!hasParts && (
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: pct === null ? theme.textTertiary : theme.text, marginRight: 10 }}>
+                        {pct === null ? '—' : `${item.score}`}
+                        <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textTertiary }}> / {item.max ?? 100}</Text>
+                    </Text>
+                )}
+                <Text style={{ minWidth: 48, textAlign: 'right', fontFamily: 'Nunito_900Black', fontSize: 13, color }}>
+                    {pct === null ? '' : `${pct.toFixed(pct >= 99.95 ? 0 : 1)}%`}
+                </Text>
+            </TouchableOpacity>
+
+            {isOpen && parts.map((si: any, i: number) => (
+                <ItemRow
+                    key={si.id || i}
+                    item={si}
+                    depth={depth + 1}
+                    index={i}
+                    siblings={parts}
+                    path={{ ...path, items: [...path.items, i] }}
+                    theme={theme}
+                    tints={tints}
+                    isDark={isDark}
+                    collapsed={collapsed}
+                    onToggle={onToggle}
+                    onOpen={onOpen}
+                    isLast={i === parts.length - 1}
+                />
+            ))}
+        </View>
+    );
+}
+
+const OUTLOOK_STYLE: Record<OutlookKind, { tint: 'attendance' | 'schedule' | 'tasks' | 'danger'; icon: keyof typeof Ionicons.glyphMap; title: string }> = {
+    reached: { tint: 'attendance', icon: 'checkmark-circle', title: 'Target reached' },
+    'on-course': { tint: 'schedule', icon: 'locate', title: 'Within reach' },
+    'pass-only': { tint: 'tasks', icon: 'alert-circle', title: 'Target out of reach' },
+    'passed-only': { tint: 'tasks', icon: 'ribbon-outline', title: 'Passed' },
+    lost: { tint: 'danger', icon: 'close-circle', title: 'Cannot pass' },
+    'no-room': { tint: 'tasks', icon: 'flag-outline', title: 'All scores in' },
 };
 
 /**
- * The inline "WT __ %" control used at every level of the tree.
+ * One subject: where it stands, what it still needs, and how it is graded.
  *
- * Hoisted to module scope on purpose: defined inside `ActiveSubjectView` it
- * would be a fresh component type on every render, so React would remount the
- * TextInput — and drop the keyboard — after each keystroke.
- */
-function WeightField({ theme, value, placeholder, onChange, compact }: {
-    theme: any; value: any; placeholder: string; onChange: (t: string) => void; compact?: boolean;
-}) {
-    return (
-        <View style={{
-            flexDirection: 'row', alignItems: 'center',
-            paddingHorizontal: 7, height: compact ? 24 : 28, borderRadius: 8,
-            backgroundColor: theme.surfaceSecondary,
-            borderWidth: 1, borderColor: theme.cardBorder,
-        }}>
-            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 9.5, color: theme.textTertiary, marginRight: 3 }}>WT</Text>
-            <TextInput
-                keyboardType="numeric"
-                placeholder={placeholder}
-                placeholderTextColor={theme.textTertiary}
-                value={value?.toString()}
-                onChangeText={onChange}
-                accessibilityLabel="Weight percentage"
-                style={{
-                    fontFamily: 'Nunito_800ExtraBold', color: theme.text, padding: 0, textAlign: 'right',
-                    fontSize: compact ? 11 : 12, minWidth: 26,
-                }}
-            />
-            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 9.5, color: theme.textTertiary, marginLeft: 1 }}>%</Text>
-        </View>
-    );
-}
-
-/** Weight totals that do not add to 100 are a data problem, not a style. */
-function WeightWarning({ tints, text, compact }: { tints: any; text: string; compact?: boolean }) {
-    return (
-        <View style={{
-            flexDirection: 'row', alignItems: 'center',
-            paddingHorizontal: 10, paddingVertical: compact ? 5 : 7, borderRadius: Radius.sm,
-            marginBottom: compact ? 8 : 12,
-            backgroundColor: tints.danger.fill,
-            borderWidth: 1, borderColor: tints.danger.line,
-        }}>
-            <Ionicons name="warning" size={compact ? 11 : 13} color={tints.danger.ink} style={{ marginRight: 6 }} />
-            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: compact ? 10.5 : 11.5, color: tints.danger.ink, flex: 1 }}>{text}</Text>
-        </View>
-    );
-}
-
-/** Dashed "add another one of these" row. One recipe at three scales. */
-function AddRow({ theme, isDark, label, onPress, size = 'md' }: {
-    theme: any; isDark: boolean; label: string; onPress: () => void; size?: 'sm' | 'md' | 'lg';
-}) {
-    return (
-        <TouchableOpacity
-            onPress={onPress}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel={label}
-            style={{
-                flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
-                height: size === 'lg' ? 46 : size === 'md' ? 40 : 32,
-                borderRadius: Radius.md,
-                borderWidth: 1, borderStyle: 'dashed',
-                borderColor: isDark ? '#3d4468' : '#cbd5e1',
-            }}
-        >
-            <Ionicons name="add" size={size === 'sm' ? 13 : 15} color={theme.textSecondary} />
-            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: size === 'sm' ? 11.5 : 13, color: theme.textSecondary }}>
-                {label}
-            </Text>
-        </TouchableOpacity>
-    );
-}
-
-/**
- * One subject, in full: its standing, what it still needs, and the period /
- * component / item tree that produces the number.
- *
- * Two things about the old layout are deliberately reversed here. The Back
- * button used to live inside the scroll, so it disappeared the moment a student
- * started entering scores — it is now a fixed header. And the Target Goal panel
- * sat *below* every period, which put the one question a student actually opens
- * this screen to answer ("what do I still need?") at the very bottom of a long
- * page; it now sits directly under the standing card.
+ * The standing sits on the brand band under a pinned header, so Back never
+ * scrolls away mid-entry. Periods are tabs rather than an accordion — a student
+ * is entering Midterm scores, not all four periods at once — and every score
+ * is a read-only row that opens `ScoreSheet`. Nothing on this screen is a live
+ * text field any more: edits are drafts that commit on Save.
  */
 export default function ActiveSubjectView({ subject, system, onChange, onBack }: any) {
     const { colorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
     const theme = getTheme(isDark);
     const tints = getTints(isDark);
+    const brand = getBrand(isDark);
+    const insets = useSafeAreaInsets();
     const tabBarHeight = useTabBarHeight();
 
     const [finOpen, setFinOpen] = useState(false);
@@ -127,98 +209,52 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
     const [autoConfigImage, setAutoConfigImage] = useState<string | null>(null);
     const [autoConfigBase64, setAutoConfigBase64] = useState<string | null>(null);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [expandedPeriods, setExpandedPeriods] = useState<Record<string, boolean>>({});
-    const [expandedComponents, setExpandedComponents] = useState<Record<string, boolean>>({});
 
-    const togglePeriod = (id: string) => {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setExpandedPeriods(prev => ({...prev, [id]: !prev[id]}));
-    };
+    const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
+    const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+    const [scoreTarget, setScoreTarget] = useState<ScoreTarget | null>(null);
+    const [scoreResetKey, setScoreResetKey] = useState(0);
+    const [groupTarget, setGroupTarget] = useState<GroupTarget | null>(null);
+    const [subjectSheetOpen, setSubjectSheetOpen] = useState(false);
+    const [showAllRemaining, setShowAllRemaining] = useState(false);
 
-    const toggleComponent = (id: string) => {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setExpandedComponents(prev => ({...prev, [id]: !prev[id]}));
-    };
-
-    const updateSubject = (updater: (s: any) => void) => {
-        const newSubject = JSON.parse(JSON.stringify(subject));
-        updater(newSubject);
-        onChange(newSubject);
-    };
+    const periods: any[] = subject.periods || [];
+    const foundIdx = periods.findIndex((p) => p.id === selectedPeriodId);
+    const selIdx = periods.length === 0 ? -1 : foundIdx === -1 ? 0 : foundIdx;
+    const selPeriod = selIdx >= 0 ? periods[selIdx] : null;
 
     const res = Calculator.calculateSubject(subject, system);
     const passPct = Number(subject.passingPercent) || 60;
-    const barW = res.hasData ? Math.max(0, Math.min(100, res.percent)) : 0;
-    const tierColor = getGradeTierColor(res.percent, isDark, res.hasData);
+    const outlook = subjectOutlook(subject, system);
+    const isTracked = subject.gradeTrackingEnabled !== false;
 
-    let pExplicit = 0, pBlank = 0;
-    subject.periods.forEach((p: any) => { if (p.weight !== '' && p.weight !== null && p.weight !== undefined) pExplicit += Number(p.weight) || 0; else pBlank++; });
-    const pAutoW = pBlank > 0 ? (Math.max(0, 100 - pExplicit) / pBlank) : 0;
-    const pWarning = getWeightWarning(pExplicit, pBlank, subject.periods.map((p:any) => p.weight));
-
-    // Target GPA Logic
-    const targetValue = subject.targetValue || passPct;
-    const targetPercent = Number(targetValue); // Simplifying to percent for now
-    const needed = targetPercent - res.absoluteEarned;
-    const remainingWeight = res.absoluteAvailable;
-
-    let targetMsg = "";
-    let targetIcon = "";
-    let targetTint = tints.schedule;
-    let distributionHtml: any = null;
-
-    if (needed <= 0) {
-        targetMsg = "You have reached your desired grade!";
-        targetIcon = "checkmark-circle";
-        targetTint = tints.attendance;
-    } else if (remainingWeight <= 0 && needed > 0) {
-        targetMsg = "All components are filled. Target cannot be reached.";
-        targetIcon = "warning";
-        targetTint = tints.danger;
-    } else if (needed > remainingWeight) {
-        const passNeeded = passPct - res.absoluteEarned;
-        if (passNeeded <= 0) {
-            targetMsg = "Target is impossible, but you've already passed!";
-            targetIcon = "alert-circle";
-            targetTint = tints.tasks;
-        } else if (passNeeded > remainingWeight) {
-            targetMsg = "Target is impossible, and you cannot pass anymore.";
-            targetIcon = "close-circle";
-            targetTint = tints.danger;
-        } else {
-            targetMsg = "Target is impossible, but you can still pass!";
-            targetIcon = "warning";
-            targetTint = tints.tasks;
-            const reqPct = passNeeded / remainingWeight;
-            distributionHtml = { emptyComps: res.emptyComponents, reqPct, label: 'to pass the subject' };
-        }
-    } else {
-        targetMsg = `You need ${needed.toFixed(1)} more points (out of remaining ${remainingWeight.toFixed(1)}%) to reach ${targetPercent.toFixed(1)}%.`;
-        targetIcon = "locate";
-        targetTint = tints.schedule;
-        const reqPct = needed / remainingWeight;
-        distributionHtml = { emptyComps: res.emptyComponents, reqPct, label: 'for your desired grade' };
+    let filled = 0, total = 0;
+    for (const per of periods) for (const c of per?.components || []) for (const it of c?.items || []) {
+        const n = countScores(it);
+        filled += n.filled;
+        total += n.total;
     }
 
+    const pSummary = weightSummary(periods.map((p) => p.weight));
+
+    // ─── AutoConfig ───────────────────────────────────────────────────────────
+
     const pickImage = async () => {
-        let result = await ImagePicker.launchImageLibraryAsync({
+        const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
             allowsEditing: false,
             base64: true,
             quality: 0.8,
         });
-
         if (!result.canceled) {
             setAutoConfigImage(result.assets[0].uri);
-            if (result.assets[0].base64) {
-                setAutoConfigBase64(result.assets[0].base64);
-            }
+            if (result.assets[0].base64) setAutoConfigBase64(result.assets[0].base64);
         }
     };
 
     const handleAutoConfig = async () => {
         if (!syllabusText && !autoConfigImage) {
-            AlertService.alert("Missing Input", "Please provide a text prompt or upload an image of your syllabus.");
+            AlertService.alert('Missing Input', 'Please provide a text prompt or upload an image of your syllabus.');
             return;
         }
 
@@ -226,7 +262,7 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
         try {
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) {
-                AlertService.alert("Authentication Required", "You must be logged in to use the AI AutoConfig feature.");
+                AlertService.alert('Authentication Required', 'You must be logged in to use the AI AutoConfig feature.');
                 setIsProcessing(false);
                 return;
             }
@@ -239,7 +275,7 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
             }
 
             const { data, error: funcError } = await supabase.functions.invoke('parse-syllabus', {
-                body: { textPrompt: syllabusText, base64Data }
+                body: { textPrompt: syllabusText, base64Data },
             });
 
             if (funcError) {
@@ -254,33 +290,206 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
             }
 
             if (Array.isArray(data)) {
-                updateSubject(s => {
-                    // Make sure ids are generated
-                    const addIds = (items: any[]): any[] => items.map(i => ({
-                        ...i, id: generateId(),
-                        components: i.components ? addIds(i.components) : [],
-                        items: i.items ? addIds(i.items) : [],
-                        subItems: i.subItems ? addIds(i.subItems) : []
-                    }));
-                    s.periods = addIds(data);
-                });
-                AlertService.alert("Success", "Grading system successfully configured!");
+                const addIds = (items: any[]): any[] => items.map((i) => ({
+                    ...i, id: generateId(),
+                    components: i.components ? addIds(i.components) : [],
+                    items: i.items ? addIds(i.items) : [],
+                    subItems: i.subItems ? addIds(i.subItems) : [],
+                }));
+                const next = JSON.parse(JSON.stringify(subject));
+                next.periods = addIds(data);
+                onChange(next);
+                setSelectedPeriodId(null);
+                AlertService.alert('Success', 'Grading system successfully configured!');
                 setAutoConfigOpen(false);
                 setSyllabusText('');
                 setAutoConfigImage(null);
                 setAutoConfigBase64(null);
             } else {
-                throw new Error("Invalid response format from AI.");
+                throw new Error('Invalid response format from AI.');
             }
-
         } catch (error: any) {
-            AlertService.alert("AutoConfig Error", error.message || "An unexpected error occurred.");
+            AlertService.alert('AutoConfig Error', error.message || 'An unexpected error occurred.');
         } finally {
             setIsProcessing(false);
         }
     };
 
-    // ─── Shared style atoms ───────────────────────────────────────────────────
+    // ─── Score sheet wiring ───────────────────────────────────────────────────
+
+    const openCreateScore = (period: number, component: number, parentItems: number[] | null = null) => {
+        setScoreTarget({ mode: 'create', period, component, parentItems });
+        setScoreResetKey((k) => k + 1);
+    };
+    const openEditScore = (path: ItemPath) => {
+        setScoreTarget({ mode: 'edit', path });
+        setScoreResetKey((k) => k + 1);
+    };
+
+    let scoreProps: {
+        context: string; initial: ItemDraft; autoWeight: number; weightScope: string; partCount: number; canAddPart: boolean;
+    } | null = null;
+
+    if (scoreTarget) {
+        if (scoreTarget.mode === 'create') {
+            const per = periods[scoreTarget.period];
+            const comp = per?.components?.[scoreTarget.component];
+            const parent = scoreTarget.parentItems
+                ? getItemAt(subject, { period: scoreTarget.period, component: scoreTarget.component, items: scoreTarget.parentItems })
+                : null;
+            const siblings: any[] = parent ? parent.subItems || [] : comp?.items || [];
+            const last = siblings[siblings.length - 1];
+            if (comp) {
+                scoreProps = {
+                    context: parent ? `Part of ${parent.name || 'this score'} · ${comp.name}` : `${comp.name || 'Component'} · ${per.name || 'Period'}`,
+                    initial: {
+                        name: parent ? `Part ${siblings.length + 1}` : suggestItemName(comp.name, siblings.length),
+                        score: '',
+                        max: last?.max ?? 100,
+                        weight: '',
+                    },
+                    autoWeight: weightSummary([...siblings.map((s) => s.weight), '']).auto,
+                    weightScope: parent ? parent.name || 'this score' : comp.name || 'this component',
+                    partCount: 0,
+                    canAddPart: false,
+                };
+            }
+        } else {
+            const node = getItemAt(subject, scoreTarget.path);
+            const comp = periods[scoreTarget.path.period]?.components?.[scoreTarget.path.component];
+            const per = periods[scoreTarget.path.period];
+            if (node && comp) {
+                const siblings = siblingsAt(subject, scoreTarget.path);
+                const parent = scoreTarget.path.items.length > 1
+                    ? getItemAt(subject, { ...scoreTarget.path, items: scoreTarget.path.items.slice(0, -1) })
+                    : null;
+                scoreProps = {
+                    context: parent ? `Part of ${parent.name || 'a score'} · ${comp.name}` : `${comp.name || 'Component'} · ${per.name || 'Period'}`,
+                    initial: { name: node.name ?? '', score: node.score ?? '', max: node.max ?? 100, weight: node.weight ?? '' },
+                    autoWeight: weightSummary(siblings.map((s) => s.weight)).auto,
+                    weightScope: parent ? parent.name || 'its score' : comp.name || 'this component',
+                    partCount: node.subItems?.length || 0,
+                    canAddPart: scoreTarget.path.items.length <= MAX_ITEM_DEPTH,
+                };
+            }
+        }
+    }
+
+    const handleScoreSave = (draft: ItemDraft, next: 'close' | 'another' | 'part') => {
+        if (!scoreTarget) return;
+        if (scoreTarget.mode === 'create') {
+            const out = addItem(subject, scoreTarget.period, scoreTarget.component, draft, scoreTarget.parentItems);
+            if (!out) return;
+            onChange(out.subject);
+            if (next === 'another') setScoreResetKey((k) => k + 1);
+            else setScoreTarget(null);
+            return;
+        }
+
+        const path = scoreTarget.path;
+        let updated = updateItemAt(subject, path, draft);
+        if (next === 'part') {
+            const node = getItemAt(subject, path);
+            // Splitting a plain score keeps what was typed: it becomes Part 1.
+            if (node && !(node.subItems?.length)) {
+                const first = addItem(updated, path.period, path.component, { name: 'Part 1', score: draft.score ?? '', max: draft.max ?? 100 }, path.items);
+                if (first) updated = first.subject;
+            }
+            onChange(updated);
+            if (node?.id) setCollapsed((c) => ({ ...c, [node.id]: false }));
+            setScoreTarget({ mode: 'create', period: path.period, component: path.component, parentItems: path.items });
+            setScoreResetKey((k) => k + 1);
+            return;
+        }
+        onChange(updated);
+        setScoreTarget(null);
+    };
+
+    const handleScoreDelete = () => {
+        if (!scoreTarget || scoreTarget.mode !== 'edit') return;
+        const path = scoreTarget.path;
+        const node = getItemAt(subject, path);
+        const partCount = node?.subItems?.length || 0;
+        AlertService.alert(
+            'Delete score',
+            partCount > 0 ? `Delete "${node?.name || 'this score'}" and its ${partCount} parts?` : `Delete "${node?.name || 'this score'}"?`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete', style: 'destructive', onPress: () => {
+                        onChange(removeItemAt(subject, path));
+                        setScoreTarget(null);
+                    },
+                },
+            ]
+        );
+    };
+
+    // ─── Group sheet wiring ───────────────────────────────────────────────────
+
+    let groupProps: { initial: NodeDraft; parentName: string; autoWeight: number } | null = null;
+    if (groupTarget) {
+        if (groupTarget.kind === 'period') {
+            const siblings = periods.map((p) => p.weight);
+            groupProps = groupTarget.mode === 'create'
+                ? { initial: { name: '', weight: '' }, parentName: subject.name || 'this subject', autoWeight: weightSummary([...siblings, '']).auto }
+                : {
+                    initial: { name: periods[groupTarget.period]?.name ?? '', weight: periods[groupTarget.period]?.weight ?? '' },
+                    parentName: subject.name || 'this subject',
+                    autoWeight: weightSummary(siblings).auto,
+                };
+        } else {
+            const per = periods[groupTarget.period];
+            const siblings = (per?.components || []).map((c: any) => c.weight);
+            const comp = groupTarget.mode === 'edit' ? per?.components?.[groupTarget.component] : null;
+            groupProps = {
+                initial: comp ? { name: comp.name ?? '', weight: comp.weight ?? '' } : { name: '', weight: '' },
+                parentName: per?.name || 'this period',
+                autoWeight: weightSummary(groupTarget.mode === 'create' ? [...siblings, ''] : siblings).auto,
+            };
+        }
+    }
+
+    const handleGroupSave = (draft: NodeDraft) => {
+        if (!groupTarget) return;
+        if (groupTarget.kind === 'period') {
+            if (groupTarget.mode === 'create') {
+                const out = addPeriod(subject, draft);
+                onChange(out.subject);
+                setSelectedPeriodId(out.subject.periods[out.index].id);
+            } else {
+                onChange(updatePeriod(subject, groupTarget.period, draft));
+            }
+        } else if (groupTarget.mode === 'create') {
+            onChange(addComponent(subject, groupTarget.period, draft));
+        } else {
+            onChange(updateComponent(subject, groupTarget.period, groupTarget.component, draft));
+        }
+        setGroupTarget(null);
+    };
+
+    const handleGroupDelete = () => {
+        if (!groupTarget || groupTarget.mode !== 'edit') return;
+        const t = groupTarget;
+        const isPeriod = t.kind === 'period';
+        const node = isPeriod ? periods[t.period] : periods[t.period]?.components?.[(t as any).component];
+        AlertService.alert(
+            isPeriod ? 'Delete period' : 'Delete component',
+            `Delete "${node?.name || 'this'}" and every score in it?`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete', style: 'destructive', onPress: () => {
+                        onChange(isPeriod ? removePeriod(subject, t.period) : removeComponent(subject, t.period, (t as any).component));
+                        if (isPeriod) setSelectedPeriodId(null);
+                        setGroupTarget(null);
+                    },
+                },
+            ]
+        );
+    };
+
+    // ─── Shared atoms ─────────────────────────────────────────────────────────
 
     const microLabel = {
         fontFamily: 'Nunito_800ExtraBold' as const,
@@ -290,197 +499,245 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
         color: theme.textTertiary,
     };
 
-    const numberField = {
-        fontFamily: 'Nunito_800ExtraBold' as const,
-        color: theme.text,
-        padding: 0,
-        textAlign: 'right' as const,
+    const bandChip = (text: string, icon?: keyof typeof Ionicons.glyphMap) => (
+        <View style={{
+            flexDirection: 'row', alignItems: 'center', gap: 4,
+            paddingHorizontal: 10, height: 26, borderRadius: 999,
+            backgroundColor: brand.well, borderWidth: 1, borderColor: brand.wellLine,
+        }}>
+            {icon && <Ionicons name={icon} size={11} color={brand.onHero} />}
+            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: brand.onHero }}>{text}</Text>
+        </View>
+    );
+
+    const targetPct = Number(subject.targetValue) || passPct;
+    const marks: ScaleMark[] = [{ at: passPct, label: `Pass ${formatWeight(passPct)}`, strong: true }];
+    if (Math.abs(targetPct - passPct) >= 8) marks.push({ at: targetPct, label: `Goal ${formatWeight(targetPct)}` });
+
+    const subjectDraft: SubjectDraft = {
+        name: subject.name ?? '',
+        units: subject.units === undefined || subject.units === null ? '' : String(subject.units),
+        passingPercent: subject.passingPercent === undefined || subject.passingPercent === null ? '' : String(subject.passingPercent),
+        targetValue: subject.targetValue === undefined || subject.targetValue === null ? '' : String(subject.targetValue),
     };
 
-    // ─── The score tree ───────────────────────────────────────────────────────
+    // ─── Outlook ──────────────────────────────────────────────────────────────
 
-    const renderItemRecursive = (item: any, pIndex: number, cIndex: number, idx: number, depth: number, itemPath: number[], weightContext: any) => {
-        let { iExplicit, iBlank } = weightContext;
-        let iAutoW = iBlank > 0 ? (Math.max(0, 100 - iExplicit) / iBlank) : 0;
-        const hasSub = !!(item.subItems && item.subItems.length > 0);
-
-        let subWarning = null;
-        let siExplicit = 0, siBlank = 0;
-        if (hasSub) {
-            item.subItems.forEach((si:any) => { if (si.weight !== '' && si.weight !== null && si.weight !== undefined) siExplicit += Number(si.weight) || 0; else siBlank++; });
-            subWarning = getWeightWarning(siExplicit, siBlank, item.subItems.map((si:any) => si.weight));
-        }
-
-        const ip = Calculator.computeItemPercent(item);
-
-        const updateThisItem = (updater: (it:any)=>void) => {
-            updateSubject(s => {
-                let targetList = s.periods[pIndex].components[cIndex].items;
-                for(let i=0; i<itemPath.length - 1; i++) {
-                    targetList = targetList[itemPath[i]].subItems;
-                }
-                updater(targetList[itemPath[itemPath.length-1]]);
-            });
-        };
-
-        const deleteThisItem = () => {
-            AlertService.alert("Delete", "Delete this item?", [
-                {text: "Cancel", style: "cancel"},
-                {text: "Delete", style: "destructive", onPress: () => {
-                    updateSubject(s => {
-                        let targetList = s.periods[pIndex].components[cIndex].items;
-                        for(let i=0; i<itemPath.length - 1; i++) {
-                            targetList = targetList[itemPath[i]].subItems;
-                        }
-                        targetList.splice(itemPath[itemPath.length-1], 1);
-                    });
-                }}
-            ]);
-        };
-
-        const addSubItemToThis = () => {
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-            updateSubject(s => {
-                let targetList = s.periods[pIndex].components[cIndex].items;
-                for(let i=0; i<itemPath.length - 1; i++) {
-                    targetList = targetList[itemPath[i]].subItems;
-                }
-                const node = targetList[itemPath[itemPath.length-1]];
-                if (!node.subItems) node.subItems = [];
-                node.subItems.push({ id: generateId(), name: '', max: 100, isCollapsed: false });
-                node.isCollapsed = false;
-            });
-        };
+    const renderOutlook = () => {
+        if (total === 0) return null;
+        const style = OUTLOOK_STYLE[outlook.kind];
+        const tint = outlook.kind === 'no-room' && res.absoluteEarned >= passPct ? tints.attendance : tints[style.tint];
+        const remaining = showAllRemaining ? outlook.remaining : outlook.remaining.slice(0, 3);
 
         return (
-            <View
-                key={item.id || idx}
-                style={{
-                    marginBottom: 6, paddingBottom: 6,
-                    ...(depth > 0
-                        ? { marginLeft: 8, paddingLeft: 10, borderLeftWidth: 2, borderLeftColor: theme.cardBorder }
-                        : { borderBottomWidth: 1, borderBottomColor: theme.cardBorder }),
-                }}
-            >
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    {hasSub && (
-                        <TouchableOpacity
-                            onPress={() => {
-                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                                updateThisItem(it => it.isCollapsed = !it.isCollapsed);
-                            }}
-                            accessibilityRole="button"
-                            accessibilityLabel={item.isCollapsed ? 'Expand sub-items' : 'Collapse sub-items'}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
-                            style={{ marginRight: 6 }}
-                        >
-                            <Ionicons name={item.isCollapsed ? 'chevron-forward' : 'chevron-down'} size={14} color={theme.textTertiary} />
-                        </TouchableOpacity>
-                    )}
+            <Card padding={0} radius={Radius['2xl']} fill={tint.fill} border={tint.line} style={{ marginBottom: 20, overflow: 'hidden' }}>
+                <View style={{ padding: 14 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Ionicons name={style.icon} size={14} color={tint.ink} />
+                        <Text style={{ ...microLabel, color: tint.ink }}>{style.title} · goal {formatWeight(outlook.target)}%</Text>
+                    </View>
 
-                    <TextInput
-                        selectTextOnFocus
-                        value={item.name}
-                        onChangeText={txt => updateThisItem(it => it.name = txt)}
-                        placeholder={depth === 0 ? `Item ${idx + 1}` : `Sub-item ${idx + 1}`}
-                        placeholderTextColor={theme.textTertiary}
-                        accessibilityLabel="Item name"
-                        style={{
-                            flex: 1, paddingVertical: 5, marginRight: 6,
-                            fontFamily: 'Nunito_600SemiBold',
-                            fontSize: depth > 0 ? 11.5 : 12.5,
-                            color: theme.textSecondary,
-                        }}
-                    />
-
-                    {hasSub ? (
-                        <View style={{ minWidth: 66, alignItems: 'center', marginRight: 6 }}>
-                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: theme.text }}>
-                                {ip.isEmpty ? '—' : `${(ip.percent * 100).toFixed(1)}%`}
+                    {outlook.requiredAverage !== null ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 12 }}>
+                            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 32, color: tint.ink, letterSpacing: -1 }}>
+                                {outlook.requiredAverage > 100 ? '100+' : outlook.requiredAverage.toFixed(1)}
+                                <Text style={{ fontSize: 17 }}>%</Text>
+                            </Text>
+                            <Text style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 12.5, lineHeight: 17, color: theme.text }}>
+                                average needed on the {outlook.remaining.length} score{outlook.remaining.length !== 1 ? 's' : ''} left
+                                {outlook.requiredFor === 'pass' ? ' just to pass' : ` to reach ${formatWeight(outlook.target)}%`}
                             </Text>
                         </View>
                     ) : (
-                        <View style={{
-                            flexDirection: 'row', alignItems: 'center', marginRight: 6,
-                            paddingHorizontal: 8, height: 28, borderRadius: 8,
-                            backgroundColor: theme.inputBg,
-                            borderWidth: 1, borderColor: theme.inputBorder,
-                        }}>
-                            <TextInput
-                                keyboardType="numeric"
-                                value={item.score?.toString()}
-                                onChangeText={txt => updateThisItem(it => it.score = txt)}
-                                placeholder="—"
-                                placeholderTextColor={theme.textTertiary}
-                                accessibilityLabel="Score"
-                                style={{ ...numberField, textAlign: 'center', fontSize: 12.5, minWidth: 28 }}
-                            />
-                            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textTertiary, marginHorizontal: 2 }}>/</Text>
-                            <TextInput
-                                keyboardType="numeric"
-                                value={item.max?.toString()}
-                                onChangeText={txt => updateThisItem(it => it.max = txt)}
-                                placeholder="100"
-                                placeholderTextColor={theme.textTertiary}
-                                accessibilityLabel="Maximum score"
-                                style={{ ...numberField, textAlign: 'center', fontSize: 11.5, minWidth: 26, color: theme.textSecondary }}
-                            />
-                        </View>
+                        <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, lineHeight: 20, color: theme.text, marginTop: 6 }}>
+                            {outlook.message}
+                        </Text>
                     )}
-
-                    <WeightField
-                        theme={theme}
-                        compact
-                        value={item.weight}
-                        placeholder={iAutoW.toFixed(1)}
-                        onChange={txt => updateThisItem(it => it.weight = txt)}
-                    />
-
-                    {(!hasSub && depth < 3) && (
-                        <TouchableOpacity
-                            onPress={addSubItemToThis}
-                            accessibilityRole="button"
-                            accessibilityLabel="Add sub-item"
-                            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                            style={{
-                                marginLeft: 5, paddingHorizontal: 6, height: 24, borderRadius: 7,
-                                alignItems: 'center', justifyContent: 'center',
-                                backgroundColor: tints.grades.fill,
-                                borderWidth: 1, borderColor: tints.grades.line,
-                            }}
-                        >
-                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 9.5, color: tints.grades.ink }}>+SUB</Text>
-                        </TouchableOpacity>
-                    )}
-
-                    <TouchableOpacity
-                        onPress={deleteThisItem}
-                        accessibilityRole="button"
-                        accessibilityLabel="Delete item"
-                        hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                        style={{
-                            marginLeft: 5, width: 24, height: 24, borderRadius: 8,
-                            alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: tints.danger.fill,
-                        }}
-                    >
-                        <Ionicons name="close" size={12} color={tints.danger.ink} />
-                    </TouchableOpacity>
                 </View>
 
-                {hasSub && !item.isCollapsed && (
-                    <View style={{ marginTop: 8 }}>
-                        {subWarning && <WeightWarning tints={tints} text={subWarning} compact />}
-                        {item.subItems.map((si:any, sidx:number) =>
-                            renderItemRecursive(si, pIndex, cIndex, sidx, depth + 1, [...itemPath, sidx], { iExplicit: siExplicit, iBlank: siBlank })
-                        )}
-                        {depth < 3 && (
-                            <View style={{ marginLeft: 8, marginTop: 2 }}>
-                                <AddRow theme={theme} isDark={isDark} size="sm" label="Add sub-item" onPress={addSubItemToThis} />
+                {outlook.remaining.length > 0 && (
+                    <View style={{ borderTopWidth: 1, borderTopColor: tint.line, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 }}>
+                        <Text style={{ ...microLabel, color: tint.ink, marginBottom: 8 }}>What each needs</Text>
+                        {remaining.map((r) => (
+                            <View key={r.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 5 }}>
+                                <Text numberOfLines={1} style={{ flex: 1, marginRight: 10, fontFamily: 'Nunito_600SemiBold', fontSize: 12.5, color: theme.textSecondary }}>
+                                    {r.name} <Text style={{ color: theme.textTertiary }}>· {r.periodName}</Text>
+                                </Text>
+                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 13.5, color: theme.text }}>
+                                    {r.needed.toFixed(1)}
+                                    <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary }}> / {r.sumMax}</Text>
+                                </Text>
                             </View>
+                        ))}
+                        {outlook.remaining.length > 3 && (
+                            <TouchableOpacity
+                                onPress={() => setShowAllRemaining((v) => !v)}
+                                accessibilityRole="button"
+                                style={{ paddingTop: 6 }}
+                            >
+                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: tint.ink }}>
+                                    {showAllRemaining ? 'Show fewer' : `Show all ${outlook.remaining.length}`}
+                                </Text>
+                            </TouchableOpacity>
                         )}
                     </View>
                 )}
+            </Card>
+        );
+    };
+
+    // ─── The selected period ─────────────────────────────────────────────────
+
+    const renderPeriod = () => {
+        if (!selPeriod) return null;
+        const pIndex = selIdx;
+        const pd = Calculator.calculatePeriod(selPeriod, passPct);
+        const comps: any[] = selPeriod.components || [];
+        const cSummary = weightSummary(comps.map((c) => c.weight));
+        const pWeight = effectiveWeight(selPeriod.weight, pSummary);
+        const periodTier = getGradeTierColor(pd.percent, isDark, pd.hasData);
+
+        return (
+            <View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12, paddingHorizontal: 2 }}>
+                    <View style={{ flex: 1, marginRight: 10 }}>
+                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 19, color: theme.text, letterSpacing: -0.4 }}>
+                            {selPeriod.name || 'Untitled period'}
+                        </Text>
+                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textTertiary, marginTop: 1 }}>
+                            {formatWeight(pWeight)}% of the subject{selPeriod.weight === '' || selPeriod.weight === undefined || selPeriod.weight === null ? ' (split evenly)' : ''}
+                            {pd.hasData ? ` · ${pd.percent.toFixed(1)}%` : ''}
+                        </Text>
+                    </View>
+                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: pd.hasData ? periodTier : theme.textTertiary, letterSpacing: -0.6, marginRight: 8 }}>
+                        {pd.hasData ? formatGrade(pd.percent, passPct, system) : '—'}
+                    </Text>
+                    <TouchableOpacity
+                        onPress={() => setGroupTarget({ kind: 'period', mode: 'edit', period: pIndex })}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Edit period ${selPeriod.name}`}
+                        style={{
+                            width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder,
+                            borderBottomWidth: 2, borderBottomColor: theme.lip,
+                        }}
+                    >
+                        <Ionicons name="create-outline" size={16} color={theme.textSecondary} />
+                    </TouchableOpacity>
+                </View>
+
+                {cSummary.warning && <WeightWarning tints={tints} text={`Components in ${selPeriod.name || 'this period'}: ${cSummary.warning}`} />}
+
+                {comps.map((comp: any, cIndex: number) => {
+                    const items: any[] = comp.items || [];
+                    const cStat = pd.comps.find((x: any) => x.id === comp.id);
+                    const cWeight = effectiveWeight(comp.weight, cSummary);
+                    const iSummary = weightSummary(items.map((i) => i.weight));
+                    let cFilled = 0, cTotal = 0;
+                    for (const it of items) { const n = countScores(it); cFilled += n.filled; cTotal += n.total; }
+                    const cColor = cStat?.hasData ? getGradeTierColor(cStat.percent, isDark, true) : theme.textTertiary;
+
+                    return (
+                        <Card key={comp.id || cIndex} padding={0} radius={Radius.xl} style={{ marginBottom: 12, overflow: 'hidden' }}>
+                            <TouchableOpacity
+                                onPress={() => setGroupTarget({ kind: 'component', mode: 'edit', period: pIndex, component: cIndex })}
+                                activeOpacity={0.75}
+                                accessibilityRole="button"
+                                accessibilityLabel={`${comp.name}, ${formatWeight(cWeight)} percent of ${selPeriod.name}. ${cStat?.hasData ? `${cStat.percent.toFixed(1)} percent` : 'No scores yet'}. Edit component.`}
+                                style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 }}
+                            >
+                                <View style={{
+                                    minWidth: 44, height: 26, paddingHorizontal: 7, borderRadius: 8, marginRight: 10,
+                                    alignItems: 'center', justifyContent: 'center',
+                                    backgroundColor: tints.grades.fill, borderWidth: 1, borderColor: tints.grades.line,
+                                }}>
+                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 11.5, color: tints.grades.ink }}>{formatWeight(cWeight)}%</Text>
+                                </View>
+                                <View style={{ flex: 1, marginRight: 8 }}>
+                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 15, color: theme.text, letterSpacing: -0.2 }}>
+                                        {comp.name || 'Untitled component'}
+                                    </Text>
+                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11, color: theme.textTertiary, marginTop: 1 }}>
+                                        {cTotal === 0 ? 'No scores yet' : `${cFilled} of ${cTotal} in`}
+                                        {iSummary.warning ? ' · ' : ''}
+                                        {iSummary.warning ? <Text style={{ color: tints.danger.ink, fontFamily: 'Nunito_700Bold' }}>check weights</Text> : null}
+                                    </Text>
+                                </View>
+                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: cColor, letterSpacing: -0.4, marginRight: 6 }}>
+                                    {cStat?.hasData ? `${cStat.percent.toFixed(1)}%` : '—'}
+                                </Text>
+                                <Ionicons name="create-outline" size={15} color={theme.textTertiary} />
+                            </TouchableOpacity>
+
+                            {iSummary.warning && (
+                                <View style={{ paddingHorizontal: 14 }}>
+                                    <WeightWarning tints={tints} text={iSummary.warning} />
+                                </View>
+                            )}
+
+                            {items.map((item: any, iIndex: number) => (
+                                <ItemRow
+                                    key={item.id || iIndex}
+                                    item={item}
+                                    depth={0}
+                                    index={iIndex}
+                                    siblings={items}
+                                    path={{ period: pIndex, component: cIndex, items: [iIndex] }}
+                                    theme={theme}
+                                    tints={tints}
+                                    isDark={isDark}
+                                    collapsed={collapsed}
+                                    onToggle={(id) => setCollapsed((c) => ({ ...c, [id]: !c[id] }))}
+                                    onOpen={openEditScore}
+                                    isLast={iIndex === items.length - 1}
+                                />
+                            ))}
+
+                            <TouchableOpacity
+                                onPress={() => openCreateScore(pIndex, cIndex)}
+                                activeOpacity={0.7}
+                                accessibilityRole="button"
+                                accessibilityLabel={`Add a score to ${comp.name}`}
+                                style={{
+                                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 44,
+                                    borderTopWidth: 1, borderTopColor: theme.cardBorder,
+                                    backgroundColor: isDark ? 'rgba(0,0,0,0.12)' : theme.surfaceSecondary,
+                                }}
+                            >
+                                <Ionicons name="add-circle" size={17} color={tints.grades.ink} />
+                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: tints.grades.ink }}>Add score</Text>
+                            </TouchableOpacity>
+                        </Card>
+                    );
+                })}
+
+                {comps.length === 0 && (
+                    <View style={{
+                        padding: 14, borderRadius: Radius.lg, marginBottom: 10,
+                        backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder,
+                    }}>
+                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>What makes up {selPeriod.name || 'this period'}?</Text>
+                        <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12.5, lineHeight: 18, color: theme.textSecondary, marginTop: 3 }}>
+                            Add its components, like Quizzes 30% and Exams 70%. Scores go inside them.
+                        </Text>
+                    </View>
+                )}
+
+                <TouchableOpacity
+                    onPress={() => setGroupTarget({ kind: 'component', mode: 'create', period: pIndex })}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Add a component to ${selPeriod.name}`}
+                    style={{
+                        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 46,
+                        borderRadius: Radius.lg, borderWidth: 1, borderStyle: 'dashed',
+                        borderColor: isDark ? '#3d4468' : '#cbd5e1',
+                    }}
+                >
+                    <Ionicons name="add" size={16} color={theme.textSecondary} />
+                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>Add component</Text>
+                </TouchableOpacity>
             </View>
         );
     };
@@ -489,531 +746,277 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
 
     return (
         <View style={{ flex: 1, backgroundColor: theme.background }}>
-            {/* ══ Fixed header. Back never scrolls away mid-entry. ═══════════ */}
-            <View
-                style={{
-                    flexDirection: 'row', alignItems: 'center', gap: 8,
-                    paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10,
-                    backgroundColor: theme.background,
-                }}
-            >
-                <TouchableOpacity
-                    onPress={onBack}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    accessibilityLabel="Back to subjects"
-                    style={{
-                        flexDirection: 'row', alignItems: 'center', gap: 2,
-                        paddingLeft: 6, paddingRight: 11, height: 34, borderRadius: 12,
-                        backgroundColor: theme.surface,
-                        borderWidth: 1, borderColor: theme.cardBorder,
-                        borderBottomWidth: 2, borderBottomColor: theme.lip,
-                    }}
-                >
-                    <Ionicons name="chevron-back" size={16} color={theme.textSecondary} />
-                    <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>Subjects</Text>
-                </TouchableOpacity>
+            {/* ══ Pinned header on the band. Back never scrolls away mid-entry. ══ */}
+            <View style={{ backgroundColor: brand.heroFrom, paddingTop: insets.top, zIndex: 10 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 8 }}>
+                    <TouchableOpacity
+                        onPress={onBack}
+                        activeOpacity={0.75}
+                        accessibilityRole="button"
+                        accessibilityLabel="Back to subjects"
+                        style={{
+                            flexDirection: 'row', alignItems: 'center', gap: 2,
+                            paddingLeft: 7, paddingRight: 12, height: 36, borderRadius: 18,
+                            backgroundColor: brand.well, borderWidth: 1, borderColor: brand.wellLine,
+                        }}
+                    >
+                        <Ionicons name="chevron-back" size={17} color={brand.onHero} />
+                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: brand.onHero }}>Subjects</Text>
+                    </TouchableOpacity>
 
-                <View style={{ flex: 1 }} />
+                    <View style={{ flex: 1 }} />
 
-                <TouchableOpacity
-                    onPress={() => setFinOpen(true)}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    accessibilityLabel="FinSights — what Fin noticed about this subject"
-                    style={{
-                        width: 34, height: 34, borderRadius: 12, overflow: 'hidden',
-                        alignItems: 'center', justifyContent: 'center',
-                        backgroundColor: tints.grades.fill,
-                        borderWidth: 1, borderColor: tints.grades.line,
-                    }}
-                >
-                    <Image
-                        source={require('../../assets/images/FinSights.png')}
-                        style={{ width: 40, height: 40, transform: [{ translateY: 3 }] }}
-                        resizeMode="cover"
-                    />
-                </TouchableOpacity>
+                    <TouchableOpacity
+                        onPress={() => setFinOpen(true)}
+                        activeOpacity={0.75}
+                        accessibilityRole="button"
+                        accessibilityLabel="FinSights — what Fin noticed about this subject"
+                        style={{
+                            width: 36, height: 36, borderRadius: 18, overflow: 'hidden',
+                            alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: brand.markRing,
+                        }}
+                    >
+                        <Image
+                            source={require('../../assets/images/FinSights.png')}
+                            style={{ width: 42, height: 42, transform: [{ translateY: 3 }] }}
+                            resizeMode="cover"
+                        />
+                    </TouchableOpacity>
 
-                <AnimatedPressable
-                    onPress={() => setAutoConfigOpen(true)}
-                    accessibilityRole="button"
-                    accessibilityLabel="AutoConfig — build this subject's grading setup from a syllabus"
-                    style={{
-                        flexDirection: 'row', alignItems: 'center', gap: 5,
-                        paddingHorizontal: 12, height: 34, borderRadius: 12,
-                        backgroundColor: theme.primary,
-                        borderBottomWidth: 2, borderBottomColor: theme.primaryDark,
-                    }}
-                >
-                    <Ionicons name="color-wand" size={15} color="#ffffff" />
-                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: '#ffffff' }}>AutoConfig</Text>
-                </AnimatedPressable>
+                    <AnimatedPressable
+                        onPress={() => setAutoConfigOpen(true)}
+                        accessibilityRole="button"
+                        accessibilityLabel="AutoConfig — build this subject's grading setup from a syllabus"
+                        style={{
+                            flexDirection: 'row', alignItems: 'center', gap: 5,
+                            paddingHorizontal: 12, height: 36, borderRadius: 18,
+                            backgroundColor: '#ffffff',
+                        }}
+                    >
+                        <Ionicons name="color-wand" size={15} color={brand.heroTo} />
+                        <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 12.5, color: brand.heroTo }}>AutoConfig</Text>
+                    </AnimatedPressable>
+                </View>
             </View>
 
             <ScrollView
                 style={{ flex: 1 }}
-                contentContainerStyle={{ paddingHorizontal: GUTTER, paddingBottom: tabBarHeight + 24 }}
+                contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
             >
-                <View style={{ width: '100%', maxWidth: 620, alignSelf: 'center' }}>
-
-                    {/* ══ Standing ═══════════════════════════════════════════ */}
-                    <Card padding={0} radius={Radius['2xl']} style={{ overflow: 'hidden', marginBottom: 14 }}>
-                        <View style={{ padding: 16, backgroundColor: tints.grades.fill, borderBottomWidth: 1, borderBottomColor: tints.grades.line }}>
-                            <Text style={{ ...microLabel, color: tints.grades.ink }}>Subject</Text>
-                            <TextInput
-                                selectTextOnFocus
-                                value={subject.name}
-                                onChangeText={txt => updateSubject(s => s.name = txt)}
-                                placeholder="Subject name"
-                                placeholderTextColor={theme.textTertiary}
-                                autoCapitalize="characters"
-                                accessibilityLabel="Subject name"
-                                style={{
-                                    fontFamily: 'Nunito_900Black', fontSize: 26, letterSpacing: -0.6,
-                                    color: theme.text, padding: 0, marginTop: 2,
-                                }}
-                            />
-
-                            <View style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 14, marginBottom: 8 }}>
-                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 34, letterSpacing: -1, color: res.hasData ? tierColor : theme.textTertiary, lineHeight: 38 }}>
-                                    {res.hasData ? `${res.percent.toFixed(1)}%` : '—'}
+                {/* ══ Standing, in the band ═══════════════════════════════════ */}
+                <BandSurface isDark={isDark} motif="bars" slant={BAND_SLANT} style={{ paddingBottom: BAND_SLANT + 16 }}>
+                    <View style={{ width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: GUTTER + 4, paddingTop: 4 }}>
+                        <TouchableOpacity
+                            onPress={() => setSubjectSheetOpen(true)}
+                            activeOpacity={0.8}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${subject.name}. ${Number(subject.units) || 0} units, pass mark ${passPct} percent, target ${targetPct} percent. Edit subject details.`}
+                        >
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                <Text numberOfLines={2} style={{ flexShrink: 1, fontFamily: 'Nunito_900Black', fontSize: 23, lineHeight: 28, color: brand.onHero, letterSpacing: -0.5 }}>
+                                    {subject.name || 'Untitled subject'}
                                 </Text>
-                                <View style={{ flex: 1 }} />
-                                <View style={{
-                                    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10,
-                                    backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder,
-                                }}>
-                                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.text }}>
-                                        {system === 'PERCENT'
-                                            ? (res.hasData ? `${res.equivalent.toFixed(1)}%` : 'No data')
-                                            : (res.hasData ? `GWA ${res.equivalent.toFixed(2)}` : 'No data')}
-                                    </Text>
-                                </View>
+                                <Ionicons name="create-outline" size={16} color={brand.onHeroMuted} />
                             </View>
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                                {bandChip(`${Number(subject.units) || 0} unit${Number(subject.units) === 1 ? '' : 's'}`)}
+                                {bandChip(`Pass ${formatWeight(passPct)}%`)}
+                                {bandChip(`Goal ${formatWeight(targetPct)}%`, 'flag')}
+                                {!isTracked && bandChip('Paused', 'pause')}
+                            </View>
+                        </TouchableOpacity>
 
-                            {/* Bar with the passing mark drawn on it */}
-                            <View style={{
-                                height: 10, borderRadius: Radius.full, overflow: 'hidden',
-                                backgroundColor: isDark ? 'rgba(0,0,0,0.25)' : 'rgba(15,23,42,0.08)',
-                            }}>
-                                <View style={{ height: '100%', width: `${barW}%`, borderRadius: Radius.full, backgroundColor: res.hasData ? tierColor : theme.textTertiary }} />
-                                <View style={{ position: 'absolute', height: '100%', width: 2, left: `${Math.max(0, Math.min(100, passPct))}%`, backgroundColor: theme.text, opacity: 0.55 }} />
-                            </View>
-                            <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 10.5, color: theme.textSecondary, marginTop: 5 }}>
-                                The marker is your {passPct}% passing mark
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16, gap: 12 }}>
+                            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 42, lineHeight: 48, color: brand.onHero, letterSpacing: -1.4 }}>
+                                {res.hasData ? `${res.percent.toFixed(1)}%` : '—'}
                             </Text>
-                        </View>
-
-                        {pWarning && (
-                            <View style={{ paddingHorizontal: 14, paddingTop: 12 }}>
-                                <WeightWarning tints={tints} text={`Period weights: ${pWarning}`} />
-                            </View>
-                        )}
-
-                        {/* Units / pass % / target — the three numbers that define the subject */}
-                        <View style={{ flexDirection: 'row' }}>
-                            {([
-                                {
-                                    key: 'units', label: 'Units', suffix: '',
-                                    value: subject.units?.toString(), placeholder: '3',
-                                    onChange: (txt: string) => updateSubject(s => s.units = txt),
-                                    hint: 'Weight in your GWA',
-                                },
-                                {
-                                    key: 'pass', label: 'Pass mark', suffix: '%',
-                                    value: subject.passingPercent?.toString(), placeholder: '60',
-                                    onChange: (txt: string) => updateSubject(s => s.passingPercent = txt),
-                                    hint: 'Lowest passing score',
-                                },
-                                {
-                                    key: 'target', label: 'Target', suffix: '%',
-                                    value: subject.targetValue?.toString(), placeholder: passPct.toString(),
-                                    onChange: (txt: string) => updateSubject(s => s.targetValue = txt),
-                                    hint: 'What you are aiming for',
-                                },
-                            ]).map((field, i) => (
-                                <View
-                                    key={field.key}
-                                    style={{
-                                        flex: 1, paddingHorizontal: 12, paddingTop: 11, paddingBottom: 12,
-                                        borderLeftWidth: i === 0 ? 0 : 1, borderLeftColor: theme.cardBorder,
-                                    }}
-                                >
-                                    <Text numberOfLines={1} style={microLabel}>{field.label}</Text>
-                                    <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 2 }}>
-                                        <TextInput
-                                            keyboardType="numeric"
-                                            value={field.value}
-                                            placeholder={field.placeholder}
-                                            placeholderTextColor={theme.textTertiary}
-                                            onChangeText={field.onChange}
-                                            accessibilityLabel={`${field.label}. ${field.hint}`}
-                                            style={{
-                                                fontFamily: 'Nunito_900Black', fontSize: 20, letterSpacing: -0.5,
-                                                color: theme.text, padding: 0, minWidth: 30,
-                                            }}
-                                        />
-                                        {!!field.suffix && (
-                                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: theme.textTertiary }}>{field.suffix}</Text>
-                                        )}
-                                    </View>
-                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 10, color: theme.textTertiary, marginTop: 1 }}>
-                                        {field.hint}
-                                    </Text>
-                                </View>
-                            ))}
-                        </View>
-                    </Card>
-
-                    {/* ══ What you still need — the reason this screen exists,
-                           so it sits above the tree rather than under it. ═════ */}
-                    <Card
-                        padding={0}
-                        radius={Radius['2xl']}
-                        fill={targetTint.fill}
-                        border={targetTint.line}
-                        style={{ overflow: 'hidden', marginBottom: 20 }}
-                    >
-                        <View style={{ flexDirection: 'row', alignItems: 'flex-start', padding: 14 }}>
-                            <View style={{
-                                width: 36, height: 36, borderRadius: 12, marginRight: 11,
-                                alignItems: 'center', justifyContent: 'center',
-                                backgroundColor: isDark ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.75)',
-                            }}>
-                                <Ionicons name={targetIcon as any} size={19} color={targetTint.ink} />
-                            </View>
                             <View style={{ flex: 1 }}>
-                                <Text style={{ ...microLabel, color: targetTint.ink }}>Target · {targetPercent.toFixed(0)}%</Text>
-                                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13.5, color: theme.text, lineHeight: 19, marginTop: 3 }}>
-                                    {targetMsg}
-                                </Text>
-                            </View>
-                        </View>
-
-                        {distributionHtml && distributionHtml.emptyComps.length > 0 && (
-                            <View style={{ borderTopWidth: 1, borderTopColor: targetTint.line, padding: 14 }}>
-                                <Text style={{ ...microLabel, color: targetTint.ink, marginBottom: 10 }}>
-                                    Scores needed {distributionHtml.label}
-                                </Text>
-
-                                <View style={{ gap: 6 }}>
-                                    {distributionHtml.emptyComps.map((c:any) => {
-                                        const scoreNeeded = distributionHtml.reqPct * c.sumMax;
-                                        return (
-                                            <View
-                                                key={c.id}
-                                                style={{
-                                                    flexDirection: 'row', alignItems: 'center',
-                                                    paddingHorizontal: 12, paddingVertical: 10, borderRadius: Radius.md,
-                                                    backgroundColor: theme.surface,
-                                                    borderWidth: 1, borderColor: theme.cardBorder,
-                                                }}
-                                            >
-                                                <Text numberOfLines={2} style={{ flex: 1, marginRight: 10, fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textSecondary }}>
-                                                    {c.periodName} — {c.name}
-                                                </Text>
-                                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 14, color: theme.text }}>
-                                                    {scoreNeeded.toFixed(1)}
-                                                    <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 10.5, color: theme.textTertiary }}> / {c.sumMax}</Text>
-                                                </Text>
-                                                <View style={{
-                                                    marginLeft: 8, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6,
-                                                    backgroundColor: targetTint.fill, borderWidth: 1, borderColor: targetTint.line,
-                                                }}>
-                                                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 9.5, color: targetTint.ink }}>
-                                                        {(distributionHtml.reqPct * 100).toFixed(1)}%
-                                                    </Text>
-                                                </View>
-                                            </View>
-                                        );
-                                    })}
-                                </View>
-                            </View>
-                        )}
-                    </Card>
-
-                    {/* ══ Periods ════════════════════════════════════════════ */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                        <View style={{ width: 4, height: 20, borderRadius: 2, backgroundColor: tints.grades.solid, marginRight: 9 }} />
-                        <Text accessibilityRole="header" style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 16, color: theme.text, letterSpacing: -0.2 }}>
-                            Grading setup
-                        </Text>
-                        <View style={{
-                            marginLeft: 8, minWidth: 22, paddingHorizontal: 7, paddingVertical: 2,
-                            borderRadius: Radius.full, alignItems: 'center', backgroundColor: theme.surfaceSecondary,
-                        }}>
-                            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textSecondary }}>
-                                {subject.periods.length}
-                            </Text>
-                        </View>
-                    </View>
-
-                    {subject.periods.map((per: any, pIndex: number) => {
-                        const pd = Calculator.calculatePeriod(per, passPct);
-                        const pdGradeEq = Calculator.interpolateGrade(pd.percent, passPct, system);
-                        const pdDisplayGrade = system === 'PERCENT' ? pd.percent.toFixed(2) + '%' : pdGradeEq.toFixed(2);
-
-                        let cExplicit = 0, cBlank = 0;
-                        const safeComps = per.components || [];
-                        safeComps.forEach((c: any) => { if (c.weight !== '' && c.weight !== null && c.weight !== undefined) cExplicit += Number(c.weight) || 0; else cBlank++; });
-                        const cAutoW = cBlank > 0 ? (Math.max(0, 100 - cExplicit) / cBlank) : 0;
-                        const cWarning = getWeightWarning(cExplicit, cBlank, safeComps.map((c:any) => c.weight));
-
-                        const isExpanded = expandedPeriods[per.id];
-                        const periodTier = getGradeTierColor(pd.percent, isDark, pd.hasData);
-
-                        return (
-                            <Card key={per.id} padding={0} radius={Radius.xl} style={{ overflow: 'hidden', marginBottom: 12 }}>
-                                {/* ── Period header ───────────────────────── */}
-                                <TouchableOpacity
-                                    onPress={() => togglePeriod(per.id)}
-                                    activeOpacity={0.75}
-                                    accessibilityRole="button"
-                                    accessibilityState={{ expanded: Boolean(isExpanded) }}
-                                    accessibilityLabel={`Period ${per.name}, ${pd.hasData ? pdDisplayGrade : 'no scores'}`}
-                                    style={{
-                                        flexDirection: 'row', alignItems: 'center', padding: 14,
-                                        borderBottomWidth: isExpanded ? 1 : 0, borderBottomColor: theme.cardBorder,
-                                    }}
-                                >
-                                    <Ionicons
-                                        name={isExpanded ? 'chevron-down' : 'chevron-forward'}
-                                        size={16}
-                                        color={theme.textTertiary}
-                                        style={{ marginRight: 8 }}
-                                    />
-                                    <View style={{ flex: 1, marginRight: 10 }}>
-                                        <Text style={microLabel}>Period</Text>
-                                        <TextInput
-                                            selectTextOnFocus
-                                            value={per.name}
-                                            onChangeText={txt => updateSubject(s => s.periods[pIndex].name = txt)}
-                                            placeholder="Period name"
-                                            placeholderTextColor={theme.textTertiary}
-                                            autoCapitalize="characters"
-                                            accessibilityLabel="Period name"
-                                            style={{ fontFamily: 'Nunito_900Black', fontSize: 16, letterSpacing: -0.3, color: theme.text, padding: 0, marginTop: 1 }}
-                                        />
-                                    </View>
-
-                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: pd.hasData ? periodTier : theme.textTertiary, marginRight: 10 }}>
-                                        {pd.hasData ? pdDisplayGrade : '—'}
-                                    </Text>
-
-                                    <WeightField
-                                        theme={theme}
-                                        value={per.weight}
-                                        placeholder={pAutoW.toFixed(1)}
-                                        onChange={txt => updateSubject(s => s.periods[pIndex].weight = txt)}
-                                    />
-
-                                    <TouchableOpacity
-                                        onPress={() => {
-                                            AlertService.alert("Delete", "Delete Period?", [{text:"Cancel"},{text:"Delete", style:"destructive", onPress:()=>updateSubject(s => s.periods.splice(pIndex, 1))}]);
-                                        }}
-                                        accessibilityRole="button"
-                                        accessibilityLabel={`Delete period ${per.name}`}
-                                        hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                                        style={{
-                                            marginLeft: 6, width: 28, height: 28, borderRadius: 9,
-                                            alignItems: 'center', justifyContent: 'center',
-                                            backgroundColor: tints.danger.fill,
-                                        }}
-                                    >
-                                        <Ionicons name="trash-outline" size={13} color={tints.danger.ink} />
-                                    </TouchableOpacity>
-                                </TouchableOpacity>
-
-                                {/* ── Components ──────────────────────────── */}
-                                {isExpanded && (
-                                    <View style={{ padding: 12 }}>
-                                        {cWarning && <WeightWarning tints={tints} text={cWarning} />}
-
-                                        {safeComps.map((comp: any, cIndex: number) => {
-                                            let iExplicit = 0, iBlank = 0;
-                                            const safeItems = comp.items || [];
-                                            safeItems.forEach((i: any) => { if (i.weight !== '' && i.weight !== null && i.weight !== undefined) iExplicit += Number(i.weight) || 0; else iBlank++; });
-                                            const iWarning = getWeightWarning(iExplicit, iBlank, safeItems.map((i:any) => i.weight));
-
-                                            const isCompExpanded = expandedComponents[comp.id];
-
-                                            return (
-                                                <Card
-                                                    key={comp.id}
-                                                    variant="sunken"
-                                                    padding={12}
-                                                    radius={Radius.lg}
-                                                    style={{ marginBottom: 10 }}
-                                                >
-                                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                        <TouchableOpacity
-                                                            onPress={() => toggleComponent(comp.id)}
-                                                            activeOpacity={0.75}
-                                                            accessibilityRole="button"
-                                                            accessibilityState={{ expanded: Boolean(isCompExpanded) }}
-                                                            accessibilityLabel={`Component ${comp.name}`}
-                                                            style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}
-                                                        >
-                                                            <Ionicons
-                                                                name={isCompExpanded ? 'chevron-down' : 'chevron-forward'}
-                                                                size={14}
-                                                                color={theme.textTertiary}
-                                                                style={{ marginRight: 7 }}
-                                                            />
-                                                            <TextInput
-                                                                selectTextOnFocus
-                                                                value={comp.name}
-                                                                onChangeText={txt => updateSubject(s => s.periods[pIndex].components[cIndex].name = txt)}
-                                                                placeholder="Component name"
-                                                                placeholderTextColor={theme.textTertiary}
-                                                                autoCapitalize="characters"
-                                                                accessibilityLabel="Component name"
-                                                                style={{ flex: 1, fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text, padding: 0 }}
-                                                            />
-                                                        </TouchableOpacity>
-
-                                                        <WeightField
-                                                            theme={theme}
-                                                            compact
-                                                            value={comp.weight}
-                                                            placeholder={cAutoW.toFixed(1)}
-                                                            onChange={txt => updateSubject(s => s.periods[pIndex].components[cIndex].weight = txt)}
-                                                        />
-
-                                                        <TouchableOpacity
-                                                            onPress={() => {
-                                                                AlertService.alert("Delete", "Delete Component?", [{text:"Cancel"},{text:"Delete", style:"destructive", onPress:()=>updateSubject(s => s.periods[pIndex].components.splice(cIndex, 1))}]);
-                                                            }}
-                                                            accessibilityRole="button"
-                                                            accessibilityLabel={`Delete component ${comp.name}`}
-                                                            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                                                            style={{
-                                                                marginLeft: 5, width: 24, height: 24, borderRadius: 8,
-                                                                alignItems: 'center', justifyContent: 'center',
-                                                                backgroundColor: tints.danger.fill,
-                                                            }}
-                                                        >
-                                                            <Ionicons name="close" size={12} color={tints.danger.ink} />
-                                                        </TouchableOpacity>
-                                                    </View>
-
-                                                    {isCompExpanded && (
-                                                        <View style={{ marginTop: 12 }}>
-                                                            {iWarning && <WeightWarning tints={tints} text={iWarning} compact />}
-                                                            {safeItems.map((item: any, iIndex: number) =>
-                                                                renderItemRecursive(item, pIndex, cIndex, iIndex, 0, [iIndex], { iExplicit, iBlank })
-                                                            )}
-                                                            <View style={{ marginTop: 6 }}>
-                                                                <AddRow
-                                                                    theme={theme}
-                                                                    isDark={isDark}
-                                                                    size="sm"
-                                                                    label="Add item"
-                                                                    onPress={() => updateSubject(s => { if (!s.periods[pIndex].components[cIndex].items) s.periods[pIndex].components[cIndex].items = []; s.periods[pIndex].components[cIndex].items.push({ id: generateId(), max: 100, subItems: [] }) })}
-                                                                />
-                                                            </View>
-                                                        </View>
-                                                    )}
-                                                </Card>
-                                            );
-                                        })}
-
-                                        {safeComps.length === 0 && (
-                                            <View style={{
-                                                flexDirection: 'row', alignItems: 'center',
-                                                padding: 11, borderRadius: Radius.md, marginBottom: 10,
-                                                backgroundColor: tints.tasks.fill,
-                                                borderWidth: 1, borderColor: tints.tasks.line,
-                                            }}>
-                                                <Ionicons name="information-circle-outline" size={15} color={tints.tasks.ink} style={{ marginRight: 7 }} />
-                                                <Text style={{ flex: 1, fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textSecondary }}>
-                                                    No components yet — add Quizzes, Exams, Projects and so on.
-                                                </Text>
-                                            </View>
-                                        )}
-
-                                        <AddRow
-                                            theme={theme}
-                                            isDark={isDark}
-                                            label="Add component"
-                                            onPress={() => updateSubject(s => { if (!s.periods[pIndex].components) s.periods[pIndex].components = []; s.periods[pIndex].components.push({ id: generateId(), name: 'New Component', items: [] }) })}
-                                        />
-
-                                        {/* ── Period breakdown ────────────── */}
-                                        <View style={{ marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: theme.cardBorder }}>
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                                                <Text numberOfLines={1} style={{ ...microLabel, flex: 1, marginRight: 8 }}>
-                                                    {per.name} breakdown
-                                                </Text>
-                                                {pd.hasData && (
-                                                    <TouchableOpacity
-                                                        onPress={() => setFinOpen(true)}
-                                                        activeOpacity={0.7}
-                                                        accessibilityRole="button"
-                                                        accessibilityLabel="Open FinSights"
-                                                        style={{
-                                                            flexDirection: 'row', alignItems: 'center',
-                                                            paddingLeft: 4, paddingRight: 9, height: 26, borderRadius: Radius.full,
-                                                            backgroundColor: tints.grades.fill,
-                                                            borderWidth: 1, borderColor: tints.grades.line,
-                                                        }}
-                                                    >
-                                                        <View style={{ width: 19, height: 19, borderRadius: 10, overflow: 'hidden', marginRight: 5, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surface }}>
-                                                            <Image
-                                                                source={require('../../assets/images/FinSights.png')}
-                                                                style={{ width: 23, height: 23, transform: [{ translateY: 2 }] }}
-                                                                resizeMode="cover"
-                                                            />
-                                                        </View>
-                                                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 10.5, color: tints.grades.ink }}>FinSights</Text>
-                                                    </TouchableOpacity>
-                                                )}
-                                            </View>
-
-                                            {pd.hasData ? (
-                                                <View style={{ gap: 7 }}>
-                                                    {pd.comps.map((c: any) => {
-                                                        const cDisplay = system === 'PERCENT' ? `${c.percent.toFixed(2)}%` : Calculator.interpolateGrade(c.percent, passPct, system).toFixed(2);
-                                                        return (
-                                                            <View key={c.id} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                                <Text numberOfLines={1} style={{ flex: 1, marginRight: 10, fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textSecondary }}>
-                                                                    {c.name}
-                                                                </Text>
-                                                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 12.5, color: c.hasData ? getGradeTierColor(c.percent, isDark, true) : theme.textTertiary }}>
-                                                                    {c.hasData ? cDisplay : '—'}
-                                                                </Text>
-                                                            </View>
-                                                        );
-                                                    })}
-                                                </View>
-                                            ) : (
-                                                <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textTertiary }}>
-                                                    Add scores to see the breakdown.
-                                                </Text>
-                                            )}
-                                        </View>
+                                {res.hasData && system !== 'PERCENT' && (
+                                    <View style={{ alignSelf: 'flex-start', paddingHorizontal: 9, height: 24, borderRadius: 999, justifyContent: 'center', backgroundColor: '#ffffff' }}>
+                                        <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 12, color: brand.heroTo }}>Grade {res.equivalent.toFixed(2)}</Text>
                                     </View>
                                 )}
-                            </Card>
-                        );
-                    })}
+                                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: brand.onHeroMuted, marginTop: 4 }}>
+                                    {res.hasData ? getGradeTierLabel(res.percent, true) : total === 0 ? 'Set up grading below' : 'Log a score to start'}
+                                    {total > 0 ? ` · ${filled}/${total} in` : ''}
+                                </Text>
+                            </View>
+                        </View>
 
-                    <AddRow
-                        theme={theme}
-                        isDark={isDark}
-                        size="lg"
-                        label="Add period"
-                        onPress={() => {
-                        const newId = generateId();
-                        setExpandedPeriods(prev => ({...prev, [newId]: true}));
-                        updateSubject(s => s.periods.push({ id: newId, name: 'New Period', components: [] }));
-                        }}
-                    />
+                        <View style={{ marginTop: 12 }}>
+                            <GradeScale
+                                percent={res.hasData ? res.percent : null}
+                                marks={marks}
+                                track={brand.wellStrong}
+                                fill="#ffffff"
+                                ink={brand.onHero}
+                                inkMuted={brand.onHeroMuted}
+                                pinRing={brand.heroTo}
+                                accessibilityLabel={res.hasData ? `${res.percent.toFixed(1)} percent against a passing mark of ${passPct}` : 'No score on the scale yet'}
+                            />
+                        </View>
+                    </View>
+                </BandSurface>
+
+                <View style={{ width: '100%', maxWidth: 620, alignSelf: 'center', paddingHorizontal: GUTTER, paddingTop: 12 }}>
+                    {/* ══ What you still need ═════════════════════════════════ */}
+                    {renderOutlook()}
+
+                    {periods.length === 0 ? (
+                        /* ══ No grading setup yet ═══════════════════════════ */
+                        <Card padding={0} radius={Radius['2xl']} style={{ overflow: 'hidden' }}>
+                            <View style={{ padding: 18 }}>
+                                <View style={{
+                                    width: 46, height: 46, borderRadius: 15, marginBottom: 12, alignItems: 'center', justifyContent: 'center',
+                                    backgroundColor: tints.grades.fill, borderWidth: 1, borderColor: tints.grades.line,
+                                }}>
+                                    <Ionicons name="layers-outline" size={22} color={tints.grades.ink} />
+                                </View>
+                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 17, color: theme.text, letterSpacing: -0.3 }}>How is this subject graded?</Text>
+                                <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 13, lineHeight: 19, color: theme.textSecondary, marginTop: 4 }}>
+                                    Start with its periods, like Prelim, Midterm and Finals. Or let Fin read your syllabus and set everything up.
+                                </Text>
+                                <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+                                    <AnimatedPressable
+                                        onPress={() => setGroupTarget({ kind: 'period', mode: 'create' })}
+                                        accessibilityRole="button"
+                                        accessibilityLabel="Add a period"
+                                        style={{
+                                            flex: 1, height: 46, borderRadius: Radius.lg, flexDirection: 'row', gap: 6,
+                                            alignItems: 'center', justifyContent: 'center',
+                                            backgroundColor: theme.primary, borderBottomWidth: 3, borderBottomColor: theme.primaryDark,
+                                        }}
+                                    >
+                                        <Ionicons name="add" size={17} color="#ffffff" />
+                                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: '#ffffff' }}>Add period</Text>
+                                    </AnimatedPressable>
+                                    <TouchableOpacity
+                                        onPress={() => setAutoConfigOpen(true)}
+                                        activeOpacity={0.75}
+                                        accessibilityRole="button"
+                                        accessibilityLabel="Set up from syllabus with AutoConfig"
+                                        style={{
+                                            flex: 1, height: 46, borderRadius: Radius.lg, flexDirection: 'row', gap: 6,
+                                            alignItems: 'center', justifyContent: 'center',
+                                            backgroundColor: tints.tools.fill, borderWidth: 1, borderColor: tints.tools.line,
+                                        }}
+                                    >
+                                        <Ionicons name="color-wand" size={16} color={tints.tools.ink} />
+                                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: tints.tools.ink }}>From syllabus</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                        </Card>
+                    ) : (
+                        <>
+                            {/* ══ Periods, as tabs ═══════════════════════════ */}
+                            <SectionHeader
+                                title="Grading"
+                                count={periods.length}
+                                railColor={tints.grades.solid}
+                                actionLabel="Period"
+                                actionIcon="add"
+                                actionColor={tints.grades.ink}
+                                onAction={() => setGroupTarget({ kind: 'period', mode: 'create' })}
+                            />
+
+                            {pSummary.warning && <WeightWarning tints={tints} text={`Periods: ${pSummary.warning}`} />}
+
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                style={{ marginHorizontal: -GUTTER, marginBottom: 16 }}
+                                contentContainerStyle={{ paddingHorizontal: GUTTER, gap: 8 }}
+                            >
+                                {periods.map((per: any, i: number) => {
+                                    const active = i === selIdx;
+                                    const pd = Calculator.calculatePeriod(per, passPct);
+                                    const wash = getGradeTierWash(pd.percent, isDark, pd.hasData);
+                                    const color = getGradeTierColor(pd.percent, isDark, pd.hasData);
+                                    return (
+                                        <TouchableOpacity
+                                            key={per.id || i}
+                                            onPress={() => setSelectedPeriodId(per.id)}
+                                            activeOpacity={0.8}
+                                            accessibilityRole="tab"
+                                            accessibilityState={{ selected: active }}
+                                            accessibilityLabel={`${per.name}, ${pd.hasData ? formatGrade(pd.percent, passPct, system) : 'no scores'}, ${formatWeight(effectiveWeight(per.weight, pSummary))} percent of the subject`}
+                                            style={{
+                                                minWidth: 96, paddingHorizontal: 12, paddingTop: 9, paddingBottom: 10, borderRadius: 16,
+                                                backgroundColor: active ? theme.surface : theme.surfaceSecondary,
+                                                borderWidth: active ? 2 : 1,
+                                                borderColor: active ? tints.grades.solid : theme.cardBorder,
+                                            }}
+                                        >
+                                            <Text numberOfLines={1} style={{ maxWidth: 130, fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: active ? theme.text : theme.textSecondary }}>
+                                                {per.name || `Period ${i + 1}`}
+                                            </Text>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                                                <View style={{ paddingHorizontal: 6, height: 22, borderRadius: 7, justifyContent: 'center', backgroundColor: wash.fill }}>
+                                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 14, color }}>
+                                                        {pd.hasData ? formatGrade(pd.percent, passPct, system) : '—'}
+                                                    </Text>
+                                                </View>
+                                                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: theme.textTertiary }}>
+                                                    {formatWeight(effectiveWeight(per.weight, pSummary))}%
+                                                </Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </ScrollView>
+
+                            {renderPeriod()}
+                        </>
+                    )}
                 </View>
             </ScrollView>
+
+            {/* ══ Sheets ════════════════════════════════════════════════════ */}
+            <ScoreSheet
+                visible={Boolean(scoreTarget && scoreProps)}
+                onClose={() => setScoreTarget(null)}
+                mode={scoreTarget?.mode ?? 'create'}
+                context={scoreProps?.context ?? ''}
+                initial={scoreProps?.initial ?? {}}
+                resetKey={scoreResetKey}
+                autoWeight={scoreProps?.autoWeight ?? 0}
+                weightScope={scoreProps?.weightScope ?? ''}
+                partCount={scoreProps?.partCount ?? 0}
+                canAddPart={scoreProps?.canAddPart ?? false}
+                onSave={handleScoreSave}
+                onDelete={handleScoreDelete}
+            />
+
+            <GroupSheet
+                visible={Boolean(groupTarget && groupProps)}
+                onClose={() => setGroupTarget(null)}
+                kind={groupTarget?.kind ?? 'period'}
+                mode={groupTarget?.mode ?? 'create'}
+                initial={groupProps?.initial ?? {}}
+                parentName={groupProps?.parentName ?? ''}
+                autoWeight={groupProps?.autoWeight ?? 0}
+                onSave={handleGroupSave}
+                onDelete={handleGroupDelete}
+            />
+
+            <SubjectSheet
+                visible={subjectSheetOpen}
+                onClose={() => setSubjectSheetOpen(false)}
+                initial={subjectDraft}
+                onSave={(d) => {
+                    const next = JSON.parse(JSON.stringify(subject));
+                    next.name = d.name;
+                    next.units = d.units;
+                    next.passingPercent = d.passingPercent;
+                    next.targetValue = d.targetValue;
+                    onChange(next);
+                    setSubjectSheetOpen(false);
+                }}
+            />
 
             {/* ══ FinSights ═════════════════════════════════════════════════ */}
             <Modal visible={finOpen} animationType="fade" transparent onRequestClose={() => setFinOpen(false)}>
@@ -1054,8 +1057,8 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                             {res.hasData ? (
                                 <>
                                     <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-                                        <Text style={{ fontSize: 20, marginRight: 11 }}>{targetIcon === 'checkmark-circle' ? '🎉' : '🎯'}</Text>
-                                        <Text style={{ flex: 1, fontFamily: 'Nunito_600SemiBold', fontSize: 14, color: theme.textSecondary, lineHeight: 20 }}>{targetMsg}</Text>
+                                        <Text style={{ fontSize: 20, marginRight: 11 }}>{outlook.kind === 'reached' ? '🎉' : '🎯'}</Text>
+                                        <Text style={{ flex: 1, fontFamily: 'Nunito_600SemiBold', fontSize: 14, color: theme.textSecondary, lineHeight: 20 }}>{outlook.message}</Text>
                                     </View>
                                     <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
                                         <Text style={{ fontSize: 20, marginRight: 11 }}>💡</Text>
@@ -1077,125 +1080,98 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                 </View>
             </Modal>
 
-            {/* ══ AutoConfig ════════════════════════════════════════════════ */}
-            <Modal visible={autoConfigOpen} animationType="fade" transparent onRequestClose={() => setAutoConfigOpen(false)}>
-                <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 20, backgroundColor: theme.overlay }}>
-                    <Card padding={0} radius={Radius['3xl']} style={{ overflow: 'hidden' }}>
-                        <View style={{
-                            flexDirection: 'row', alignItems: 'center', padding: 16,
-                            backgroundColor: tints.tools.fill,
-                            borderBottomWidth: 1, borderBottomColor: tints.tools.line,
-                        }}>
-                            <View style={{
-                                width: 44, height: 44, borderRadius: 15, marginRight: 12,
-                                alignItems: 'center', justifyContent: 'center',
-                                backgroundColor: theme.surface, borderWidth: 1, borderColor: tints.tools.line,
-                            }}>
-                                <Ionicons name="color-wand" size={22} color={tints.tools.ink} />
-                            </View>
-                            <View style={{ flex: 1, marginRight: 8 }}>
-                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 20, color: theme.text, letterSpacing: -0.4 }}>AutoConfig</Text>
-                                <Text numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12.5, color: theme.textSecondary }}>
-                                    Paste your syllabus below or let Fin scan it
-                                </Text>
-                            </View>
+            {/* ══ AutoConfig ════════════════════════════════════════════════
+                A sheet now, not a centred card: it has a text field, and the
+                centred modal had no keyboard handling at all. */}
+            <KeyboardSheet
+                visible={autoConfigOpen}
+                onClose={() => setAutoConfigOpen(false)}
+                title="AutoConfig"
+                subtitle="Paste your syllabus or let Fin scan a photo of it. This replaces the current setup."
+                icon="color-wand"
+                tint={tints.tools}
+                footer={
+                    <AnimatedPressable
+                        onPress={handleAutoConfig}
+                        disabled={isProcessing}
+                        accessibilityRole="button"
+                        accessibilityLabel={isProcessing ? 'Analyzing' : 'Auto-configure this subject'}
+                        style={{
+                            flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                            height: 50, borderRadius: Radius.lg,
+                            backgroundColor: isProcessing ? theme.surfaceSecondary : theme.primary,
+                            borderBottomWidth: 3,
+                            borderBottomColor: isProcessing ? theme.cardBorder : theme.primaryDark,
+                        }}
+                    >
+                        {isProcessing ? (
+                            <ActivityIndicator color={theme.textSecondary} style={{ marginRight: 8 }} />
+                        ) : (
+                            <Ionicons name="sparkles" size={17} color="#ffffff" style={{ marginRight: 8 }} />
+                        )}
+                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15.5, color: isProcessing ? theme.textSecondary : '#ffffff' }}>
+                            {isProcessing ? 'Analyzing…' : 'Auto-configure'}
+                        </Text>
+                    </AnimatedPressable>
+                }
+            >
+                <TouchableOpacity
+                    onPress={pickImage}
+                    activeOpacity={0.75}
+                    accessibilityRole="button"
+                    accessibilityLabel={autoConfigImage ? 'Change syllabus image' : 'Add a syllabus image'}
+                    style={{
+                        height: 120, borderRadius: Radius.lg, marginBottom: 12,
+                        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+                        borderWidth: 1, borderStyle: autoConfigImage ? 'solid' : 'dashed',
+                        borderColor: autoConfigImage ? theme.cardBorder : (isDark ? '#3d4468' : '#cbd5e1'),
+                        backgroundColor: theme.inputBg,
+                    }}
+                >
+                    {autoConfigImage ? (
+                        <View style={{ width: '100%', height: '100%' }}>
+                            <Image source={{ uri: autoConfigImage }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
                             <TouchableOpacity
-                                onPress={() => setAutoConfigOpen(false)}
-                                activeOpacity={0.7}
+                                onPress={() => { setAutoConfigImage(null); setAutoConfigBase64(null); }}
                                 accessibilityRole="button"
-                                accessibilityLabel="Close"
-                                style={{ width: 32, height: 32, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surface }}
-                            >
-                                <Ionicons name="close" size={17} color={theme.textSecondary} />
-                            </TouchableOpacity>
-                        </View>
-
-                        <View style={{ padding: 16 }}>
-                            <View style={{ flexDirection: 'row', gap: 12, marginBottom: 14 }}>
-                                <TouchableOpacity
-                                    onPress={pickImage}
-                                    activeOpacity={0.75}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={autoConfigImage ? 'Change syllabus image' : 'Add a syllabus image'}
-                                    style={{
-                                        flex: 1, height: 104, borderRadius: Radius.lg,
-                                        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-                                        borderWidth: 1, borderStyle: autoConfigImage ? 'solid' : 'dashed',
-                                        borderColor: autoConfigImage ? theme.cardBorder : (isDark ? '#3d4468' : '#cbd5e1'),
-                                        backgroundColor: theme.inputBg,
-                                    }}
-                                >
-                                    {autoConfigImage ? (
-                                        <View style={{ width: '100%', height: '100%' }}>
-                                            <Image source={{ uri: autoConfigImage }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
-                                            <TouchableOpacity
-                                                onPress={() => { setAutoConfigImage(null); setAutoConfigBase64(null); }}
-                                                accessibilityRole="button"
-                                                accessibilityLabel="Remove image"
-                                                style={{
-                                                    position: 'absolute', top: 6, right: 6,
-                                                    width: 26, height: 26, borderRadius: 13,
-                                                    alignItems: 'center', justifyContent: 'center',
-                                                    backgroundColor: 'rgba(15,23,42,0.75)',
-                                                }}
-                                            >
-                                                <Ionicons name="close" size={15} color="#ffffff" />
-                                            </TouchableOpacity>
-                                        </View>
-                                    ) : (
-                                        <>
-                                            <Ionicons name="image-outline" size={26} color={theme.textTertiary} />
-                                            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: theme.textSecondary, marginTop: 5 }}>
-                                                Add image
-                                            </Text>
-                                        </>
-                                    )}
-                                </TouchableOpacity>
-
-                                <TextInput
-                                    multiline
-                                    value={syllabusText}
-                                    onChangeText={setSyllabusText}
-                                    placeholder="Or type instructions…"
-                                    placeholderTextColor={theme.textTertiary}
-                                    accessibilityLabel="Syllabus text"
-                                    style={{
-                                        flex: 1, height: 104, padding: 12, borderRadius: Radius.lg,
-                                        textAlignVertical: 'top',
-                                        fontFamily: 'Nunito_400Regular', fontSize: 13,
-                                        color: theme.text,
-                                        backgroundColor: theme.inputBg,
-                                        borderWidth: 1, borderColor: theme.inputBorder,
-                                    }}
-                                />
-                            </View>
-
-                            <AnimatedPressable
-                                onPress={handleAutoConfig}
-                                disabled={isProcessing}
-                                accessibilityRole="button"
-                                accessibilityLabel={isProcessing ? 'Analyzing' : 'Auto-configure this subject'}
+                                accessibilityLabel="Remove image"
                                 style={{
-                                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                                    paddingVertical: 14, borderRadius: Radius.lg,
-                                    backgroundColor: isProcessing ? theme.surfaceSecondary : theme.primary,
-                                    borderBottomWidth: 3,
-                                    borderBottomColor: isProcessing ? theme.cardBorder : theme.primaryDark,
+                                    position: 'absolute', top: 6, right: 6,
+                                    width: 26, height: 26, borderRadius: 13,
+                                    alignItems: 'center', justifyContent: 'center',
+                                    backgroundColor: 'rgba(15,23,42,0.75)',
                                 }}
                             >
-                                {isProcessing ? (
-                                    <ActivityIndicator color={theme.textSecondary} style={{ marginRight: 8 }} />
-                                ) : (
-                                    <Ionicons name="sparkles" size={17} color="#ffffff" style={{ marginRight: 8 }} />
-                                )}
-                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15.5, color: isProcessing ? theme.textSecondary : '#ffffff' }}>
-                                    {isProcessing ? 'Analyzing…' : 'Auto-configure'}
-                                </Text>
-                            </AnimatedPressable>
+                                <Ionicons name="close" size={15} color="#ffffff" />
+                            </TouchableOpacity>
                         </View>
-                    </Card>
-                </View>
-            </Modal>
+                    ) : (
+                        <>
+                            <Ionicons name="image-outline" size={26} color={theme.textTertiary} />
+                            <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.textSecondary, marginTop: 5 }}>
+                                Add a photo of the syllabus
+                            </Text>
+                        </>
+                    )}
+                </TouchableOpacity>
+
+                <TextInput
+                    multiline
+                    value={syllabusText}
+                    onChangeText={setSyllabusText}
+                    placeholder="Or type it: Prelim 30% (Quizzes 40%, Exam 60%)…"
+                    placeholderTextColor={theme.textTertiary}
+                    accessibilityLabel="Syllabus text"
+                    style={{
+                        minHeight: 110, padding: 12, borderRadius: Radius.lg,
+                        textAlignVertical: 'top',
+                        fontFamily: 'Nunito_400Regular', fontSize: 13.5,
+                        color: theme.text,
+                        backgroundColor: theme.inputBg,
+                        borderWidth: 1, borderColor: theme.inputBorder,
+                    }}
+                />
+            </KeyboardSheet>
         </View>
     );
 }

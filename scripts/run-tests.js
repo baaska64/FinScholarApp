@@ -176,6 +176,9 @@ async function run() {
     const { runGradeTierTests } = await import('../__tests__/grade-tiers.test.js');
     runGradeTierTests(harness.describe, harness.test);
 
+    const { runGradeEntryTests } = await import('../__tests__/grade-entry.test.js');
+    runGradeEntryTests(harness.describe, harness.test);
+
     const { runQuickEditTests } = await import('../__tests__/quick-edit.test.js');
     runQuickEditTests(harness.describe, harness.test);
 

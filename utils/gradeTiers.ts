@@ -43,3 +43,18 @@ export function getGradeTierColor(percent: number, isDark: boolean, hasData: boo
 export function getGradeTierLabel(percent: number, hasData: boolean = true): string {
     return getGradeTier(percent, hasData).label;
 }
+
+function withAlpha(hex: string, alpha: number): string {
+    const h = hex.replace('#', '');
+    const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+/**
+ * A tier's colour as a panel wash plus its inner border — for the grade tiles
+ * that carry the tier as a surface rather than as text colour alone.
+ */
+export function getGradeTierWash(percent: number, isDark: boolean, hasData: boolean = true): { fill: string; line: string } {
+    const c = getGradeTierColor(percent, isDark, hasData);
+    return { fill: withAlpha(c, isDark ? 0.16 : 0.1), line: withAlpha(c, isDark ? 0.34 : 0.26) };
+}
