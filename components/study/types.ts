@@ -93,11 +93,11 @@ export interface Flashcard {
   /** Hidden from queues until this study day begins. */
   buriedUntil?: string;
   /**
-   * Why it is buried. 'sibling' when a card of the same note was answered, so
-   * turning sibling burying off can release exactly those and not a card the
-   * student buried by hand.
+   * Why it is buried. 'sibling' when a card of the same note was answered,
+   * 'manual' from the review menu, so releasing sibling holds never undoes a
+   * burial the student chose.
    */
-  buriedReason?: 'sibling';
+  buriedReason?: 'sibling' | 'manual';
   flagged?: boolean;
   /** Forgotten `LEECH_THRESHOLD` times — worth rewriting. */
   leech?: boolean;
@@ -161,9 +161,9 @@ export interface SRSettings {
   maximumInterval?: number;
   /**
    * Hold a note's other cards back until tomorrow once one is answered (Anki's
-   * burying). On by default: a cloze sibling prints the other blanks as plain
-   * text, so seeing two the same day is a weak test. Off suits image and
-   * many-blank notes, which would otherwise take a day per card to introduce.
+   * burying). Off by default, as in current Anki: with it on, a 3-blank cloze
+   * or a 10-box image takes days to introduce, which reads as cards going
+   * missing. `buildQueue` spreads siblings apart instead.
    */
   burySiblings?: boolean;
   studyTimeHour: number;

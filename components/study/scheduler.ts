@@ -49,7 +49,7 @@ export const DEFAULT_SR_SETTINGS: SRSettings = {
   newPerDay: 20,
   reviewsPerDay: 200,
   maximumInterval: 36500,
-  burySiblings: true,
+  burySiblings: false,
   studyTimeHour: 8,
   studyTimeMinute: 0,
 };
@@ -87,7 +87,7 @@ export function resolveSettings(sr?: Partial<SRSettings> | null): Required<SRSet
     newPerDay: Math.max(0, Math.floor(finite(s.newPerDay, 20))),
     reviewsPerDay: Math.max(0, Math.floor(finite(s.reviewsPerDay, 200))),
     maximumInterval: Math.max(1, Math.floor(finite(s.maximumInterval, 36500))),
-    burySiblings: s.burySiblings !== false,
+    burySiblings: s.burySiblings === true,
     studyTimeHour: finite(s.studyTimeHour, 8),
     studyTimeMinute: finite(s.studyTimeMinute, 0),
   };
@@ -614,12 +614,13 @@ export function buildQueue(
       const note = noteKey(c);
       if (seenNotes.has(note)) continue;
       seenNotes.add(note);
-      news.push({ ref: { deckId: d.id, cardId: c.id }, note });
+      news.push({ ref: { deckId: d.id, cardId: c.id }, note: noteIdOf(c) });
       added++;
     }
   }
 
   reviews.sort((a, b) => a.due - b.due);
+  if (!bury) spreadSiblings(news);
   const out: QueueRef[] = [];
   if (news.length === 0) return reviews.map((r) => r.ref);
   if (reviews.length === 0) return news.map((n) => n.ref);
@@ -632,6 +633,25 @@ export function buildQueue(
   });
   while (ni < news.length) out.push(news[ni++].ref);
   return out;
+}
+
+/**
+ * With burying off, a note's cards would otherwise sit back to back — c2
+ * straight after c1 reads the answer off the previous card. Round-robin by
+ * note: every note's first card, then every note's second, keeping the
+ * gathered order within each pass. A deck of one note is unchanged.
+ */
+function spreadSiblings(news: { ref: QueueRef; note: string }[]): void {
+  const groups = new Map<string, { ref: QueueRef; note: string }[]>();
+  for (const n of news) {
+    const g = groups.get(n.note);
+    if (g) g.push(n);
+    else groups.set(n.note, [n]);
+  }
+  const lists = [...groups.values()];
+  const out: { ref: QueueRef; note: string }[] = [];
+  for (let round = 0; out.length < news.length; round++) for (const g of lists) if (g[round]) out.push(g[round]);
+  news.splice(0, news.length, ...out);
 }
 
 function shuffle<T>(arr: T[], seed: string): T[] {
@@ -765,14 +785,15 @@ export function burySiblings(cards: Flashcard[], answered: Flashcard, now: numbe
  * Releases cards held back only because a sibling was answered — for when a
  * student turns sibling burying off and expects the rest of the note today.
  * Cards buried before the reason was recorded count as sibling burials when
- * their note has other cards; a card buried by hand keeps its burial.
+ * their note has other cards; a card buried by hand ('manual') keeps its burial.
  */
 export function unburySiblings(cards: Flashcard[]): Flashcard[] {
   const perNote = new Map<string, number>();
   for (const c of cards || []) if (c) perNote.set(noteIdOf(c), (perNote.get(noteIdOf(c)) || 0) + 1);
   return (cards || []).map((c) => {
     if (!c || !c.buriedUntil) return c;
-    const sibling = c.buriedReason === 'sibling' || (!c.buriedReason && (perNote.get(noteIdOf(c)) || 0) > 1);
+    if (c.buriedReason === 'manual') return c;
+    const sibling = c.buriedReason === 'sibling' || (perNote.get(noteIdOf(c)) || 0) > 1;
     if (!sibling) return c;
     const { buriedUntil: _b, buriedReason: _r, ...rest } = c;
     return rest as Flashcard;

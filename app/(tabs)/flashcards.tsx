@@ -337,7 +337,25 @@ export default function FlashcardsScreen() {
       const raw = await AsyncStorage.getItem('grade_ledger_v2_data');
       if (raw) {
         const ledger = JSON.parse(raw);
-        const list: FlashcardDeck[] = Array.isArray(ledger.flashcards?.decks) ? ledger.flashcards.decks : [];
+        let list: FlashcardDeck[] = Array.isArray(ledger.flashcards?.decks) ? ledger.flashcards.decks : [];
+        // Sibling burying used to be on by default, so a ledger can still
+        // hold c2/c3 back until tomorrow. With it off, free those now; the
+        // write's own reload finds nothing left to release, so it settles.
+        if (!resolveSettings(ledger.flashcards?.settings).burySiblings) {
+          let released = false;
+          const next = list.map((d) => {
+            if (!Array.isArray(d?.cards) || !d.cards.some((c) => c?.buriedUntil)) return d;
+            const cards = unburySiblings(d.cards);
+            if (cards.every((c, i) => c === d.cards[i])) return d;
+            released = true;
+            return { ...d, cards };
+          });
+          if (released) {
+            list = next;
+            ledger.flashcards.decks = next;
+            SyncService.pushLocalChanges(ledger).catch((e: any) => console.error('Failed to release buried siblings:', e));
+          }
+        }
         decksRef.current = list;
         setDecks(list);
         if (ledger.flashcards?.settings) setSrSettings({ ...DEFAULT_SR_SETTINGS, ...ledger.flashcards.settings });
@@ -3545,9 +3563,8 @@ export default function FlashcardsScreen() {
           onPress: () => {
             close();
             patchCurrent((c) => {
-              // A hand burial: no reason, so turning sibling burying off leaves it be.
-              const { buriedReason: _r, ...rest } = c;
-              return { ...rest, buriedUntil: studyDayKey(studyDayStart(Date.now(), 1)) };
+              // Tagged so releasing sibling holds leaves a chosen burial be.
+              return { ...c, buriedUntil: studyDayKey(studyDayStart(Date.now(), 1)), buriedReason: 'manual' as const };
             }, true);
           },
         })}

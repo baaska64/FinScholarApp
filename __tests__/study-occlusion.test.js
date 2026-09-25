@@ -4,6 +4,7 @@ import {
   hitTest, maskAt, nextGroup, groupMasks, ungroupMasks, compactGroups, validateOcclusion, isLocateOrd, groupOfOrd,
 } from '../components/study/occlusion.ts';
 import { buildNoteCards, cardFaces, cardQA, validateNote, notePreview, groupNotes } from '../components/study/notes.ts';
+import { buildQueue, deckDueCounts, DEFAULT_SR_SETTINGS } from '../components/study/scheduler.ts';
 
 const mask = (id, group, extra = {}) => ({ id, shape: 'rect', x: 0.1, y: 0.1, w: 0.2, h: 0.2, group, ...extra });
 const data = (masks, extra = {}) => ({ imageId: 'img1', width: 800, height: 600, mode: 'hideAll', masks, ...extra });
@@ -12,6 +13,15 @@ const makeId = () => `id${++n}`;
 
 export function runStudyOcclusionTests(describe, test) {
   describe('Image Occlusion Suite 1: Cards from masks', () => {
+    test('IO1.0 every box and every find-it card is queued in one session', () => {
+      const d = data([mask('a', 1, { label: 'Aorta' }), mask('b', 2, { label: 'Atrium' }), mask('c', 3)], { locate: true });
+      const cards = buildNoteCards({ kind: 'occlusion', front: 'Heart', back: '', occlusion: d }, [], makeId, 0);
+      assert.strictEqual(cards.length, 5, 'three boxes plus two named find-it cards');
+      const deck = { id: 'dk', name: 'D', subject: '', color: '#000', createdAt: 0, cards };
+      assert.strictEqual(deckDueCounts(deck, DEFAULT_SR_SETTINGS, 1000).new, 5);
+      assert.strictEqual(buildQueue([deck], null, DEFAULT_SR_SETTINGS, 1000).length, 5);
+    });
+
     test('IO1.1 One card per group, grouped masks share a card', () => {
       const d = data([mask('a', 1), mask('b', 2), mask('c', 2)]);
       assert.deepStrictEqual(occlusionOrds(d), [1, 2]);

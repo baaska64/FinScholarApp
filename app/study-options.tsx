@@ -40,7 +40,7 @@ export default function StudyOptionsScreen() {
     learningSteps: '1 10',
     relearningSteps: '10',
     maximumInterval: '36500',
-    burySiblings: true,
+    burySiblings: false,
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -270,7 +270,7 @@ export default function StudyOptionsScreen() {
             <View style={{ flex: 1, marginRight: 12 }}>
               <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14.5, color: theme.text }}>Space out cards from the same note</Text>
               <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textTertiary, marginTop: 1, lineHeight: 16 }}>
-                A cloze with c1, c2 and c3 makes three cards. After you answer one, the others wait until the next day so one answer doesn't give away the next.
+                A cloze with c1, c2 and c3 makes three cards. Off, you're quizzed on all three today. On, after you answer one the others wait until the next day, so one answer can't give away the next.
               </Text>
             </View>
             <View
@@ -284,11 +284,11 @@ export default function StudyOptionsScreen() {
               <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#ffffff' }} />
             </View>
           </TouchableOpacity>
-          {!form.burySiblings && (
+          {form.burySiblings && (
             <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 12 }}>
               <Ionicons name="information-circle-outline" size={15} color={theme.textTertiary} style={{ marginTop: 1 }} />
               <Text style={{ flex: 1, fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, lineHeight: 16 }}>
-                All of a note's cards can come up in the same session. Cards held for tomorrow are released when you save.
+                A note with many cards, like an image with 10 boxes, will take several days to see in full.
               </Text>
             </View>
           )}
