@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { analyzeImport, parseImport, parseCsvLine } from '../components/study/utils.ts';
+import { analyzeImport, parseImport, parseCsvLine, splitClozeLine } from '../components/study/utils.ts';
 
 export function runStudyImportTests(describe, test) {
   describe('Study Import Suite 1: What becomes a card', () => {
@@ -77,6 +77,35 @@ export function runStudyImportTests(describe, test) {
         assert.strictEqual(a.notes.length, 0);
         assert.strictEqual(a.skipped.length, 0);
       }
+    });
+  });
+
+  describe('Study Import Suite 3: Cloze with Extra', () => {
+    test('SI3.1 Tab, | and ; after the last blank start the Extra', () => {
+      assert.deepStrictEqual(splitClozeLine('The {{c1::heart}} has four chambers\tPumps ~5 L/min', 'auto'), { text: 'The {{c1::heart}} has four chambers', extra: 'Pumps ~5 L/min' });
+      assert.deepStrictEqual(splitClozeLine('The {{c1::heart}} pumps | Located in the chest', 'auto').extra, 'Located in the chest');
+      assert.deepStrictEqual(splitClozeLine('The {{c1::heart}} pumps; see ch. 3', 'semicolon').extra, 'see ch. 3');
+    });
+
+    test('SI3.2 A separator inside the sentence before the blanks is left alone', () => {
+      const r = splitClozeLine('Organs; the {{c1::heart}} pumps | Extra', 'auto');
+      assert.deepStrictEqual(r, { text: 'Organs; the {{c1::heart}} pumps', extra: 'Extra' });
+    });
+
+    test('SI3.3 A comma splits only a double-quoted sentence', () => {
+      assert.deepStrictEqual(splitClozeLine('"The {{c1::heart}}, not the lungs, pumps blood", Extra here', 'auto'), { text: 'The {{c1::heart}}, not the lungs, pumps blood', extra: 'Extra here' });
+      assert.deepStrictEqual(splitClozeLine('The {{c1::heart}} has four chambers, located in the chest', 'auto'), { text: 'The {{c1::heart}} has four chambers, located in the chest', extra: '' }, 'an unquoted comma line stays one sentence');
+      assert.deepStrictEqual(splitClozeLine('"The {{c1::heart}}, beats", more', 'comma').extra, 'more');
+    });
+
+    test('SI3.4 analyzeImport puts the Extra in the cloze note back, and dedupes on it', () => {
+      const a = analyzeImport('The {{c1::heart}} pumps | Four chambers\nThe {{c1::heart}} pumps | Four chambers\nThe {{c1::lung}} breathes', 'auto');
+      assert.deepStrictEqual(a.notes.map((n) => [n.kind, n.front, n.back]), [['cloze', 'The {{c1::heart}} pumps', 'Four chambers'], ['cloze', 'The {{c1::lung}} breathes', '']]);
+      assert.strictEqual(a.duplicates, 1);
+    });
+
+    test('SI3.5 A forced separator that is not on the line leaves the sentence whole', () => {
+      assert.deepStrictEqual(splitClozeLine('The {{c1::heart}} pumps | x', 'tab'), { text: 'The {{c1::heart}} pumps | x', extra: '' });
     });
   });
 }

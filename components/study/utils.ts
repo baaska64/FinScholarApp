@@ -632,6 +632,40 @@ export function parseImportNotes(
 
 export type ImportSeparator = 'comma' | 'pipe' | 'tab' | 'semicolon' | 'auto';
 
+const SEPARATOR_CHARS: Record<Exclude<ImportSeparator, 'auto'>, string> = { comma: ',', semicolon: ';', pipe: '|', tab: '\t' };
+
+/**
+ * A cloze line's text and its Extra (shown with the answer). Cloze sentences
+ * are full of commas, so splitting on the first comma would cut them in half:
+ *   - tab, | and ; start the Extra at the first one after the last `}}`, so a
+ *     separator inside the sentence before the blanks is left alone. Tab is
+ *     what Anki's plain-text export and a two-column spreadsheet paste give.
+ *   - a comma only splits when the sentence is double-quoted, the way a
+ *     spreadsheet's CSV export writes a cell. An unquoted comma line stays
+ *     one sentence, exactly as before Extra was supported.
+ */
+export function splitClozeLine(line: string, separator: ImportSeparator = 'auto'): { text: string; extra: string } {
+  const whole = { text: line.trim(), extra: '' };
+  const lastClose = line.lastIndexOf('}}');
+  const order: Exclude<ImportSeparator, 'auto'>[] = separator === 'auto' ? ['tab', 'pipe', 'semicolon', 'comma'] : [separator];
+  for (const sep of order) {
+    if (sep === 'comma') {
+      if (!line.trim().startsWith('"')) continue;
+      const parsed = parseCsvLine(line.trim());
+      if (parsed && /\{\{c\d+::/.test(parsed[0])) return { text: parsed[0].trim(), extra: parsed[1].trim() };
+      continue;
+    }
+    const ch = SEPARATOR_CHARS[sep];
+    const at = lastClose >= 0 ? line.indexOf(ch, lastClose + 2) : -1;
+    if (at >= 0) {
+      const text = line.slice(0, at).trim();
+      const extra = line.slice(at + 1).trim();
+      if (text) return { text, extra };
+    }
+  }
+  return whole;
+}
+
 export interface ImportAnalysis {
   notes: { kind: 'basic' | 'reversed' | 'typein' | 'cloze'; front: string; back: string }[];
   /** Cards the notes will make: two per Both ways note, one per distinct cloze number. */
@@ -644,7 +678,6 @@ export interface ImportAnalysis {
   headerSkipped: boolean;
 }
 
-const SEPARATOR_CHARS: Record<Exclude<ImportSeparator, 'auto'>, string> = { comma: ',', semicolon: ';', pipe: '|', tab: '\t' };
 const HEADER_FRONT = /^(front|question|term|word|q|prompt)$/i;
 const HEADER_BACK = /^(back|answer|definition|meaning|a|response)$/i;
 const importKey = (front: string, back: string) =>
@@ -676,7 +709,8 @@ export function analyzeImport(
 
     let note: ImportAnalysis['notes'][number] | null = null;
     if (/\{\{c\d+::/.test(line) && clozeNumbers(line).length > 0) {
-      note = { kind: 'cloze', front: line, back: '' };
+      const { text, extra } = splitClozeLine(line, separator);
+      note = { kind: 'cloze', front: text, back: extra };
     } else {
       const parsed = parseImport(line, separator)[0];
       if (parsed) {

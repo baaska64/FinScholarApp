@@ -3053,7 +3053,8 @@ export default function FlashcardsScreen() {
             <View style={{ paddingHorizontal: 12, paddingBottom: 12, gap: 10, backgroundColor: theme.surface }}>
               {[
                 { icon: 'grid-outline' as const, title: 'From Excel or Google Sheets', body: 'Put fronts in column A and backs in column B, select both columns, copy and paste here. Or save as .csv and upload it. A "Front, Back" header row is ignored.' },
-                { icon: 'eye-off-outline' as const, title: 'Fill-in-the-blank (cloze)', body: 'Wrap the hidden part like {{c1::this}}. "The {{c1::heart}} has four chambers" becomes a card that hides "heart". No comma needed.' },
+                { icon: 'eye-off-outline' as const, title: 'Fill-in-the-blank (cloze)', body: 'Wrap the hidden part like {{c1::this}}. "The {{c1::heart}} has four chambers" becomes a card that hides "heart". Use {{c1::…}} and {{c2::…}} for two separate cards. No comma needed.' },
+                { icon: 'information-circle-outline' as const, title: 'Cloze with extra details', body: 'To show extra info only with the answer, put it after the sentence with a | (or a tab or ;):\nThe {{c1::heart}} has four chambers | Pumps about 5 L of blood a minute\nFrom a spreadsheet: sentence in column A, extra in column B. Using commas? Quote the sentence: "The {{c1::heart}}, not the lungs, pumps blood", Extra here' },
                 { icon: 'code-working-outline' as const, title: 'A comma inside the front', body: 'Put the front in double quotes: "Hello, world", a greeting. Commas in the back are fine as they are.' },
                 { icon: 'swap-horizontal-outline' as const, title: 'Semicolons, tabs or | instead', body: 'Leave the separator on Auto and each line is read with whichever one it uses. From Anki, export as "Notes in Plain Text".' },
                 { icon: 'chatbox-ellipses-outline' as const, title: 'Lines starting with # or //', body: 'Treated as notes to yourself and skipped.' },
@@ -3131,7 +3132,7 @@ export default function FlashcardsScreen() {
           })}
         </View>
         <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 6, marginBottom: 16 }}>
-          {kindInfo?.desc}. Lines with {'{{c1::…}}'} always become fill-in-the-blank cards.
+          {kindInfo?.desc}. Lines with {'{{c1::…}}'} always become fill-in-the-blank cards, with anything after a | kept as extra info for the answer.
         </Text>
 
         {/* ══ 3 · Separator ══ */}
@@ -3209,7 +3210,14 @@ export default function FlashcardsScreen() {
             {analysis.notes.slice(0, 5).map((n, idx) => (
               <Card key={idx} variant="sunken" padding={11} radius={Radius.md} style={{ marginBottom: 6 }}>
                 {n.kind === 'cloze' ? (
-                  <FaceText segments={clozeOverview(n.front)} color={deck?.color || theme.primary} isDark={isDark} numberOfLines={2} style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.text }} />
+                  <>
+                    <FaceText segments={clozeOverview(n.front)} color={deck?.color || theme.primary} isDark={isDark} numberOfLines={2} style={{ fontFamily: 'Nunito_700Bold', fontSize: 12.5, color: theme.text }} />
+                    {n.back ? (
+                      <Text numberOfLines={2} style={{ fontFamily: 'Nunito_400Regular', fontSize: 12, color: theme.textSecondary, marginTop: 5 }}>
+                        <Text style={{ ...microLabel, fontSize: 8.5 }}>Extra  </Text>{n.back}
+                      </Text>
+                    ) : null}
+                  </>
                 ) : (
                   <View style={{ flexDirection: 'row', gap: 10 }}>
                     <View style={{ flex: 1 }}>
