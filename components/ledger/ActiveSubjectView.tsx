@@ -999,24 +999,11 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
 
                     <View style={{ flex: 1 }} />
 
-                    <TouchableOpacity
-                        onPress={() => setFinOpen(true)}
-                        activeOpacity={0.75}
-                        accessibilityRole="button"
-                        accessibilityLabel="FinSights — what Fin noticed about this subject"
-                        style={{
-                            width: 36, height: 36, borderRadius: 18, overflow: 'hidden',
-                            alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: brand.markRing,
-                        }}
-                    >
-                        <Image
-                            source={require('../../assets/images/FinSights.png')}
-                            style={{ width: 42, height: 42, transform: [{ translateY: 3 }] }}
-                            resizeMode="cover"
-                        />
-                    </TouchableOpacity>
-
+                    {/* No FinSights button here: Fin stands in the outlook card
+                        just below and opens it, and a second, smaller Fin in a
+                        disc up here read as a sticker. The outlook only shows
+                        once there are scores, which is also when FinSights has
+                        anything to say. */}
                     <AnimatedPressable
                         onPress={() => setAutoConfigOpen(true)}
                         accessibilityRole="button"
