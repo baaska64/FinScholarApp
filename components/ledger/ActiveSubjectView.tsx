@@ -538,8 +538,6 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
         const aimAt = outlook.requiredFor === 'pass' ? passPct : outlook.target;
         const needed = outlook.requiredAverage !== null ? Math.max(0, Math.min(open, aimAt - earned)) : 0;
         const earnedColor = getGradeTierColor(res.percent, isDark, res.hasData);
-        const spareColor = isDark ? 'rgba(255,255,255,0.08)' : theme.surfaceSecondary;
-        const missedColor = isDark ? 'rgba(255,255,255,0.22)' : '#cfd3e3';
 
         const subtitle = outlook.requiredAverage !== null
             ? `${outlook.requiredAverage > 100 ? 'Over 100%' : `${outlook.requiredAverage.toFixed(1)}%`} average on the ${outlook.remaining.length} score${outlook.remaining.length !== 1 ? 's' : ''} left ${outlook.requiredFor === 'pass' ? 'just to pass' : `to reach ${formatWeight(outlook.target)}%`}.`
@@ -548,8 +546,8 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
         const legend = [
             { key: 'earned', color: earnedColor, label: 'earned', value: earned },
             ...(needed > 0.05 ? [{ key: 'needed', color: tint.solid, label: 'needed', value: needed }] : []),
-            ...(open - needed > 0.05 ? [{ key: 'open', color: spareColor, label: needed > 0.05 ? 'spare' : 'still open', value: open - needed, ring: true }] : []),
-            ...(missed > 0.05 ? [{ key: 'missed', color: missedColor, label: 'missed', value: missed }] : []),
+            ...(open - needed > 0.05 ? [{ key: 'open', color: '', label: needed > 0.05 ? 'spare' : 'still open', value: open - needed }] : []),
+            ...(missed > 0.05 ? [{ key: 'missed', color: '', label: 'missed', value: missed }] : []),
         ];
 
         const rows = outlook.remaining
@@ -557,20 +555,39 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
             .filter((x) => x.loc);
         const shown = showAllRemaining ? rows : rows.slice(0, 3);
 
+        // On the tinted zone the empty track has to be lighter than the zone in
+        // light mode and darker in dark mode, or the spare slice disappears.
+        const zoneTrack = isDark ? 'rgba(0,0,0,0.28)' : 'rgba(255,255,255,0.8)';
+        const zoneMissed = isDark ? 'rgba(255,255,255,0.2)' : 'rgba(15,23,42,0.16)';
+
         return (
             <Card padding={0} radius={Radius['2xl']} style={{ marginBottom: 20, overflow: 'hidden' }}>
-                <View style={{ padding: 14 }}>
+                {/* ── Fin's read, in the outcome's tint ── */}
+                <View style={{ padding: 14, backgroundColor: tint.fill, borderBottomWidth: 1, borderBottomColor: tint.line }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <View style={{
-                            width: 38, height: 38, borderRadius: 12, marginRight: 11,
-                            alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: tint.fill, borderWidth: 1, borderColor: tint.line,
-                        }}>
-                            <Ionicons name={style.icon} size={19} color={tint.ink} />
-                        </View>
+                        <TouchableOpacity
+                            onPress={() => setFinOpen(true)}
+                            activeOpacity={0.8}
+                            accessibilityRole="button"
+                            accessibilityLabel="Open FinSights"
+                            style={{
+                                width: 46, height: 46, borderRadius: 16, marginRight: 12, overflow: 'hidden',
+                                alignItems: 'center', justifyContent: 'center',
+                                backgroundColor: theme.surface, borderWidth: 1, borderColor: tint.line,
+                            }}
+                        >
+                            <Image
+                                source={require('../../assets/images/FinSights.png')}
+                                style={{ width: 54, height: 54, transform: [{ translateY: 4 }] }}
+                                resizeMode="cover"
+                            />
+                        </TouchableOpacity>
                         <View style={{ flex: 1 }}>
-                            <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 15.5, color: theme.text, letterSpacing: -0.3 }}>{style.title}</Text>
-                            <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12.5, lineHeight: 17, color: theme.textSecondary, marginTop: 1 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                                <Ionicons name={style.icon} size={15} color={tint.ink} />
+                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: theme.text, letterSpacing: -0.3 }}>{style.title}</Text>
+                            </View>
+                            <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12.5, lineHeight: 17, color: theme.textSecondary, marginTop: 2 }}>
                                 {subtitle}
                             </Text>
                         </View>
@@ -582,44 +599,46 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                         accessibilityLabel={legend.map((l) => `${l.value.toFixed(1)} points ${l.label}`).join(', ') + `. Goal ${formatWeight(outlook.target)}.`}
                         style={{ marginTop: 16 }}
                     >
-                        <View style={{ flexDirection: 'row', height: 10, borderRadius: 5, overflow: 'hidden', backgroundColor: spareColor }}>
+                        <View style={{ flexDirection: 'row', height: 12, borderRadius: 6, overflow: 'hidden', backgroundColor: zoneTrack }}>
                             <View style={{ width: `${earned}%`, backgroundColor: earnedColor }} />
-                            {needed > 0 && <View style={{ width: `${needed}%`, backgroundColor: tint.solid, opacity: 0.55 }} />}
+                            {needed > 0 && <View style={{ width: `${needed}%`, backgroundColor: tint.solid, opacity: 0.6 }} />}
                             <View style={{ flex: 1 }} />
-                            {missed > 0 && <View style={{ width: `${missed}%`, backgroundColor: missedColor }} />}
+                            {missed > 0 && <View style={{ width: `${missed}%`, backgroundColor: zoneMissed }} />}
                         </View>
                         <View style={{
-                            position: 'absolute', left: `${Math.max(0, Math.min(100, outlook.target))}%`, top: -4, height: 18,
-                            width: 2, marginLeft: -1, borderRadius: 1, backgroundColor: theme.text,
+                            position: 'absolute', left: `${Math.max(0, Math.min(100, outlook.target))}%`, top: -4, height: 20,
+                            width: 3, marginLeft: -1.5, borderRadius: 2, backgroundColor: theme.text,
                         }} />
                         <View style={{ height: 16, marginTop: 5 }}>
                             <Text numberOfLines={1} style={{
                                 position: 'absolute', left: `${Math.max(0, Math.min(100, outlook.target))}%`, width: 70, marginLeft: -35,
-                                textAlign: 'center', fontFamily: 'Nunito_800ExtraBold', fontSize: 10, color: theme.textSecondary,
+                                textAlign: 'center', fontFamily: 'Nunito_900Black', fontSize: 10, color: theme.text,
                             }}>
                                 Goal {formatWeight(outlook.target)}
                             </Text>
                         </View>
                     </View>
 
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 4, marginTop: 6 }}>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 4, marginTop: 4 }}>
                         {legend.map((l) => (
                             <View key={l.key} style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
                                 <View style={{
-                                    width: 8, height: 8, borderRadius: 4, backgroundColor: l.color,
-                                    opacity: l.key === 'needed' ? 0.55 : 1,
-                                    borderWidth: (l as any).ring ? 1 : 0, borderColor: theme.cardBorder,
+                                    width: 9, height: 9, borderRadius: 3,
+                                    backgroundColor: l.key === 'open' ? zoneTrack : l.key === 'missed' ? zoneMissed : l.color,
+                                    opacity: l.key === 'needed' ? 0.6 : 1,
+                                    borderWidth: l.key === 'open' ? 1 : 0, borderColor: tint.line,
                                 }} />
-                                <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary }}>
-                                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', color: theme.textSecondary }}>{l.value.toFixed(1)}</Text> {l.label}
+                                <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textSecondary }}>
+                                    <Text style={{ fontFamily: 'Nunito_900Black', color: theme.text }}>{l.value.toFixed(1)}</Text> {l.label}
                                 </Text>
                             </View>
                         ))}
                     </View>
                 </View>
 
-                {/* ── The scores still to come, each opening its own sheet ── */}
-                {shown.map(({ r, loc }) => (
+                {/* ── The scores still to come. Each leads with what it needs, in
+                       the same tile shape the subject list uses for a grade. ── */}
+                {shown.map(({ r, loc }, i) => (
                     <TouchableOpacity
                         key={r.id}
                         onPress={() => openEditScore(loc!.path)}
@@ -627,24 +646,35 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                         accessibilityRole="button"
                         accessibilityLabel={`${loc!.name}, ${loc!.componentName}, ${loc!.periodName}. Needs ${r.needed.toFixed(1)} out of ${r.sumMax}. Opens editor.`}
                         style={{
-                            flexDirection: 'row', alignItems: 'center', minHeight: 50,
-                            paddingHorizontal: 14, paddingVertical: 8,
-                            borderTopWidth: 1, borderTopColor: theme.cardBorder,
+                            flexDirection: 'row', alignItems: 'center', gap: 12,
+                            paddingHorizontal: 12, paddingVertical: 9,
+                            borderTopWidth: i === 0 ? 0 : 1, borderTopColor: theme.cardBorder,
                         }}
                     >
-                        <View style={{ width: 10, height: 10, borderRadius: 5, marginLeft: 4, marginRight: 12, borderWidth: 2, borderColor: theme.textTertiary }} />
-                        <View style={{ flex: 1, marginRight: 8 }}>
-                            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 13.5, color: theme.text }}>{loc!.name}</Text>
-                            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11, color: theme.textTertiary, marginTop: 1 }}>
+                        <View style={{
+                            width: 52, height: 46, borderRadius: 14,
+                            alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: tint.fill, borderWidth: 1, borderColor: tint.line,
+                        }}>
+                            <Text numberOfLines={1} adjustsFontSizeToFit style={{ maxWidth: 46, fontFamily: 'Nunito_900Black', fontSize: 15, letterSpacing: -0.4, color: tint.ink }}>
+                                {r.needed > r.sumMax ? `${r.sumMax}+` : r.needed.toFixed(r.needed >= 100 ? 0 : 1)}
+                            </Text>
+                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 8.5, letterSpacing: 0.5, color: tint.ink, opacity: 0.85 }}>
+                                OF {r.sumMax}
+                            </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: theme.text }}>{loc!.name}</Text>
+                            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
                                 {[loc!.periodName, loc!.componentName, ...loc!.parents].join(' · ')}
                             </Text>
                         </View>
-                        <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary, marginRight: 4 }}>need</Text>
-                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text, marginRight: 8 }}>
-                            {r.needed.toFixed(1)}
-                            <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textTertiary }}> / {r.sumMax}</Text>
-                        </Text>
-                        <Ionicons name="chevron-forward" size={14} color={theme.textTertiary} />
+                        <View style={{
+                            width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center',
+                            backgroundColor: theme.surfaceSecondary,
+                        }}>
+                            <Ionicons name="add" size={16} color={theme.textSecondary} />
+                        </View>
                     </TouchableOpacity>
                 ))}
 
@@ -659,10 +689,10 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                             backgroundColor: isDark ? 'rgba(0,0,0,0.12)' : theme.surfaceSecondary,
                         }}
                     >
-                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.textSecondary }}>
+                        <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: tint.ink }}>
                             {showAllRemaining ? 'Show fewer' : `Show all ${rows.length} scores left`}
                         </Text>
-                        <Ionicons name={showAllRemaining ? 'chevron-up' : 'chevron-down'} size={14} color={theme.textSecondary} />
+                        <Ionicons name={showAllRemaining ? 'chevron-up' : 'chevron-down'} size={14} color={tint.ink} />
                     </TouchableOpacity>
                 )}
             </Card>
