@@ -76,6 +76,36 @@ function WeightWarning({ tints, text }: { tints: any; text: string }) {
 }
 
 /**
+ * The number tile every row on this screen leads with — the same shape the
+ * subject list uses for a grade and the outlook for what a score needs, so a
+ * number always reads the same way wherever it sits.
+ */
+function NumberTile({ value, caption, fill, line, ink, dashed, small }: {
+    value: string; caption: string; fill: string; line: string; ink: string; dashed?: boolean; small?: boolean;
+}) {
+    return (
+        <View style={{
+            width: small ? 46 : 52, height: small ? 40 : 46, borderRadius: small ? 12 : 14,
+            alignItems: 'center', justifyContent: 'center',
+            backgroundColor: fill, borderWidth: 1, borderColor: line, borderStyle: dashed ? 'dashed' : 'solid',
+        }}>
+            <Text numberOfLines={1} adjustsFontSizeToFit style={{ maxWidth: small ? 40 : 46, fontFamily: 'Nunito_900Black', fontSize: small ? 13.5 : 15, letterSpacing: -0.4, color: ink }}>
+                {value}
+            </Text>
+            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 8, letterSpacing: 0.5, color: ink, opacity: 0.85 }}>
+                {caption}
+            </Text>
+        </View>
+    );
+}
+
+const trimNumber = (v: any) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return String(v ?? '');
+    return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+};
+
+/**
  * One score row, and its parts beneath it. Read-only on purpose: tapping opens
  * the score sheet. Module scope so a re-render never remounts the rows.
  */
@@ -94,8 +124,14 @@ function ItemRow({
     const ip = Calculator.computeItemPercent(item);
     const pct = hasParts ? (ip.isEmpty ? null : ip.percent * 100) : scorePercent(item.score, item.max);
     const color = pct === null ? theme.textTertiary : getGradeTierColor(pct, isDark, true);
+    const wash = getGradeTierWash(pct ?? 0, isDark, pct !== null);
     const name = item.name || (depth === 0 ? `Item ${index + 1}` : `Part ${index + 1}`);
     const counts = countScores(item);
+    const indent = depth * 18;
+
+    const meta = hasParts
+        ? `${parts.length} parts · ${counts.filled} of ${counts.total} in`
+        : pct === null ? 'Not graded yet' : `${pct.toFixed(pct >= 99.95 ? 0 : 1)}% · ${getGradeTierLabel(pct, true)}`;
 
     return (
         <View>
@@ -105,55 +141,49 @@ function ItemRow({
                 accessibilityRole="button"
                 accessibilityLabel={`${name}. ${pct === null ? 'Not graded yet' : `${pct.toFixed(1)} percent`}. Weight ${formatWeight(effectiveWeight(item.weight, ws))} percent. Opens editor.`}
                 style={{
-                    flexDirection: 'row', alignItems: 'center', minHeight: 46,
-                    paddingLeft: 14 + depth * 16, paddingRight: 12, paddingVertical: 8,
+                    flexDirection: 'row', alignItems: 'center', gap: 12,
+                    paddingLeft: 12 + indent, paddingRight: 12, paddingVertical: 8,
                     borderTopWidth: 1, borderTopColor: theme.cardBorder,
                 }}
             >
                 {depth > 0 && (
-                    <View style={{ position: 'absolute', left: 14 + (depth - 1) * 16 + 4, top: 0, bottom: isLast ? '50%' : 0, width: 2, backgroundColor: theme.cardBorder }} />
+                    <View style={{ position: 'absolute', left: 12 + indent - 11, top: 0, bottom: isLast ? '50%' : 0, width: 2, borderRadius: 1, backgroundColor: theme.cardBorder }} />
                 )}
+
+                {hasParts ? (
+                    <NumberTile small={depth > 0} value={pct === null ? '—' : `${Math.round(pct)}%`} caption="PARTS" fill={wash.fill} line={wash.line} ink={color} />
+                ) : pct === null ? (
+                    <NumberTile small={depth > 0} value="—" caption={`OF ${trimNumber(item.max ?? 100)}`} fill="transparent" line={isDark ? '#464d75' : '#c3c8d9'} ink={theme.textTertiary} dashed />
+                ) : (
+                    <NumberTile small={depth > 0} value={trimNumber(item.score)} caption={`OF ${trimNumber(item.max ?? 100)}`} fill={wash.fill} line={wash.line} ink={color} />
+                )}
+
+                <View style={{ flex: 1 }}>
+                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: depth === 0 ? 14 : 13, color: theme.text }}>
+                        {name}
+                    </Text>
+                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
+                        {meta}{typedWeight ? ` · weight ${formatWeight(Number(item.weight) || 0)}%` : ''}
+                    </Text>
+                </View>
 
                 {hasParts ? (
                     <TouchableOpacity
                         onPress={() => onToggle(item.id)}
                         accessibilityRole="button"
                         accessibilityLabel={isOpen ? 'Hide parts' : 'Show parts'}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 6 }}
-                        style={{ width: 18, marginRight: 8, alignItems: 'center' }}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        style={{ width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surfaceSecondary }}
                     >
-                        <Ionicons name={isOpen ? 'chevron-down' : 'chevron-forward'} size={14} color={theme.textTertiary} />
+                        <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={15} color={theme.textSecondary} />
                     </TouchableOpacity>
+                ) : pct === null ? (
+                    <View style={{ width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surfaceSecondary }}>
+                        <Ionicons name="add" size={16} color={theme.textSecondary} />
+                    </View>
                 ) : (
-                    <View style={{
-                        width: 10, height: 10, borderRadius: 5, marginLeft: 4, marginRight: 12,
-                        backgroundColor: pct === null ? 'transparent' : color,
-                        borderWidth: pct === null ? 2 : 0, borderColor: theme.textTertiary,
-                    }} />
+                    <Ionicons name="chevron-forward" size={15} color={theme.textTertiary} style={{ marginRight: 6 }} />
                 )}
-
-                <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text numberOfLines={1} style={{ fontFamily: depth === 0 ? 'Nunito_700Bold' : 'Nunito_600SemiBold', fontSize: depth === 0 ? 13.5 : 12.5, color: theme.text }}>
-                        {name}
-                    </Text>
-                    {(hasParts || typedWeight) && (
-                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11, color: theme.textTertiary, marginTop: 1 }}>
-                            {hasParts ? `${parts.length} parts · ${counts.filled} of ${counts.total} in` : ''}
-                            {hasParts && typedWeight ? ' · ' : ''}
-                            {typedWeight ? `weight ${formatWeight(Number(item.weight) || 0)}%` : ''}
-                        </Text>
-                    )}
-                </View>
-
-                {!hasParts && (
-                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: pct === null ? theme.textTertiary : theme.text, marginRight: 10 }}>
-                        {pct === null ? '—' : `${item.score}`}
-                        <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textTertiary }}> / {item.max ?? 100}</Text>
-                    </Text>
-                )}
-                <Text style={{ minWidth: 48, textAlign: 'right', fontFamily: 'Nunito_900Black', fontSize: 13, color }}>
-                    {pct === null ? '' : `${pct.toFixed(pct >= 99.95 ? 0 : 1)}%`}
-                </Text>
             </TouchableOpacity>
 
             {isOpen && parts.map((si: any, i: number) => (
@@ -727,35 +757,96 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
         const pWeight = effectiveWeight(selPeriod.weight, pSummary);
         const periodTier = getGradeTierColor(pd.percent, isDark, pd.hasData);
 
+        const periodWash = getGradeTierWash(pd.percent, isDark, pd.hasData);
+        const zoneTrack = isDark ? 'rgba(0,0,0,0.28)' : 'rgba(255,255,255,0.8)';
+        const totalCompWeight = comps.reduce((n, c) => n + effectiveWeight(c.weight, cSummary), 0);
+        const footerBtn = {
+            flex: 1, flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const, gap: 6, height: 44,
+        };
+
         return (
             <View>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12, paddingHorizontal: 2 }}>
-                    <View style={{ flex: 1, marginRight: 10 }}>
-                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 19, color: theme.text, letterSpacing: -0.4 }}>
-                            {selPeriod.name || 'Untitled period'}
-                        </Text>
-                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textTertiary, marginTop: 1 }}>
-                            {formatWeight(pWeight)}% of the subject{selPeriod.weight === '' || selPeriod.weight === undefined || selPeriod.weight === null ? ' (split evenly)' : ''}
-                            {pd.hasData ? ` · ${pd.percent.toFixed(1)}%` : ''}
-                        </Text>
+                <Card padding={0} radius={Radius['2xl']} style={{ marginBottom: 14, overflow: 'hidden' }}>
+                    <View style={{ padding: 14, backgroundColor: tints.grades.fill, borderBottomWidth: 1, borderBottomColor: tints.grades.line }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                            <View style={{
+                                width: 60, height: 60, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
+                                backgroundColor: pd.hasData ? theme.surface : 'transparent',
+                                borderWidth: 1, borderColor: pd.hasData ? periodWash.line : tints.grades.line,
+                                borderStyle: pd.hasData ? 'solid' : 'dashed',
+                            }}>
+                                <Text numberOfLines={1} adjustsFontSizeToFit style={{ maxWidth: 52, fontFamily: 'Nunito_900Black', fontSize: 18, letterSpacing: -0.6, color: pd.hasData ? periodTier : theme.textTertiary }}>
+                                    {pd.hasData ? formatGrade(pd.percent, passPct, system) : '—'}
+                                </Text>
+                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 8.5, letterSpacing: 0.6, color: pd.hasData ? periodTier : theme.textTertiary }}>
+                                    {pd.hasData ? (system === 'PERCENT' ? 'SCORE' : 'GRADE') : 'NO DATA'}
+                                </Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 19, color: theme.text, letterSpacing: -0.4 }}>
+                                    {selPeriod.name || 'Untitled period'}
+                                </Text>
+                                <Text numberOfLines={2} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, lineHeight: 16, color: theme.textSecondary, marginTop: 1 }}>
+                                    {formatWeight(pWeight)}% of the subject{selPeriod.weight === '' || selPeriod.weight === undefined || selPeriod.weight === null ? ', split evenly' : ''}
+                                    {pd.hasData ? ` · ${pd.percent.toFixed(1)}% · ${getGradeTierLabel(pd.percent, true)}` : ''}
+                                </Text>
+                            </View>
+                        </View>
+
+                        {/* ── Where the period grade comes from: one segment per
+                               component, as wide as its weight, filled as far as
+                               its average. ── */}
+                        {comps.length > 0 && totalCompWeight > 0 && (
+                            <View style={{ marginTop: 14 }}>
+                                <View style={{ flexDirection: 'row', gap: 3 }}>
+                                    {comps.map((comp: any, i: number) => {
+                                        const w = effectiveWeight(comp.weight, cSummary);
+                                        if (w <= 0) return null;
+                                        const st = pd.comps.find((x: any) => x.id === comp.id);
+                                        const fillPct = st?.hasData ? Math.max(0, Math.min(100, st.percent)) : 0;
+                                        return (
+                                            <View key={comp.id || i} style={{ flex: w, minWidth: 0 }}>
+                                                <View style={{ height: 12, borderRadius: 4, overflow: 'hidden', backgroundColor: zoneTrack }}>
+                                                    <View style={{ width: `${fillPct}%`, height: '100%', backgroundColor: getGradeTierColor(fillPct, isDark, Boolean(st?.hasData)) }} />
+                                                </View>
+                                                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 10.5, color: theme.text, marginTop: 5 }}>
+                                                    {comp.name || 'Component'}
+                                                </Text>
+                                                <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 10, color: theme.textSecondary }}>
+                                                    {formatWeight(w)}%{st?.hasData ? ` · ${st.percent.toFixed(0)}%` : ''}
+                                                </Text>
+                                            </View>
+                                        );
+                                    })}
+                                </View>
+                            </View>
+                        )}
                     </View>
-                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: pd.hasData ? periodTier : theme.textTertiary, letterSpacing: -0.6, marginRight: 8 }}>
-                        {pd.hasData ? formatGrade(pd.percent, passPct, system) : '—'}
-                    </Text>
-                    <TouchableOpacity
-                        onPress={() => setGroupTarget({ kind: 'period', mode: 'edit', period: pIndex })}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Edit period ${selPeriod.name}`}
-                        style={{
-                            width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center',
-                            backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.cardBorder,
-                            borderBottomWidth: 2, borderBottomColor: theme.lip,
-                        }}
-                    >
-                        <Ionicons name="create-outline" size={16} color={theme.textSecondary} />
-                    </TouchableOpacity>
-                </View>
+
+                    <View style={{ flexDirection: 'row' }}>
+                        <TouchableOpacity
+                            onPress={() => setGroupTarget({ kind: 'period', mode: 'edit', period: pIndex })}
+                            activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Edit period ${selPeriod.name}`}
+                            style={footerBtn}
+                        >
+                            <Ionicons name="create-outline" size={15} color={theme.textSecondary} />
+                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: theme.textSecondary }}>Edit period</Text>
+                        </TouchableOpacity>
+                        <View style={{ width: 1, backgroundColor: theme.cardBorder }} />
+                        <TouchableOpacity
+                            onPress={() => setGroupTarget({ kind: 'component', mode: 'create', period: pIndex })}
+                            activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Add a component to ${selPeriod.name}`}
+                            style={footerBtn}
+                        >
+                            <Ionicons name="add-circle" size={16} color={tints.grades.ink} />
+                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: tints.grades.ink }}>Add component</Text>
+                        </TouchableOpacity>
+                    </View>
+                </Card>
 
                 {cSummary.warning && <WeightWarning tints={tints} text={`Components in ${selPeriod.name || 'this period'}: ${cSummary.warning}`} />}
 
@@ -767,41 +858,48 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                     let cFilled = 0, cTotal = 0;
                     for (const it of items) { const n = countScores(it); cFilled += n.filled; cTotal += n.total; }
                     const cColor = cStat?.hasData ? getGradeTierColor(cStat.percent, isDark, true) : theme.textTertiary;
+                    const cWash = getGradeTierWash(cStat?.percent ?? 0, isDark, Boolean(cStat?.hasData));
 
                     return (
                         <Card key={comp.id || cIndex} padding={0} radius={Radius.xl} style={{ marginBottom: 12, overflow: 'hidden' }}>
+                            {/* Header zone in the component's own tier, so a weak
+                                component shows as weak before a number is read. */}
                             <TouchableOpacity
                                 onPress={() => setGroupTarget({ kind: 'component', mode: 'edit', period: pIndex, component: cIndex })}
                                 activeOpacity={0.75}
                                 accessibilityRole="button"
                                 accessibilityLabel={`${comp.name}, ${formatWeight(cWeight)} percent of ${selPeriod.name}. ${cStat?.hasData ? `${cStat.percent.toFixed(1)} percent` : 'No scores yet'}. Edit component.`}
-                                style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12 }}
+                                style={{
+                                    flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12,
+                                    backgroundColor: cStat?.hasData ? cWash.fill : (isDark ? 'rgba(0,0,0,0.14)' : theme.surfaceSecondary),
+                                }}
                             >
                                 <View style={{
-                                    minWidth: 44, height: 26, paddingHorizontal: 7, borderRadius: 8, marginRight: 10,
-                                    alignItems: 'center', justifyContent: 'center',
-                                    backgroundColor: tints.grades.fill, borderWidth: 1, borderColor: tints.grades.line,
+                                    width: 52, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
+                                    backgroundColor: theme.surface, borderWidth: 1, borderColor: cStat?.hasData ? cWash.line : theme.cardBorder,
                                 }}>
-                                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 11.5, color: tints.grades.ink }}>{formatWeight(cWeight)}%</Text>
+                                    <Text numberOfLines={1} adjustsFontSizeToFit style={{ maxWidth: 46, fontFamily: 'Nunito_900Black', fontSize: 15, letterSpacing: -0.4, color: cColor }}>
+                                        {cStat?.hasData ? `${cStat.percent.toFixed(cStat.percent >= 99.95 ? 0 : 1)}` : '—'}
+                                    </Text>
+                                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 8, letterSpacing: 0.5, color: cColor, opacity: 0.85 }}>
+                                        {cStat?.hasData ? '% AVG' : 'NO DATA'}
+                                    </Text>
                                 </View>
-                                <View style={{ flex: 1, marginRight: 8 }}>
-                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 15, color: theme.text, letterSpacing: -0.2 }}>
+                                <View style={{ flex: 1 }}>
+                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_900Black', fontSize: 15.5, color: theme.text, letterSpacing: -0.2 }}>
                                         {comp.name || 'Untitled component'}
                                     </Text>
-                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11, color: theme.textTertiary, marginTop: 1 }}>
-                                        {cTotal === 0 ? 'No scores yet' : `${cFilled} of ${cTotal} in`}
+                                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 11.5, color: theme.textSecondary, marginTop: 1 }}>
+                                        {formatWeight(cWeight)}% of {selPeriod.name || 'the period'} · {cTotal === 0 ? 'no scores yet' : `${cFilled} of ${cTotal} in`}
                                         {iSummary.warning ? ' · ' : ''}
                                         {iSummary.warning ? <Text style={{ color: tints.danger.ink, fontFamily: 'Nunito_700Bold' }}>check weights</Text> : null}
                                     </Text>
                                 </View>
-                                <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: cColor, letterSpacing: -0.4, marginRight: 6 }}>
-                                    {cStat?.hasData ? `${cStat.percent.toFixed(1)}%` : '—'}
-                                </Text>
-                                <Ionicons name="create-outline" size={15} color={theme.textTertiary} />
+                                <Ionicons name="create-outline" size={16} color={theme.textSecondary} />
                             </TouchableOpacity>
 
                             {iSummary.warning && (
-                                <View style={{ paddingHorizontal: 14 }}>
+                                <View style={{ paddingHorizontal: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: theme.cardBorder }}>
                                     <WeightWarning tints={tints} text={iSummary.warning} />
                                 </View>
                             )}
@@ -854,6 +952,10 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                     </View>
                 )}
 
+                {/* The period card's footer already adds components; this end-of-list
+                    copy only earns its place once the list is long enough that
+                    the footer has scrolled away. */}
+                {comps.length >= 3 && (
                 <TouchableOpacity
                     onPress={() => setGroupTarget({ kind: 'component', mode: 'create', period: pIndex })}
                     activeOpacity={0.7}
@@ -868,6 +970,7 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                     <Ionicons name="add" size={16} color={theme.textSecondary} />
                     <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 13, color: theme.textSecondary }}>Add component</Text>
                 </TouchableOpacity>
+                )}
             </View>
         );
     };
