@@ -32,22 +32,21 @@ export function readRemoteStamp(res: { data?: any; error?: any } | null | undefi
 export type FetchPlan =
   | 'no-remote'    // no row: take sync()'s "no cloud data" branch without downloading
   | 'up-to-date'   // nothing changed on either side since the last sync
+  | 'push-local'   // only the local ledger changed: push it, as sync()'s "local is newer" branch does
   | 'download';    // anything else: the existing full-download path decides
 
 /**
  * Skips the download only when the answer cannot depend on the ledger's
- * contents. A ledger without a numeric `last_updated` (older builds wrote
- * some) always downloads, so it goes through exactly the path it did before.
+ * contents. A remote stamp equal to `@last_synced_timestamp` rules out both
+ * branches that read the remote ledger (conflict needs it for the modal,
+ * remote-newer stores it), so only the local side is left to decide. A ledger
+ * without a numeric `last_updated` (older builds wrote some) always
+ * downloads, so it goes through exactly the path it did before.
  */
 export function planLedgerFetch(remote: RemoteStamp, localUpdated: number, lastSynced: number): FetchPlan {
   if (remote.kind === 'missing') return 'no-remote';
-  if (
-    remote.kind === 'found' &&
-    typeof remote.lastUpdated === 'number' &&
-    remote.lastUpdated === lastSynced &&
-    localUpdated <= lastSynced
-  ) {
-    return 'up-to-date';
+  if (remote.kind === 'found' && typeof remote.lastUpdated === 'number' && remote.lastUpdated === lastSynced) {
+    return localUpdated > lastSynced ? 'push-local' : 'up-to-date';
   }
   return 'download';
 }
