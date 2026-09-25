@@ -1,4 +1,5 @@
-import { Flashcard, NoteKind, FaceSegment } from './types';
+import { Flashcard, NoteKind, FaceSegment, OcclusionData } from './types';
+import { occlusionOrds, validateOcclusion, groupLabel, groupOfOrd, isLocateOrd, occlusionGroups } from './occlusion';
 
 // ─── Note types ───────────────────────────────────────────────────────────────
 
@@ -7,11 +8,12 @@ export const NOTE_KINDS: { kind: NoteKind; label: string; icon: string; desc: st
   { kind: 'reversed', label: 'Both ways', icon: 'swap-horizontal-outline', desc: 'Two cards: front → back and back → front' },
   { kind: 'cloze', label: 'Cloze', icon: 'eye-off-outline', desc: 'Hide words in a sentence — one card per blank' },
   { kind: 'typein', label: 'Type answer', icon: 'create-outline', desc: 'Type the answer, then check it' },
+  { kind: 'occlusion', label: 'Image', icon: 'image-outline', desc: 'Cover parts of a picture — one card per box' },
 ];
 
 export function kindOf(card: Flashcard | null | undefined): NoteKind {
   const k = card?.kind;
-  return k === 'reversed' || k === 'cloze' || k === 'typein' ? k : 'basic';
+  return k === 'reversed' || k === 'cloze' || k === 'typein' || k === 'occlusion' ? k : 'basic';
 }
 
 export function kindLabel(kind: NoteKind): string {
@@ -194,6 +196,15 @@ export function cardFaces(card: Flashcard, flip: boolean = false): CardFaces {
   const kind = kindOf(card);
   const front = card?.front || '';
   const back = card?.back || '';
+  if (kind === 'occlusion') {
+    // The picture carries the question; these are the words around it. A
+    // locate card asks for the label, every other card answers with it.
+    const label = groupLabel(card.occlusion?.masks || [], groupOfOrd(card.ord));
+    if (isLocateOrd(card.ord)) {
+      return { question: plain(`Where is ${label || 'it'}?`), answer: plain(label), extra: back, typeTarget: null };
+    }
+    return { question: plain(front), answer: plain(label), extra: back, typeTarget: null };
+  }
   if (kind === 'cloze') {
     const ord = card.ord && card.ord > 0 ? card.ord : clozeNumbers(front)[0] || 1;
     return { question: renderCloze(front, ord, 'question'), answer: renderCloze(front, ord, 'answer'), extra: back, typeTarget: null };
@@ -212,6 +223,9 @@ const segText = (segs: FaceSegment[]) => segs.map((s) => s.text).join('');
  * export — the modes that were built for two-sided cards.
  */
 export function cardQA(card: Flashcard): { question: string; answer: string } {
+  // A picture cannot become a multiple-choice string; empty strings keep image
+  // cards out of the practice test and speed match.
+  if (kindOf(card) === 'occlusion') return { question: '', answer: '' };
   if (kindOf(card) === 'cloze') {
     const ord = card.ord && card.ord > 0 ? card.ord : clozeNumbers(card.front)[0] || 1;
     return { question: segText(renderCloze(card.front, ord, 'question')), answer: clozeAnswer(card.front, ord) };
@@ -283,9 +297,10 @@ export interface NoteDraft {
   kind: NoteKind;
   /** Front, or the cloze text. */
   front: string;
-  /** Back, or the cloze Extra field. */
+  /** Back, or the cloze Extra field. For image occlusion: the header and the back extra. */
   back: string;
   tags?: string[];
+  occlusion?: OcclusionData;
 }
 
 export function parseTags(raw: string): string[] {
@@ -303,6 +318,7 @@ export function parseTags(raw: string): string[] {
 export function validateNote(draft: NoteDraft): string | null {
   const front = (draft.front || '').trim();
   const back = (draft.back || '').trim();
+  if (draft.kind === 'occlusion') return validateOcclusion(draft.occlusion);
   if (draft.kind === 'cloze') {
     if (!front) return 'Write the sentence first.';
     if (clozeNumbers(front).length === 0) return 'Hide at least one word: select it and tap Cloze.';
@@ -316,6 +332,7 @@ export function validateNote(draft: NoteDraft): string | null {
 export function ordsFor(draft: NoteDraft): number[] {
   if (draft.kind === 'reversed') return [0, 1];
   if (draft.kind === 'cloze') return clozeNumbers(draft.front);
+  if (draft.kind === 'occlusion') return occlusionOrds(draft.occlusion);
   return [0];
 }
 
@@ -351,7 +368,10 @@ export function buildNoteCards(
   const front = (draft.front || '').trim();
   const back = (draft.back || '').trim();
   const tags = draft.tags && draft.tags.length ? draft.tags : undefined;
-  const sameFamily = (c: Flashcard) => (kindOf(c) === 'cloze') === (draft.kind === 'cloze');
+  // Ords only mean the same thing within a family: cloze numbers, mask groups,
+  // or the 0/1 of basic-style notes.
+  const family = (k: NoteKind) => (k === 'cloze' ? 'cloze' : k === 'occlusion' ? 'occlusion' : 'plain');
+  const sameFamily = (c: Flashcard) => family(kindOf(c)) === family(draft.kind);
 
   return ords.map((ord) => {
     const prev = existing.find((c) => sameFamily(c) && (c.ord || 0) === ord);
@@ -359,6 +379,8 @@ export function buildNoteCards(
     const card: Flashcard = { ...base, front, back, noteId, kind: draft.kind, ord };
     if (tags) card.tags = tags;
     else delete card.tags;
+    if (draft.kind === 'occlusion' && draft.occlusion) card.occlusion = draft.occlusion;
+    else delete card.occlusion;
     return card;
   });
 }
@@ -398,6 +420,11 @@ export function groupNotes(cards: Flashcard[]): NoteRow[] {
 /** Plain text for a note row: the cloze with deletions shown, or the front. */
 export function notePreview(row: NoteRow): { title: string; sub: string } {
   if (row.kind === 'cloze') return { title: clozePlain(row.front), sub: row.back };
+  if (row.kind === 'occlusion') {
+    const occ = row.cards[0]?.occlusion;
+    const n = occ ? occlusionGroups(occ.masks).length : 0;
+    return { title: row.front || 'Image occlusion', sub: `${n} hidden part${n !== 1 ? 's' : ''}${occ?.mode === 'hideOne' ? ' · hide one' : ''}${row.back ? ` · ${row.back}` : ''}` };
+  }
   return { title: row.front, sub: row.back };
 }
 

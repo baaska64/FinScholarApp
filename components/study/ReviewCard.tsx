@@ -1,10 +1,12 @@
-import React, { useEffect, useRef } from 'react';
-import { View, Text, TextInput, ScrollView, TouchableOpacity, Animated } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, TextInput, ScrollView, TouchableOpacity, Animated, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { getTheme, getTints, Radius } from '@/constants/Theme';
 import FaceText from './FaceText';
 import { CardFaces, typeDiff, typedMatches, DiffPart, kindOf, kindLabel } from './notes';
 import { Flashcard } from './types';
+import OcclusionImage from './OcclusionImage';
+import { maskStates, isLocateOrd, groupOfOrd, maskAt } from './occlusion';
 
 interface ReviewCardProps {
   card: Flashcard;
@@ -47,6 +49,14 @@ export default function ReviewCard({
   const tints = getTints(isDark);
   const kind = kindOf(card);
   const fade = useRef(new Animated.Value(revealed ? 1 : 0)).current;
+  // Image occlusion: the box a student tapped on a "where is it?" card, and
+  // Anki's "toggle masks" on the answer side.
+  const [chosenId, setChosenId] = useState<string | null>(null);
+  const [wholePicture, setWholePicture] = useState(false);
+  useEffect(() => {
+    setChosenId(null);
+    setWholePicture(false);
+  }, [card.id]);
 
   useEffect(() => {
     if (revealed) {
@@ -124,6 +134,99 @@ export default function ReviewCard({
         ) : null}
       </View>
 
+      {kind === 'occlusion' && card.occlusion ? (() => {
+        const occ = card.occlusion!;
+        const locate = isLocateOrd(card.ord);
+        const group = groupOfOrd(card.ord);
+        const states = wholePicture && revealed
+          ? Object.fromEntries(occ.masks.map((m) => [m.id, m.group === group && !locate ? 'revealed' : 'open'])) as any
+          : maskStates(occ, card.ord || 0, revealed ? 'answer' : 'question');
+        const chosen = chosenId ? occ.masks.find((m) => m.id === chosenId) : null;
+        const locateRight = chosen ? chosen.group === group : null;
+        const prompt = faces.question.map((x) => x.text).join('').trim();
+        const answer = faces.answer.map((x) => x.text).join('').trim();
+        return (
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingHorizontal: 14, paddingVertical: 16 }}
+            showsVerticalScrollIndicator={false}
+          >
+            {prompt ? (
+              <Text style={{ ...faceStyle, fontSize: locate ? 20 : 17, marginBottom: 12 }}>{prompt}</Text>
+            ) : null}
+
+{locate && !revealed ? (
+              // Not inside a (disabled) touchable: that would swallow the tap.
+              <OcclusionImage
+                data={occ}
+                states={states}
+                showLabels={revealed}
+                chosenId={revealed ? chosenId : null}
+                isDark={isDark}
+                maxHeight={Dimensions.get('window').height * 0.5}
+                onPressPoint={locate && !revealed ? (x, y) => {
+                  // A tap between boxes is a slip, not an answer: only a box counts.
+                  const hit = maskAt(occ.masks, x, y);
+                  if (!hit) return;
+                  setChosenId(hit.id);
+                  onReveal();
+                } : undefined}
+              />
+            ) : (
+              <TouchableOpacity activeOpacity={revealed ? 1 : 0.9} disabled={revealed} onPress={onReveal} accessibilityRole="button" accessibilityLabel={revealed ? undefined : 'Show answer'}>
+                <OcclusionImage
+                data={occ}
+                states={states}
+                showLabels={revealed}
+                chosenId={revealed ? chosenId : null}
+                isDark={isDark}
+                maxHeight={Dimensions.get('window').height * 0.5}
+                onPressPoint={locate && !revealed ? (x, y) => {
+                  const hit = maskAt(occ.masks, x, y);
+                  setChosenId(hit ? hit.id : null);
+                  onReveal();
+                } : undefined}
+              />
+              </TouchableOpacity>
+            )}
+
+            {revealed ? (
+              <Animated.View style={{ opacity: fade, alignItems: 'center', marginTop: 14, gap: 10 }}>
+                {locate ? (
+                  <View style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full,
+                    backgroundColor: locateRight ? tints.attendance.fill : tints.danger.fill,
+                  }}>
+                    <Ionicons name={locateRight ? 'checkmark-circle' : 'close-circle'} size={14} color={locateRight ? tints.attendance.ink : tints.danger.ink} />
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: locateRight ? tints.attendance.ink : tints.danger.ink }}>
+                      {chosen ? (locateRight ? 'Right spot' : 'Not quite — it is outlined in green') : 'Missed — it is outlined in green'}
+                    </Text>
+                  </View>
+                ) : answer ? (
+                  <Text style={{ ...faceStyle, fontFamily: 'Nunito_900Black', fontSize: 19 }}>{answer}</Text>
+                ) : null}
+                <TouchableOpacity
+                  onPress={() => setWholePicture((v) => !v)}
+                  activeOpacity={0.75}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: wholePicture }}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, height: 32, borderRadius: Radius.full, backgroundColor: theme.surfaceSecondary, borderWidth: 1, borderColor: theme.cardBorder }}
+                >
+                  <Ionicons name={wholePicture ? 'eye-off-outline' : 'eye-outline'} size={14} color={theme.textSecondary} />
+                  <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12, color: theme.textSecondary }}>{wholePicture ? 'Show the boxes again' : 'Show the whole picture'}</Text>
+                </TouchableOpacity>
+                {faces.extra ? (
+                  <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 14, lineHeight: 21, color: theme.textSecondary, textAlign: 'center' }}>{faces.extra}</Text>
+                ) : null}
+              </Animated.View>
+            ) : (
+              <Text style={{ textAlign: 'center', marginTop: 12, fontFamily: 'Nunito_600SemiBold', fontSize: 12.5, color: theme.textTertiary }}>
+                {locate ? 'Tap the box where it is' : 'What is under the red box? Recall it, then tap to check'}
+              </Text>
+            )}
+          </ScrollView>
+        );
+      })() : (
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 22 }}
@@ -231,8 +334,9 @@ export default function ReviewCard({
           </Animated.View>
         )}
       </ScrollView>
+      )}
 
-      {!revealed && faces.typeTarget === null && (
+      {!revealed && faces.typeTarget === null && kind !== 'occlusion' && (
         <Text style={{ textAlign: 'center', paddingBottom: 14, fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary }}>
           Recall the answer, then tap to check
         </Text>

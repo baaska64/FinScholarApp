@@ -108,6 +108,7 @@ import {
   kindLabel,
   NOTE_KINDS,
   SAMPLE_NOTES,
+  notePreview,
 } from '@/components/study';
 import { queueTints, queueOnBand } from '@/components/study/studyTheme';
 import DeckList from '@/components/study/DeckList';
@@ -116,6 +117,9 @@ import AnswerBar from '@/components/study/AnswerBar';
 import NoteEditorSheet from '@/components/study/NoteEditorSheet';
 import StatsSheet from '@/components/study/StatsSheet';
 import FaceText from '@/components/study/FaceText';
+import OcclusionImage from '@/components/study/OcclusionImage';
+import { maskStates } from '@/components/study/occlusion';
+import { deleteImage } from '@/components/study/imageStore';
 
 export { Flashcard, FlashcardDeck, SessionCard, DeckNode, NodeStats, SRSettings, FlashcardStats };
 export { buildDeckTree, getNodeStats, collectCards, DEFAULT_SR_SETTINGS };
@@ -393,6 +397,20 @@ export default function FlashcardsScreen() {
       });
   }, [srSettings]);
 
+  /**
+   * Deletes stored pictures that a change left unreferenced. Called only from
+   * the destructive handlers (delete note, bulk delete, delete deck, a note
+   * saved with a replaced picture) — never from `persist`, which also runs on
+   * every answer and whose undo snapshot could bring a note back.
+   */
+  const releaseImages = (before: FlashcardDeck[], after: FlashcardDeck[]) => {
+    const ids = (list: FlashcardDeck[]) => new Set(list.flatMap((d) => (d?.cards || []).map((c) => c?.occlusion?.imageId).filter(Boolean) as string[]));
+    const kept = ids(after);
+    ids(before).forEach((id) => {
+      if (!kept.has(id)) deleteImage(id);
+    });
+  };
+
   useFocusEffect(
     useCallback(() => {
       loadDecks();
@@ -573,7 +591,10 @@ export default function FlashcardsScreen() {
           style: 'destructive',
           onPress: () => {
             const ids = new Set(list.map((d) => d.id));
-            persist(decksRef.current.filter((d) => !ids.has(d.id)));
+            const before = decksRef.current;
+            const after = before.filter((d) => !ids.has(d.id));
+            persist(after);
+            releaseImages(before, after);
             if (activePath && activePath.startsWith(node.fullPath)) {
               setActivePath(null);
               setView('decks');
@@ -674,7 +695,8 @@ export default function FlashcardsScreen() {
 
   const handleExportDeck = async (node: DeckNode) => {
     const list = collectDecksFromNode(node);
-    const notes = list.flatMap((d) => groupNotes(d.cards || []));
+    // Image notes cannot travel as text; they stay out of the export.
+    const notes = list.flatMap((d) => groupNotes(d.cards || [])).filter((n) => n.kind !== 'occlusion');
     if (notes.length === 0) {
       AlertService.alert('No cards', 'There are no cards to export in this deck or folder.');
       return;
@@ -729,6 +751,7 @@ export default function FlashcardsScreen() {
       x.id === deck.id ? { ...x, cards: editing ? replaceNote(x.cards || [], editing.noteId, cards) : [...(x.cards || []), ...cards] } : x
     );
     persist(nd);
+    if (editing) releaseImages(d, nd);
     setLastKind(draft.kind);
     if (!editing) setLastDeckId(deck.id);
     if (editing) {
@@ -750,10 +773,14 @@ export default function FlashcardsScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          const nd = decksRef.current.map((d) =>
+          const before = decksRef.current;
+          const nd = before.map((d) =>
             d.id === deckId ? { ...d, cards: (d.cards || []).filter((c) => noteIdOf(c) !== note.noteId) } : d
           );
           persist(nd);
+          // Undoing an answer must not resurrect a deleted note without its picture.
+          setUndo(null);
+          releaseImages(before, nd);
           setNoteEditor((prev) => ({ ...prev, visible: false }));
           if (session?.current && note.cards.some((c) => c.id === session.current!.cardId)) advanceSession(session, nd);
         },
@@ -793,7 +820,11 @@ export default function FlashcardsScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          persist(mapSelected(() => null));
+          const before = decksRef.current;
+          const after = mapSelected(() => null);
+          persist(after);
+          setUndo(null);
+          releaseImages(before, after);
           endSelection();
         },
       },
@@ -2238,7 +2269,16 @@ export default function FlashcardsScreen() {
                           </Text>
                         )}
                       </View>
-                      {kind === 'cloze' ? (
+                      {kind === 'occlusion' && n.cards[0]?.occlusion ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                          <View style={{ width: 76 }}>
+                            <OcclusionImage data={n.cards[0].occlusion} states={maskStates({ ...n.cards[0].occlusion, mode: 'hideAll' }, -1, 'question')} isDark={isDark} maxHeight={56} />
+                          </View>
+                          <Text numberOfLines={2} style={{ flex: 1, fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text, lineHeight: 18 }}>
+                            {notePreview(n).title}
+                          </Text>
+                        </View>
+                      ) : kind === 'cloze' ? (
                         <FaceText
                           segments={clozeOverview(n.front)}
                           color={color}
@@ -3113,7 +3153,7 @@ export default function FlashcardsScreen() {
         {/* ══ 2 · What each line becomes ══ */}
         <Text style={{ ...microLabel, marginBottom: 8 }}>2 · Make each line into</Text>
         <View style={{ flexDirection: 'row', gap: 8 }}>
-          {NOTE_KINDS.filter((k) => k.kind !== 'cloze').map((k) => {
+          {NOTE_KINDS.filter((k) => k.kind !== 'cloze' && k.kind !== 'occlusion').map((k) => {
             const active = importKind === k.kind;
             return (
               <TouchableOpacity

@@ -5,7 +5,10 @@ import { getTheme, getTints, Radius } from '@/constants/Theme';
 import KeyboardSheet from '@/components/ui/KeyboardSheet';
 import AnimatedPressable from '@/components/ui/AnimatedPressable';
 import FaceText from './FaceText';
-import { FlashcardDeck, NoteKind } from './types';
+import OcclusionEditor from './OcclusionEditor';
+import OcclusionImage from './OcclusionImage';
+import { occlusionOrds, occlusionGroups, maskStates } from './occlusion';
+import { FlashcardDeck, NoteKind, OcclusionData } from './types';
 import {
   NOTE_KINDS,
   NoteDraft,
@@ -60,6 +63,8 @@ export default function NoteEditorSheet({
   const [showTags, setShowTags] = useState(false);
   const [targetDeck, setTargetDeck] = useState<string | null>(deckId);
   const [error, setError] = useState<string | null>(null);
+  const [occlusion, setOcclusion] = useState<OcclusionData | null>(null);
+  const [occEditorOpen, setOccEditorOpen] = useState(false);
   const selection = useRef({ start: 0, end: 0 });
   const frontRef = useRef<TextInput>(null);
 
@@ -71,7 +76,9 @@ export default function NoteEditorSheet({
       setBack(note.back);
       setTagsText((note.tags || []).join(' '));
       setShowTags((note.tags || []).length > 0);
+      setOcclusion(note.cards[0]?.occlusion || null);
     } else {
+      setOcclusion(null);
       setKind(defaultKind);
       setFront('');
       setBack('');
@@ -83,8 +90,8 @@ export default function NoteEditorSheet({
     selection.current = { start: 0, end: 0 };
   }, [visible, note?.noteId]);
 
-  const draft: NoteDraft = { kind, front, back, tags: parseTags(tagsText) };
-  const ords = kind === 'cloze' ? clozeNumbers(front) : kind === 'reversed' ? [0, 1] : [0];
+  const draft: NoteDraft = { kind, front, back, tags: parseTags(tagsText), ...(kind === 'occlusion' && occlusion ? { occlusion } : {}) };
+  const ords = kind === 'cloze' ? clozeNumbers(front) : kind === 'reversed' ? [0, 1] : kind === 'occlusion' ? occlusionOrds(occlusion) : [0];
   const deckColor = decks.find((d) => d.id === targetDeck)?.color || theme.primary;
 
   const switchKind = (k: NoteKind) => {
@@ -93,6 +100,8 @@ export default function NoteEditorSheet({
     if (kind === 'cloze' && k !== 'cloze' && clozeNumbers(front).length) setFront(clozePlain(front));
     setKind(k);
     setError(null);
+    // Straight into the picture: an image note has nothing to type first.
+    if (k === 'occlusion' && !occlusion) setOccEditorOpen(true);
   };
 
   const hide = (same: boolean) => {
@@ -121,6 +130,7 @@ export default function NoteEditorSheet({
     if (keepOpen) {
       setFront('');
       setBack('');
+      setOcclusion(null);
       setError(null);
       selection.current = { start: 0, end: 0 };
       setTimeout(() => frontRef.current?.focus(), 60);
@@ -147,9 +157,11 @@ export default function NoteEditorSheet({
   };
 
   const countLabel = ords.length === 1 ? '1 card' : `${ords.length} cards`;
-  const primaryLabel = note ? 'Save' : kind === 'cloze' && ords.length > 1 ? `Add ${countLabel}` : kind === 'reversed' ? 'Add 2 cards' : 'Add card';
+  const primaryLabel = note ? 'Save' : (kind === 'cloze' || kind === 'occlusion') && ords.length > 1 ? `Add ${countLabel}` : kind === 'reversed' ? 'Add 2 cards' : 'Add card';
   const labels =
-    kind === 'cloze'
+    kind === 'occlusion'
+      ? { front: 'Header · the question (optional)', back: 'Extra · shown with the answer (optional)' }
+      : kind === 'cloze'
       ? { front: 'Text', back: 'Extra · shown with the answer (optional)' }
       : kind === 'typein'
       ? { front: 'Front · the question', back: 'Back · the exact answer to type' }
@@ -288,12 +300,45 @@ export default function NoteEditorSheet({
         </>
       )}
 
+      {/* ── Picture (image occlusion) ── */}
+      {kind === 'occlusion' && (
+        <View style={{ marginBottom: 16 }}>
+          <Text style={{ ...microLabel, marginBottom: 8 }}>Picture & boxes</Text>
+          {occlusion ? (
+            <>
+              <OcclusionImage
+                data={occlusion}
+                states={maskStates({ ...occlusion, mode: 'hideAll' }, -1, 'question')}
+                isDark={isDark}
+                maxHeight={220}
+              />
+              <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textSecondary, marginTop: 8 }}>
+                {occlusion.masks.length} box{occlusion.masks.length !== 1 ? 'es' : ''} · {occlusionGroups(occlusion.masks).length} to learn
+                {occlusion.locate ? ' · plus "where is it?"' : ''} · {occlusion.mode === 'hideAll' ? 'hide all, guess one' : 'hide one, guess one'}
+              </Text>
+            </>
+          ) : null}
+          <TouchableOpacity
+            onPress={() => setOccEditorOpen(true)}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            style={{
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, height: 46, borderRadius: Radius.lg, marginTop: 10,
+              backgroundColor: tints.grades.fill, borderWidth: 1, borderColor: tints.grades.line,
+            }}
+          >
+            <Ionicons name={occlusion ? 'create-outline' : 'image-outline'} size={16} color={tints.grades.ink} />
+            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: tints.grades.ink }}>{occlusion ? 'Edit picture & boxes' : 'Add a picture'}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* ── Fields ── */}
       <Text style={{ ...microLabel, marginBottom: 8 }}>{labels.front}</Text>
       <TextInput
         ref={frontRef}
-        style={{ ...field, minHeight: kind === 'cloze' ? 104 : 80, marginBottom: kind === 'cloze' ? 8 : 16 }}
-        placeholder={kind === 'cloze' ? 'The mitochondria is the powerhouse of the cell.' : kind === 'typein' ? 'Capital of Japan?' : 'What is the capital of France?'}
+        style={{ ...field, minHeight: kind === 'cloze' ? 104 : kind === 'occlusion' ? 52 : 80, marginBottom: kind === 'cloze' ? 8 : 16 }}
+        placeholder={kind === 'occlusion' ? 'Label the chambers of the heart' : kind === 'cloze' ? 'The mitochondria is the powerhouse of the cell.' : kind === 'typein' ? 'Capital of Japan?' : 'What is the capital of France?'}
         placeholderTextColor={theme.textTertiary}
         value={front}
         onChangeText={(t) => {
@@ -363,8 +408,8 @@ export default function NoteEditorSheet({
 
       <Text style={{ ...microLabel, marginBottom: 8 }}>{labels.back}</Text>
       <TextInput
-        style={{ ...field, minHeight: kind === 'cloze' ? 56 : 80, marginBottom: 12 }}
-        placeholder={kind === 'cloze' ? 'A memory aid, source or example' : kind === 'typein' ? 'Tokyo' : 'Paris'}
+        style={{ ...field, minHeight: kind === 'cloze' || kind === 'occlusion' ? 56 : 80, marginBottom: 12 }}
+        placeholder={kind === 'cloze' || kind === 'occlusion' ? 'A memory aid, source or example' : kind === 'typein' ? 'Tokyo' : 'Paris'}
         placeholderTextColor={theme.textTertiary}
         value={back}
         onChangeText={(t) => {
@@ -414,7 +459,7 @@ export default function NoteEditorSheet({
       ) : null}
 
       {/* ── Preview ── */}
-      {(kind === 'cloze' ? ords.length > 0 : front.trim() && back.trim()) ? (
+      {kind !== 'occlusion' && (kind === 'cloze' ? ords.length > 0 : front.trim() && back.trim()) ? (
         <View style={{ marginBottom: 6 }}>
           <Text style={{ ...microLabel, marginBottom: 8 }}>Preview · {countLabel}</Text>
           {(kind === 'cloze' ? ords : kind === 'reversed' ? [0, 1] : [0]).map((ord, i) => {
@@ -457,6 +502,17 @@ export default function NoteEditorSheet({
           })}
         </View>
       ) : null}
+      <OcclusionEditor
+        visible={occEditorOpen}
+        isDark={isDark}
+        initial={occlusion}
+        onClose={() => setOccEditorOpen(false)}
+        onDone={(d) => {
+          setOcclusion(d);
+          setOccEditorOpen(false);
+          setError(null);
+        }}
+      />
     </KeyboardSheet>
   );
 }
