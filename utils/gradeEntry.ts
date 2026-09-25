@@ -387,3 +387,25 @@ export function locateItem(subject: any, id: string): ItemLocation | null {
     }
     return null;
 }
+
+// ─── Scores not entered yet ─────────────────────────────────────────────────
+
+/** How a score that has not been entered yet counts. Stored as `settings.ungradedScores`. */
+export type UngradedMode = 'zero' | 'perfect' | 'ignore';
+
+export const UNGRADED_MODES: { key: UngradedMode; label: string; hint: string; short: string }[] = [
+    { key: 'zero', label: 'Count as 0', hint: 'Shows what you have locked in. Starts low and only goes up.', short: 'banked so far' },
+    { key: 'perfect', label: 'Count as perfect', hint: 'Shows the best you can still finish with. Starts high and only goes down.', short: 'if you ace the rest' },
+    { key: 'ignore', label: 'Leave them out', hint: 'Averages only what has been graded, like most school portals.', short: 'graded work only' },
+];
+
+/** The saved mode, falling back to 'zero' (the app's behaviour before the setting existed). */
+export function readUngradedMode(settings: any): UngradedMode {
+    const v = settings?.ungradedScores;
+    return v === 'perfect' || v === 'ignore' ? v : 'zero';
+}
+
+/** The few words under a grade that say which of the three numbers it is. */
+export function ungradedShort(mode: UngradedMode): string {
+    return UNGRADED_MODES.find((m) => m.key === mode)!.short;
+}

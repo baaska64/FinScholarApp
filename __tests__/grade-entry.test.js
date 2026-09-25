@@ -22,6 +22,8 @@ import {
   subjectOutlook,
   MAX_ITEM_DEPTH,
   locateItem,
+  readUngradedMode,
+  ungradedShort,
 } from '../utils/gradeEntry.ts';
 import { Calculator } from '../utils/calculator.js';
 
@@ -264,6 +266,63 @@ export function runGradeEntryTests(describe, test) {
       assert.strictEqual(o.target, 75);
       assert.strictEqual(o.kind, 'on-course');
       assert.ok(Math.abs(o.requiredAverage - 75) < 1e-9);
+    });
+  });
+
+  describe('Grade Entry Suite 5: Scores not entered yet', () => {
+    // Two equal items: 60/100 graded, one blank. 30 banked, 50 open, pace 60%.
+    const sub = () => subjectWith([{ id: 'i1', score: 60, max: 100 }, { id: 'i2', score: '', max: 100 }]);
+
+    test('GE5.1 Each mode picks floor, ceiling or graded average', () => {
+      const z = Calculator.calculateSubject(sub(), 'PERCENT');
+      const p = Calculator.calculateSubject(sub(), 'PERCENT', null, 'perfect');
+      const g = Calculator.calculateSubject(sub(), 'PERCENT', null, 'ignore');
+      assert.strictEqual(z.percent, 30, 'zero is the default and matches the old behaviour');
+      assert.strictEqual(p.percent, 80);
+      assert.strictEqual(g.percent, 60);
+    });
+
+    test('GE5.2 Floor, ceiling, pace and projection come back in every mode', () => {
+      for (const mode of ['zero', 'perfect', 'ignore']) {
+        const r = Calculator.calculateSubject(sub(), 'PERCENT', null, mode);
+        assert.strictEqual(r.floor, 30);
+        assert.strictEqual(r.ceiling, 80);
+        assert.strictEqual(r.pace, 60);
+        assert.strictEqual(r.projected, 60, '30 banked + 50 open at a 60% pace');
+      }
+    });
+
+    test('GE5.3 Projection sits between floor and ceiling', () => {
+      const r = Calculator.calculateSubject(subjectWith([{ id: 'a', score: 9, max: 10 }, { id: 'b', score: '', max: 10 }, { id: 'c', score: '', max: 10 }]), 'PERCENT');
+      assert.ok(r.floor <= r.projected && r.projected <= r.ceiling);
+    });
+
+    test('GE5.4 With nothing graded there is no pace, and graded-only reads 0 without data', () => {
+      const r = Calculator.calculateSubject(subjectWith([{ id: 'a', score: '', max: 10 }]), 'PERCENT', null, 'ignore');
+      assert.strictEqual(r.pace, null);
+      assert.strictEqual(r.projected, null);
+      assert.strictEqual(r.percent, 0);
+      assert.strictEqual(r.hasData, false);
+    });
+
+    test('GE5.5 Outside zero mode, a subject with no scores stays out of the semester', () => {
+      const sem = { subjects: [
+        { ...sub(), id: 'x', units: 3 },
+        { ...subjectWith([{ id: 'n', score: '', max: 100 }]), id: 'y', units: 3 },
+      ] };
+      assert.strictEqual(Calculator.calculateSemester(sem, 'PERCENT').percent, 15, 'zero: the empty subject drags it to (30+0)/2');
+      assert.strictEqual(Calculator.calculateSemester(sem, 'PERCENT', 'perfect').percent, 80, 'perfect: the empty subject is not a free 100');
+      assert.strictEqual(Calculator.calculateSemester(sem, 'PERCENT', 'ignore').percent, 60);
+      const years = [{ semesters: [sem] }];
+      assert.strictEqual(Calculator.calculateYear(years[0], 'PERCENT', 'perfect').percent, 80);
+      assert.strictEqual(Calculator.calculateCumulative(years, 'PERCENT', 'ignore').percent, 60);
+    });
+
+    test('GE5.6 The saved mode falls back to zero for old or unknown values', () => {
+      assert.strictEqual(readUngradedMode(undefined), 'zero');
+      assert.strictEqual(readUngradedMode({ ungradedScores: 'perfect' }), 'perfect');
+      assert.strictEqual(readUngradedMode({ ungradedScores: 'bogus' }), 'zero');
+      assert.strictEqual(ungradedShort('perfect'), 'if you ace the rest');
     });
   });
 }

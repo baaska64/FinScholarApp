@@ -41,6 +41,8 @@ import {
     countScores,
     subjectOutlook,
     locateItem,
+    ungradedShort,
+    UngradedMode,
     MAX_ITEM_DEPTH,
     ItemPath,
     ItemDraft,
@@ -242,7 +244,7 @@ const OUTLOOK_STYLE: Record<OutlookKind, { tint: 'attendance' | 'schedule' | 'ta
  * is a read-only row that opens `ScoreSheet`. Nothing on this screen is a live
  * text field any more: edits are drafts that commit on Save.
  */
-export default function ActiveSubjectView({ subject, system, onChange, onBack }: any) {
+export default function ActiveSubjectView({ subject, system, onChange, onBack, ungraded = 'zero' }: any) {
     const { colorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
     const theme = getTheme(isDark);
@@ -271,7 +273,13 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
     const selIdx = periods.length === 0 ? -1 : foundIdx === -1 ? 0 : foundIdx;
     const selPeriod = selIdx >= 0 ? periods[selIdx] : null;
 
-    const res = Calculator.calculateSubject(subject, system);
+    const res = Calculator.calculateSubject(subject, system, null, ungraded);
+    const mode = ungraded as UngradedMode;
+    // Where the current pace lands the subject. Only shown while something is
+    // graded and something is still open; otherwise it repeats the headline.
+    const onTrack = res.projected !== null && res.absoluteAvailable > 0.05
+        ? { percent: res.projected, grade: formatGrade(res.projected, Number(subject.passingPercent) || 60, system) }
+        : null;
     const passPct = Number(subject.passingPercent) || 60;
     const outlook = subjectOutlook(subject, system);
     const isTracked = subject.gradeTrackingEnabled !== false;
@@ -584,11 +592,20 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
         const missed = Math.max(0, 100 - earned - open);
         const aimAt = outlook.requiredFor === 'pass' ? passPct : outlook.target;
         const needed = outlook.requiredAverage !== null ? Math.max(0, Math.min(open, aimAt - earned)) : 0;
-        const earnedColor = getGradeTierColor(res.percent, isDark, res.hasData);
+        // Banked points are coloured by how the graded work went (the pace),
+        // not by the headline — in perfect mode that is the best case, which
+        // would paint a weak 27.5 banked points green.
+        const earnedColor = getGradeTierColor(res.pace ?? res.percent, isDark, res.hasData);
 
-        const subtitle = outlook.requiredAverage !== null
-            ? `${outlook.requiredAverage > 100 ? 'Over 100%' : `${outlook.requiredAverage.toFixed(1)}%`} average on the ${outlook.remaining.length} score${outlook.remaining.length !== 1 ? 's' : ''} left ${outlook.requiredFor === 'pass' ? 'just to pass' : `to reach ${formatWeight(outlook.target)}%`}.`
-            : outlook.message;
+        const avgText = outlook.requiredAverage === null ? '' : outlook.requiredAverage > 100 ? 'over 100%' : `${outlook.requiredAverage.toFixed(1)}%`;
+        const leftText = `${outlook.remaining.length} score${outlook.remaining.length !== 1 ? 's' : ''} left`;
+        // Counting blanks as perfect, the grade on screen is the best case, so
+        // the requirement reads as a floor to hold rather than a climb.
+        const subtitle = outlook.requiredAverage === null
+            ? outlook.message
+            : mode === 'perfect'
+                ? `Keep ${/^(8|over|1[18](?!\d))/.test(avgText) ? 'an' : 'a'} ${avgText} average on the ${leftText} to ${outlook.requiredFor === 'pass' ? 'still pass' : `stay at ${formatWeight(outlook.target)}% or higher`}.`
+                : `${avgText.charAt(0).toUpperCase()}${avgText.slice(1)} average on the ${leftText} ${outlook.requiredFor === 'pass' ? 'just to pass' : `to reach ${formatWeight(outlook.target)}%`}.`;
 
         const legend = [
             { key: 'earned', color: earnedColor, label: 'earned', value: earned },
@@ -707,7 +724,7 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                                 {r.needed > r.sumMax ? `${r.sumMax}+` : r.needed.toFixed(r.needed >= 100 ? 0 : 1)}
                             </Text>
                             <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 8.5, letterSpacing: 0.5, color: tint.ink, opacity: 0.85 }}>
-                                OF {r.sumMax}
+                                {mode === 'perfect' ? 'MIN ' : ''}OF {r.sumMax}
                             </Text>
                         </View>
                         <View style={{ flex: 1 }}>
@@ -1060,8 +1077,7 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                                     </View>
                                 )}
                                 <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: brand.onHeroMuted, marginTop: 4 }}>
-                                    {res.hasData ? getGradeTierLabel(res.percent, true) : total === 0 ? 'Set up grading below' : 'Log a score to start'}
-                                    {total > 0 ? ` · ${filled}/${total} in` : ''}
+                                    {res.hasData ? `${getGradeTierLabel(res.percent, true)} · ${ungradedShort(mode)}` : total === 0 ? 'Set up grading below' : 'Log a score to start'}
                                 </Text>
                             </View>
                         </View>
@@ -1075,9 +1091,34 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack }:
                                 ink={brand.onHero}
                                 inkMuted={brand.onHeroMuted}
                                 pinRing={brand.heroTo}
-                                accessibilityLabel={res.hasData ? `${res.percent.toFixed(1)} percent against a passing mark of ${passPct}` : 'No score on the scale yet'}
+                                range={res.hasData ? [res.floor, res.ceiling] : null}
+                                accessibilityLabel={res.hasData ? `${res.percent.toFixed(1)} percent against a passing mark of ${passPct}. ${res.floor.toFixed(1)} locked in, ${res.ceiling.toFixed(1)} still possible.` : 'No score on the scale yet'}
                             />
                         </View>
+
+                        {total > 0 && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
+                                <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: brand.onHeroMuted }}>
+                                    {filled} of {total} scores in
+                                </Text>
+                                {onTrack && (
+                                    <View
+                                        accessible
+                                        accessibilityLabel={`On track for ${onTrack.grade}, ${onTrack.percent.toFixed(1)} percent, at your current pace`}
+                                        style={{
+                                            flexDirection: 'row', alignItems: 'center', gap: 4,
+                                            paddingHorizontal: 9, height: 24, borderRadius: 999,
+                                            backgroundColor: brand.well, borderWidth: 1, borderColor: brand.wellLine,
+                                        }}
+                                    >
+                                        <Ionicons name="trending-up" size={12} color={brand.onHero} />
+                                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: brand.onHeroMuted }}>
+                                            On track for <Text style={{ fontFamily: 'Nunito_900Black', color: brand.onHero }}>{system === 'PERCENT' ? onTrack.grade : `${onTrack.grade} · ${onTrack.percent.toFixed(1)}%`}</Text>
+                                        </Text>
+                                    </View>
+                                )}
+                            </View>
+                        )}
                     </View>
                 </BandSurface>
 

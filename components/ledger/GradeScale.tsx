@@ -20,6 +20,12 @@ interface GradeScaleProps {
     inkMuted: string;
     /** Pin outline; the band colour under it, so the pin reads as cut out. */
     pinRing: string;
+    /**
+     * [locked in, best possible]. The track is solid up to the first and
+     * shaded up to the second, so whichever number the pin shows, the other
+     * two views of the grade stay visible.
+     */
+    range?: [number, number] | null;
     accessibilityLabel?: string;
 }
 
@@ -33,13 +39,23 @@ const LABEL_W = 56;
  * matter* — the passing mark, your target, the tier boundaries. A bare bar
  * only says "how full".
  */
-export default function GradeScale({ percent, marks, track, fill, ink, inkMuted, pinRing, accessibilityLabel }: GradeScaleProps) {
+export default function GradeScale({ percent, marks, track, fill, ink, inkMuted, pinRing, range, accessibilityLabel }: GradeScaleProps) {
     const p = percent === null || !Number.isFinite(percent) ? null : Math.max(0, Math.min(100, percent));
+    const clamp = (n: number) => Math.max(0, Math.min(100, n));
+    const lo = range ? clamp(range[0]) : null;
+    const hi = range ? clamp(Math.max(range[0], range[1])) : null;
 
     return (
         <View accessible accessibilityLabel={accessibilityLabel} style={{ paddingTop: 4 }}>
             <View style={{ height: 8, borderRadius: 4, backgroundColor: track }}>
-                {p !== null && <View style={{ width: `${p}%`, height: '100%', borderRadius: 4, backgroundColor: fill }} />}
+                {lo !== null && hi !== null && p !== null ? (
+                    <>
+                        <View style={{ position: 'absolute', left: `${lo}%`, width: `${hi - lo}%`, height: '100%', borderRadius: 4, backgroundColor: fill, opacity: 0.35 }} />
+                        <View style={{ width: `${lo}%`, height: '100%', borderRadius: 4, backgroundColor: fill }} />
+                    </>
+                ) : p !== null ? (
+                    <View style={{ width: `${p}%`, height: '100%', borderRadius: 4, backgroundColor: fill }} />
+                ) : null}
 
                 {marks.map((m) => (
                     <View

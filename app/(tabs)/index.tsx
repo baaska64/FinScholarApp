@@ -9,6 +9,7 @@ import { supabase } from '@/services/supabaseClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useFocusEffect } from 'expo-router';
 import { Calculator } from '@/utils/calculator';
+import { readUngradedMode } from '@/utils/gradeEntry';
 import Tabs from '@/components/ledger/Tabs';
 import { useSemesterContext } from '@/components/SemesterContext';
 import { getTheme, getTints, getBrand, Radius } from '@/constants/Theme';
@@ -405,8 +406,9 @@ export default function DashboardScreen() {
     const currentSem = currentYear?.semesters?.find((s: any) => s.id === activeSemId);
     const system = data.settings?.gradingSystem || '1_IS_BEST';
     
-    const semRes = currentSem ? Calculator.calculateSemester(currentSem, system) : { percent: 0, equivalent: 0 };
-    const yrRes = currentYear ? Calculator.calculateYear(currentYear, system) : { percent: 0, equivalent: 0 };
+    const ungraded = readUngradedMode(data.settings);
+    const semRes = currentSem ? Calculator.calculateSemester(currentSem, system, ungraded) : { percent: 0, equivalent: 0 };
+    const yrRes = currentYear ? Calculator.calculateYear(currentYear, system, ungraded) : { percent: 0, equivalent: 0 };
 
     // Metric 1: Semester Progress (days passed / total days * 100)
     const semProgress = currentSem && currentSem.startDate && currentSem.endDate ? (() => {

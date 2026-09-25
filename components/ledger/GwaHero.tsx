@@ -12,11 +12,18 @@ export interface GwaFigure {
     hasData: boolean;
     /** One quiet line of context under the scale. */
     caption: string;
+    /**
+     * Where the student's current pace lands this figure, already formatted
+     * ("2.10", "78.4%"). Omitted when nothing is graded or nothing is left.
+     */
+    onTrack?: string | null;
 }
 
 type Scope = 'sem' | 'year' | 'cum';
 
 interface GwaHeroProps {
+    /** Which of the three numbers the figure is ("banked so far", …). */
+    modeShort: string;
     isDark: boolean;
     system: string;
     systemLabel: string;
@@ -42,7 +49,7 @@ const SCOPES: { key: Scope; label: string }[] = [
  *
  * Content only — the caller draws the band behind it.
  */
-export default function GwaHero({ isDark, system, systemLabel, sem, year, cum, onOpenSettings }: GwaHeroProps) {
+export default function GwaHero({ isDark, system, systemLabel, modeShort, sem, year, cum, onOpenSettings }: GwaHeroProps) {
     const brand = getBrand(isDark);
     const [scope, setScope] = useState<Scope>('sem');
     const fig = scope === 'sem' ? sem : scope === 'year' ? year : cum;
@@ -130,7 +137,7 @@ export default function GwaHero({ isDark, system, systemLabel, sem, year, cum, o
                     </Text>
                     <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 12, color: brand.onHeroMuted, marginTop: 1 }}>
                         {fig.hasData
-                            ? system === 'PERCENT' ? `${scopeName} average` : `${fig.percent.toFixed(1)}% average`
+                            ? system === 'PERCENT' ? modeShort : `${fig.percent.toFixed(1)}% · ${modeShort}`
                             : 'Log a score to see it'}
                     </Text>
                 </View>
@@ -153,9 +160,30 @@ export default function GwaHero({ isDark, system, systemLabel, sem, year, cum, o
                 />
             </View>
 
-            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: brand.onHeroMuted, marginTop: 4 }}>
-                {fig.caption}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'Nunito_700Bold', fontSize: 11.5, color: brand.onHeroMuted }}>
+                    {fig.caption}
+                </Text>
+                {/* The pace projection is the one figure that is neither the
+                    floor nor the ceiling, so it rides alongside whichever the
+                    setting leads with. */}
+                {fig.onTrack ? (
+                    <View
+                        accessible
+                        accessibilityLabel={`On track for ${fig.onTrack} at your current pace`}
+                        style={{
+                            flexDirection: 'row', alignItems: 'center', gap: 4,
+                            paddingHorizontal: 9, height: 24, borderRadius: 999,
+                            backgroundColor: brand.well, borderWidth: 1, borderColor: brand.wellLine,
+                        }}
+                    >
+                        <Ionicons name="trending-up" size={12} color={brand.onHero} />
+                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 11, color: brand.onHeroMuted }}>
+                            On track for <Text style={{ fontFamily: 'Nunito_900Black', color: brand.onHero }}>{fig.onTrack}</Text>
+                        </Text>
+                    </View>
+                ) : null}
+            </View>
         </View>
     );
 }

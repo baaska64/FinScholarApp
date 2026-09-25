@@ -19,6 +19,7 @@ import { AlertService } from '@/components/CustomAlert';
 import { useSemesterContext } from '@/components/SemesterContext';
 import { getTheme, getTints, getBrand, Typography, Radius } from '@/constants/Theme';
 import { getGradeTierColor, tierBreakdown } from '@/utils/gradeTiers';
+import { readUngradedMode, ungradedShort, UNGRADED_MODES } from '@/utils/gradeEntry';
 import Card from '@/components/ui/Card';
 import AnimatedPressable from '@/components/ui/AnimatedPressable';
 import { ListSkeleton } from '@/components/ui/LoadingSkeleton';
@@ -210,17 +211,38 @@ export default function GradeLedgerTab() {
   const system = data.settings?.gradingSystem || '1_IS_BEST';
   const systemLabel = GRADING_SYSTEMS.find(s => s.key === system)?.label || '1.0 is Best';
 
+  const ungraded = readUngradedMode(data.settings);
+
   let semPercent = 0, semEq = 0, yearPercent = 0, yearEq = 0, cumPercent = 0, cumEq = 0;
   if (currentSem) {
-    const semRes = Calculator.calculateSemester(currentSem, system);
+    const semRes = Calculator.calculateSemester(currentSem, system, ungraded);
     semPercent = semRes.percent; semEq = semRes.equivalent;
   }
   if (currentYear) {
-    const yrRes = Calculator.calculateYear(currentYear, system);
+    const yrRes = Calculator.calculateYear(currentYear, system, ungraded);
     yearPercent = yrRes.percent; yearEq = yrRes.equivalent;
   }
-  const cumRes = Calculator.calculateCumulative(data.years || [], system);
+  const cumRes = Calculator.calculateCumulative(data.years || [], system, ungraded);
   cumPercent = cumRes.percent; cumEq = cumRes.equivalent;
+
+  // "On track for": each scope re-run with the student's graded average
+  // carried over what is left. Only worth a chip while something is graded
+  // and something is still open — otherwise it just repeats the headline.
+  const subjectsOf = (sems: any[]) => sems.flatMap((sm: any) => (sm?.subjects || []).filter((x: any) => x.gradeTrackingEnabled !== false));
+  const hasOpenWork = (subs: any[]) => subs.some((x: any) => {
+    const r = Calculator.calculateSubject(x, system);
+    return r.hasData && r.absoluteAvailable > 0.05;
+  });
+  const onTrackText = (res: { percent: number; equivalent: number }, subs: any[]) => {
+    if (!hasOpenWork(subs) || !(res.percent > 0)) return null;
+    return system === 'PERCENT' ? `${res.percent.toFixed(1)}%` : res.equivalent.toFixed(2);
+  };
+  const semOnTrack = currentSem ? onTrackText(Calculator.calculateSemester(currentSem, system, 'project' as any), subjectsOf([currentSem])) : null;
+  const yearOnTrack = currentYear ? onTrackText(Calculator.calculateYear(currentYear, system, 'project' as any), subjectsOf(currentYear.semesters || [])) : null;
+  const cumOnTrack = onTrackText(
+    Calculator.calculateCumulative(data.years || [], system, 'project' as any),
+    subjectsOf((data.years || []).flatMap((y: any) => y.semesters || []))
+  );
 
   // Unscheduled subjects for current semester
   const unscheduledSubjects = currentSem ? getUnscheduledSubjects(currentSem) : [];
@@ -237,7 +259,7 @@ export default function GradeLedgerTab() {
 
   // How the counted subjects stand, band by band, for the Subjects card.
   const standing = tierBreakdown(trackedSubjects.map((s: any) => {
-    const r = Calculator.calculateSubject(s, system);
+    const r = Calculator.calculateSubject(s, system, null, ungraded);
     return { percent: r.percent, hasData: r.hasData };
   }));
   const zoneTrack = isDark ? 'rgba(0,0,0,0.28)' : 'rgba(255,255,255,0.8)';
@@ -390,6 +412,7 @@ export default function GradeLedgerTab() {
         <ActiveSubjectView
           subject={activeSubject}
           system={system}
+          ungraded={ungraded}
           onBack={() => setActiveSubId(null)}
           onChange={(newSubject: any) => {
             const nd = JSON.parse(JSON.stringify(data));
@@ -506,23 +529,27 @@ export default function GradeLedgerTab() {
                 isDark={isDark}
                 system={system}
                 systemLabel={systemLabel}
+                modeShort={ungradedShort(ungraded)}
                 sem={{
                   value: system === 'PERCENT' ? semPercent : semEq,
                   percent: semPercent,
                   hasData: Boolean(semEq || semPercent),
-                  caption: `${trackedSubjects.length} of ${allSubjects.length} subject${allSubjects.length !== 1 ? 's' : ''} counted · ${unitsCounted} unit${unitsCounted !== 1 ? 's' : ''}`,
+                  caption: `${trackedSubjects.length} of ${allSubjects.length} counted · ${unitsCounted} unit${unitsCounted !== 1 ? 's' : ''}`,
+                  onTrack: semOnTrack,
                 }}
                 year={{
                   value: system === 'PERCENT' ? yearPercent : yearEq,
                   percent: yearPercent,
                   hasData: Boolean(yearEq || yearPercent),
                   caption: `${currentYear?.name || 'This year'} · ${yearTerms} term${yearTerms !== 1 ? 's' : ''}`,
+                  onTrack: yearOnTrack,
                 }}
                 cum={{
                   value: system === 'PERCENT' ? cumPercent : cumEq,
                   percent: cumPercent,
                   hasData: Boolean(cumEq || cumPercent),
-                  caption: `Every term so far · ${allTerms} term${allTerms !== 1 ? 's' : ''}`,
+                  caption: `All ${allTerms} term${allTerms !== 1 ? 's' : ''}`,
+                  onTrack: cumOnTrack,
                 }}
                 onOpenSettings={() => setShowSettings(true)}
               />
@@ -805,6 +832,7 @@ export default function GradeLedgerTab() {
                           first={i === 0}
                           subject={sub}
                           system={system}
+                          ungraded={ungraded}
                           isSelectionMode={isEditing}
                           isEditMode={isEditing}
                           isSelected={selectedSubjects.has(sub.id)}
@@ -1050,7 +1078,10 @@ export default function GradeLedgerTab() {
         presentationStyle="pageSheet"
         onRequestClose={() => setShowSettings(false)}
       >
-        <View style={{ flex: 1, paddingTop: 24, paddingHorizontal: GUTTER + 6, backgroundColor: theme.background }}>
+        <ScrollView
+          style={{ flex: 1, backgroundColor: theme.background }}
+          contentContainerStyle={{ paddingTop: 24, paddingHorizontal: GUTTER + 6, paddingBottom: insets.bottom + 32 }}
+        >
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
             <View style={{ flex: 1, marginRight: 12 }}>
               <Text style={{ ...Typography.heading, color: theme.text, fontSize: 24 }}>Ledger settings</Text>
@@ -1111,6 +1142,51 @@ export default function GradeLedgerTab() {
             })}
           </Card>
 
+          <Text style={{ ...microLabel, marginBottom: 4, paddingLeft: 2 }}>Scores not entered yet</Text>
+          <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, lineHeight: 16, color: theme.textTertiary, marginBottom: 8, paddingLeft: 2 }}>
+            How work that hasn't been graded counts in every grade and GWA. "On track for" always shows where your current pace lands.
+          </Text>
+          <Card padding={0} radius={Radius.xl} style={{ overflow: 'hidden', marginBottom: 24 }}>
+            {UNGRADED_MODES.map((m, i) => {
+              const selected = ungraded === m.key;
+              return (
+                <TouchableOpacity
+                  key={m.key}
+                  activeOpacity={0.7}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`${m.label}. ${m.hint}`}
+                  onPress={() => {
+                    const nd = JSON.parse(JSON.stringify(data));
+                    if (!nd.settings) nd.settings = {};
+                    nd.settings.ungradedScores = m.key;
+                    saveData(nd);
+                  }}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center',
+                    paddingVertical: 13, paddingHorizontal: 14,
+                    borderTopWidth: i === 0 ? 0 : 1, borderTopColor: theme.cardBorder,
+                    backgroundColor: selected ? tints.grades.fill : 'transparent',
+                  }}
+                >
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15, color: theme.text }}>
+                      {m.label}{m.key === 'zero' ? <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textTertiary }}>  default</Text> : null}
+                    </Text>
+                    <Text style={{ fontFamily: 'Nunito_400Regular', fontSize: 11.5, color: theme.textTertiary, marginTop: 1 }}>
+                      {m.hint}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={selected ? 'radio-button-on' : 'radio-button-off'}
+                    size={21}
+                    color={selected ? theme.primary : theme.textTertiary}
+                  />
+                </TouchableOpacity>
+              );
+            })}
+          </Card>
+
           <Text style={{ ...microLabel, marginBottom: 8, paddingLeft: 2 }}>Danger zone</Text>
           <TouchableOpacity
             onPress={() => {
@@ -1150,7 +1226,7 @@ export default function GradeLedgerTab() {
               </Text>
             </View>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </Modal>
 
       {/* Premium Paywall Modal */}

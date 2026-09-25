@@ -6,7 +6,7 @@ import { useColorScheme } from 'nativewind';
 import Card from '@/components/ui/Card';
 import { getTheme, getTints, Radius } from '@/constants/Theme';
 import { getGradeTierColor, getGradeTierWash } from '@/utils/gradeTiers';
-import { countScores } from '@/utils/gradeEntry';
+import { countScores, UngradedMode } from '@/utils/gradeEntry';
 
 export interface SubjectCardProps {
     subject: any;
@@ -30,6 +30,8 @@ export interface SubjectCardProps {
      * of its own. `first` drops the top hairline.
      */
     asRow?: boolean;
+    /** How scores not entered yet count — the ledger setting. Defaults to 0. */
+    ungraded?: UngradedMode;
     first?: boolean;
 }
 
@@ -52,6 +54,7 @@ export default function SubjectCard({
     isSelected,
     onToggleSelect,
     asRow,
+    ungraded = 'zero',
     first,
 }: SubjectCardProps) {
     const { colorScheme } = useColorScheme();
@@ -67,10 +70,12 @@ export default function SubjectCard({
     const isTracked = subject?.gradeTrackingEnabled !== false;
     const hasSchedule = subject?.hasSchedule === true;
 
-    const res = Calculator.calculateSubject(subject, system);
+    const res = Calculator.calculateSubject(subject, system, null, ungraded);
     const rawPercent = isNaN(res.percent) ? 0 : res.percent;
     const p = Math.max(0, Math.min(100, rawPercent));
     const showGrade = isTracked && res.hasData;
+    const floorPct = Math.max(0, Math.min(100, res.floor ?? p));
+    const ceilPct = Math.max(floorPct, Math.min(100, res.ceiling ?? p));
     const passPct = Math.max(0, Math.min(100, Number(subject?.passingPercent) || 60));
 
     const tierColor = getGradeTierColor(p, isDark, showGrade);
@@ -141,7 +146,14 @@ export default function SubjectCard({
 
                     <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 8 }}>
                         <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: theme.surfaceSecondary }}>
-                            {showGrade && <View style={{ width: `${p}%`, height: '100%', borderRadius: 3, backgroundColor: tierColor }} />}
+                            {/* Solid to what is locked in, shaded on to the best
+                                still possible — the range the setting picks from. */}
+                            {showGrade && (
+                                <>
+                                    <View style={{ position: 'absolute', left: `${floorPct}%`, width: `${Math.max(0, ceilPct - floorPct)}%`, height: '100%', borderRadius: 3, backgroundColor: tierColor, opacity: 0.28 }} />
+                                    <View style={{ width: `${floorPct}%`, height: '100%', borderRadius: 3, backgroundColor: tierColor }} />
+                                </>
+                            )}
                             {isTracked && (
                                 <View style={{ position: 'absolute', left: `${passPct}%`, top: -2, bottom: -2, width: 2, marginLeft: -1, borderRadius: 1, backgroundColor: theme.textTertiary, opacity: 0.7 }} />
                             )}
