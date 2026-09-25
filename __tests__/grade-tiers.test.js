@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { getGradeTier, getGradeTierColor, getGradeTierLabel, getGradeTierWash } from '../utils/gradeTiers.ts';
+import { getGradeTier, getGradeTierColor, getGradeTierLabel, getGradeTierWash, tierBreakdown } from '../utils/gradeTiers.ts';
 
 export function runGradeTierTests(describe, test) {
   describe('Grade Tiers Suite 1: Band boundaries', () => {
@@ -65,6 +65,17 @@ export function runGradeTierTests(describe, test) {
       assert.strictEqual(getGradeTierLabel(62), 'Passing');
       assert.strictEqual(getGradeTierLabel(40), 'Needs work');
       assert.strictEqual(getGradeTierLabel(0), 'No grades yet');
+    });
+
+    test('GT3.3 tierBreakdown counts per band, best first, and drops empty bands', () => {
+      const out = tierBreakdown([
+        { percent: 82, hasData: true }, { percent: 95, hasData: true }, { percent: 78, hasData: true },
+        { percent: 40, hasData: true }, { percent: 0, hasData: false },
+      ]);
+      assert.deepStrictEqual(out.map((t) => [t.key, t.count]), [['outstanding', 1], ['on-track', 2], ['needs-work', 1], ['none', 1]]);
+      assert.strictEqual(out.find((t) => t.key === 'none').label, 'No scores yet');
+      assert.strictEqual(out[1].label, 'On track');
+      assert.deepStrictEqual(tierBreakdown([]), []);
     });
 
     test('GT3.2 The tier wash is the tier colour at low alpha, stronger on its line', () => {

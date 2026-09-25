@@ -18,7 +18,7 @@ import ActiveSubjectView from '@/components/ledger/ActiveSubjectView';
 import { AlertService } from '@/components/CustomAlert';
 import { useSemesterContext } from '@/components/SemesterContext';
 import { getTheme, getTints, getBrand, Typography, Radius } from '@/constants/Theme';
-import { getGradeTierColor } from '@/utils/gradeTiers';
+import { getGradeTierColor, tierBreakdown } from '@/utils/gradeTiers';
 import Card from '@/components/ui/Card';
 import AnimatedPressable from '@/components/ui/AnimatedPressable';
 import { ListSkeleton } from '@/components/ui/LoadingSkeleton';
@@ -69,6 +69,9 @@ const GUTTER = 14;
 
 // Fin's poses for the empty states. Transparent full-body art, stood in the
 // panel's tinted zone — never cropped into a frame.
+/** A percent inside each band, to resolve its colour from `getGradeTierColor`. */
+const TIER_SAMPLE: Record<string, number> = { outstanding: 95, 'on-track': 80, passing: 65, 'needs-work': 30 };
+
 const FIN_STUDYING = require('../../assets/images/studying.png');
 const FIN_SLEEPING = require('../../assets/images/sleeping.png');
 const FIN_HAPPY = require('../../assets/images/happy.png');
@@ -232,13 +235,11 @@ export default function GradeLedgerTab() {
   const yearTerms = currentYear?.semesters?.length || 0;
   const allTerms = (data.years || []).reduce((n: number, y: any) => n + (y.semesters?.length || 0), 0);
 
-  // Counted subjects with units, for the Subjects card's makeup bar.
-  const gwaParts = trackedSubjects
-    .filter((s: any) => (Number(s.units) || 0) > 0)
-    .map((s: any) => {
-      const r = Calculator.calculateSubject(s, system);
-      return { id: s.id, name: s.name, units: Number(s.units) || 0, percent: r.percent, hasData: r.hasData };
-    });
+  // How the counted subjects stand, band by band, for the Subjects card.
+  const standing = tierBreakdown(trackedSubjects.map((s: any) => {
+    const r = Calculator.calculateSubject(s, system);
+    return { percent: r.percent, hasData: r.hasData };
+  }));
   const zoneTrack = isDark ? 'rgba(0,0,0,0.28)' : 'rgba(255,255,255,0.8)';
 
   const sortedSubjects = [...displayedSubjects].sort((a: any, b: any) => {
@@ -571,11 +572,11 @@ export default function GradeLedgerTab() {
                   }}
                 >
                   <View style={{
-                    width: 48, height: 44, borderRadius: 13, alignItems: 'center', justifyContent: 'center',
+                    minWidth: 58, height: 48, paddingHorizontal: 6, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
                     backgroundColor: theme.surface, borderWidth: 1, borderColor: tints.tasks.line,
                   }}>
-                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: tints.tasks.ink, letterSpacing: -0.4 }}>{unscheduledSubjects.length}</Text>
-                    <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 7.5, letterSpacing: 0.5, color: tints.tasks.ink }}>NO TIMES</Text>
+                    <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 17, color: tints.tasks.ink, letterSpacing: -0.4 }}>{unscheduledSubjects.length}</Text>
+                    <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 8, letterSpacing: 0.3, color: tints.tasks.ink, marginTop: 1 }}>NO TIMES</Text>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13.5, color: theme.text }}>
@@ -639,24 +640,41 @@ export default function GradeLedgerTab() {
                         </SpotlightTarget>
                       </View>
 
-                      {/* ── Where the GWA comes from: one segment per counted
-                             subject, as wide as its units, filled by its score ── */}
-                      {gwaParts.length > 0 && (
+                      {/* ── How the counted subjects stand, band by band. Every
+                             segment is named in the legend, so nothing has to be
+                             matched to a subject by eye. ── */}
+                      {standing.length > 0 && (
                         <View
                           accessible
-                          accessibilityLabel={`GWA makeup: ${gwaParts.map((g) => `${g.name}, ${g.units} units, ${g.hasData ? `${g.percent.toFixed(0)} percent` : 'no scores'}`).join('; ')}`}
+                          accessibilityLabel={`How your counted subjects stand: ${standing.map((t) => `${t.count} ${t.label}`).join(', ')}`}
                           style={{ marginTop: 14 }}
                         >
-                          <View style={{ flexDirection: 'row', gap: 3 }}>
-                            {gwaParts.map((g) => (
-                              <View key={g.id} style={{ flex: g.units, minWidth: 0, height: 12, borderRadius: 4, overflow: 'hidden', backgroundColor: zoneTrack }}>
-                                <View style={{ width: `${g.hasData ? Math.max(0, Math.min(100, g.percent)) : 0}%`, height: '100%', backgroundColor: getGradeTierColor(g.percent, isDark, g.hasData) }} />
+                          <View style={{ flexDirection: 'row', gap: 3, height: 10 }}>
+                            {standing.map((t) => (
+                              <View
+                                key={t.key}
+                                style={{
+                                  flex: t.count, borderRadius: 4,
+                                  backgroundColor: t.key === 'none' ? zoneTrack : getGradeTierColor(TIER_SAMPLE[t.key], isDark, true),
+                                  borderWidth: t.key === 'none' ? 1 : 0, borderColor: tints.grades.line,
+                                }}
+                              />
+                            ))}
+                          </View>
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 4, marginTop: 8 }}>
+                            {standing.map((t) => (
+                              <View key={t.key} style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                                <View style={{
+                                  width: 9, height: 9, borderRadius: 3,
+                                  backgroundColor: t.key === 'none' ? zoneTrack : getGradeTierColor(TIER_SAMPLE[t.key], isDark, true),
+                                  borderWidth: t.key === 'none' ? 1 : 0, borderColor: tints.grades.line,
+                                }} />
+                                <Text style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 12, color: theme.textSecondary }}>
+                                  <Text style={{ fontFamily: 'Nunito_900Black', color: theme.text }}>{t.count}</Text> {t.label}
+                                </Text>
                               </View>
                             ))}
                           </View>
-                          <Text numberOfLines={1} style={{ fontFamily: 'Nunito_600SemiBold', fontSize: 10.5, color: theme.textSecondary, marginTop: 5 }}>
-                            Each bar is a subject, as wide as its units and filled by its score
-                          </Text>
                         </View>
                       )}
 

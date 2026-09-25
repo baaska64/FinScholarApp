@@ -58,3 +58,31 @@ export function getGradeTierWash(percent: number, isDark: boolean, hasData: bool
     const c = getGradeTierColor(percent, isDark, hasData);
     return { fill: withAlpha(c, isDark ? 0.16 : 0.1), line: withAlpha(c, isDark ? 0.34 : 0.26) };
 }
+
+export interface TierCount {
+    key: GradeTier['key'];
+    /** Legend word: the tier label, with "No scores yet" for subjects without data. */
+    label: string;
+    count: number;
+}
+
+const TIER_ORDER: GradeTier['key'][] = ['outstanding', 'on-track', 'passing', 'needs-work', 'none'];
+
+/**
+ * How many subjects sit in each band, best first, empty bands dropped — the
+ * grades list's "how are they doing" breakdown.
+ */
+export function tierBreakdown(entries: { percent: number; hasData: boolean }[]): TierCount[] {
+    const counts = new Map<GradeTier['key'], number>();
+    for (const e of entries) {
+        const k = getGradeTier(e.percent, e.hasData).key;
+        counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    return TIER_ORDER
+        .filter((k) => counts.get(k))
+        .map((k) => ({
+            key: k,
+            label: k === 'none' ? 'No scores yet' : getGradeTier(k === 'outstanding' ? 95 : k === 'on-track' ? 80 : k === 'passing' ? 65 : 30).label,
+            count: counts.get(k)!,
+        }));
+}
