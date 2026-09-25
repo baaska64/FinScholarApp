@@ -30,6 +30,7 @@ import AnimatedPressable from '@/components/ui/AnimatedPressable';
 import KeyboardSheet from '@/components/ui/KeyboardSheet';
 import SectionHeader from '@/components/ui/SectionHeader';
 import HeroBackdrop from '@/components/dashboard/HeroBackdrop';
+import GoalRing from '@/components/study/GoalRing';
 import SpotlightTarget from '@/components/spotlight/SpotlightTarget';
 import { useScreenTour } from '@/components/spotlight/useScreenTour';
 import { SPOTLIGHT_IDS, TOUR_KEYS, STUDY_TOUR } from '@/constants/tours';
@@ -123,14 +124,12 @@ const FONT_SCALE = PixelRatio.getFontScale();
 /** Page gutter, matched to the dashboard and schedule tabs. */
 const GUTTER = 14;
 /**
- * The brand band, sized like the dashboard's so the two headers read as one
- * family. It grows with the font scale because the stat card is lifted into
- * it by a fixed amount — at a large text size a fixed band would run the
- * due-count straight into the card.
+ * How far the page sheet is pulled up over the brand band. The dashboard
+ * floats a stat card on a domed band; the study tab instead ends its band
+ * flat and slides the whole page over it, so the two headers share a colour
+ * without sharing a silhouette.
  */
-const HERO_H = Math.round(176 * Math.max(1, Math.min(FONT_SCALE, 1.4)));
-const HERO_CURVE = 26;
-const STAT_LIFT = 48;
+const SHEET_LIFT = 26;
 
 type DetailFilter = 'all' | 'new' | 'learning' | 'due' | 'suspended' | 'flagged' | 'leech';
 type PracticeAction = 'quiz' | 'match' | 'exam' | 'custom';
@@ -240,6 +239,8 @@ export default function FlashcardsScreen() {
   const [activePath, setActivePath] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
+  /** Measured height of the home band; its height follows its content, so the backdrop is sized to it. */
+  const [bandH, setBandH] = useState(0);
 
   // First visit only: point at the create button, once the deck list is up.
   useScreenTour(TOUR_KEYS.study, STUDY_TOUR, !loading && view === 'decks');
@@ -1398,39 +1399,50 @@ export default function FlashcardsScreen() {
       { key: 'exam', icon: 'calendar-outline', label: 'Exam prep', hint: 'Ready by a date', tint: tints.danger },
       { key: 'custom', icon: 'flash-outline', label: 'Custom', hint: 'Ahead or cram', tint: tints.schedule },
     ];
+    // Two rows of two, icon beside the words: the dashboard's quick actions are
+    // one row of stacked tiles, and this toolbelt should not read as a copy.
+    const rows = [tiles.slice(0, 2), tiles.slice(2, 4)];
     return (
-      <View style={{ flexDirection: 'row', gap: 10 }}>
-        {tiles.map((t) => (
-          <TouchableOpacity
-            key={t.key}
-            onPress={() => (node ? runPractice(t.key, node) : launchFromHome(t.key))}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel={`${t.label}, ${t.hint}`}
-            style={{ flex: 1, alignItems: 'center' }}
-          >
-            <View
-              style={{
-                width: '100%',
-                height: 52,
-                borderRadius: 20,
-                marginBottom: 7,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: t.tint.fill,
-                borderWidth: 1,
-                borderColor: t.tint.line,
-              }}
-            >
-              <Ionicons name={t.icon} size={20} color={t.tint.ink} />
-            </View>
-            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 11.5, color: theme.text }}>
-              {t.label}
-            </Text>
-            <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 9.5, color: theme.textTertiary, marginTop: 1 }}>
-              {t.hint}
-            </Text>
-          </TouchableOpacity>
+      <View style={{ gap: 10 }}>
+        {rows.map((row, ri) => (
+          <View key={ri} style={{ flexDirection: 'row', gap: 10 }}>
+            {row.map((t) => (
+              <TouchableOpacity
+                key={t.key}
+                onPress={() => (node ? runPractice(t.key, node) : launchFromHome(t.key))}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`${t.label}, ${t.hint}`}
+                style={{
+                  flex: 1,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 10,
+                  paddingVertical: 10,
+                  paddingLeft: 10,
+                  paddingRight: 8,
+                  borderRadius: Radius.xl,
+                  backgroundColor: theme.surface,
+                  borderWidth: 1,
+                  borderColor: theme.cardBorder,
+                  borderBottomWidth: 2,
+                  borderBottomColor: theme.lip,
+                }}
+              >
+                <View style={{ width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: t.tint.fill }}>
+                  <Ionicons name={t.icon} size={18} color={t.tint.ink} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text numberOfLines={1} style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: theme.text }}>
+                    {t.label}
+                  </Text>
+                  <Text numberOfLines={1} style={{ fontFamily: 'Nunito_400Regular', fontSize: 11, color: theme.textTertiary, marginTop: 1 }}>
+                    {t.hint}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
         ))}
       </View>
     );
@@ -1464,29 +1476,19 @@ export default function FlashcardsScreen() {
       ? buildDeckTree(decks.filter((d) => d && (d.name.toLowerCase().includes(q) || (d.subject || '').toLowerCase().includes(q))))
       : tree;
 
-    const statTiles = [
+    const momentum = [
       {
         key: 'streak',
         icon: 'flame' as const,
-        value: `${streak}`,
-        label: 'Day streak',
+        value: `${streak}-day streak`,
         caption: studiedToday ? 'Done today' : streak > 0 ? 'Study to keep it' : 'Start one today',
         tint: tints.tasks,
       },
       {
-        key: 'goal',
-        icon: 'checkmark-done' as const,
-        value: `${Math.min(reviewedToday, 999)}/${goal}`,
-        label: 'Daily goal',
-        caption: reviewedToday >= goal ? 'Goal reached' : `${goal - reviewedToday} to go`,
-        tint: tints.attendance,
-      },
-      {
         key: 'retention',
         icon: 'pulse' as const,
-        value: retention === null ? '—' : `${Math.round(retention * 100)}%`,
-        label: 'Retention',
-        caption: retention === null ? 'No reviews yet' : 'Last 30 days',
+        value: retention === null ? 'No retention yet' : `${Math.round(retention * 100)}% retention`,
+        caption: retention === null ? 'Review to see it' : 'Last 30 days',
         tint: tints.schedule,
       },
     ];
@@ -1515,11 +1517,10 @@ export default function FlashcardsScreen() {
     return (
       <SafeAreaView edges={['left', 'right']} style={{ flex: 1, backgroundColor: theme.background }}>
         {/* ══ App bar, on the band ═══════════════════════════════════════════
-            The study tab opens the way the dashboard does: an azure band that
-            runs under the status bar, carrying the one number that matters —
-            how much is due today — with the headline stats on a card that
-            straddles its edge. The two tabs a student opens most now read as
-            the same app. */}
+            The study tab shares the dashboard's azure band so the two read as
+            one app, but not its layout: the band ends flat with the page pulled
+            over it as a sheet, the daily goal is a ring beside the due count,
+            and Study is one full-width button — no floating stat card. */}
         <View style={{ backgroundColor: brand.heroFrom, paddingTop: insets.top, zIndex: 10 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: GUTTER, paddingTop: 6, paddingBottom: 10, gap: 8 }}>
             <View style={{ flex: 1 }}>
@@ -1555,139 +1556,114 @@ export default function FlashcardsScreen() {
             keyboardShouldPersistTaps="handled"
           >
             {/* ══ Today, in the band ══ */}
-            <View style={{ height: decks.length > 0 ? HERO_H : 110 }}>
+            <View
+              onLayout={(e) => {
+                const h = Math.round(e.nativeEvent.layout.height);
+                if (h !== bandH) setBandH(h);
+              }}
+              style={{ paddingHorizontal: GUTTER + 4, paddingTop: 6, paddingBottom: SHEET_LIFT + 20 }}
+            >
               <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-                <HeroBackdrop width={SCREEN_WIDTH} height={decks.length > 0 ? HERO_H : 110} curve={HERO_CURVE} isDark={isDark} />
+                {bandH > 0 && <HeroBackdrop width={SCREEN_WIDTH} height={bandH} curve={0} motif="cards" isDark={isDark} />}
               </View>
-              <View style={{ paddingHorizontal: GUTTER + 4, paddingTop: 6 }}>
-                {decks.length === 0 ? (
-                  <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, lineHeight: 20, color: brand.onHeroMuted, maxWidth: 300 }}>
-                    Flashcards that schedule themselves — review each card right before you would forget it.
-                  </Text>
-                ) : (
-                  <>
-                    <Text style={{ ...microLabel, color: brand.onHeroMuted }}>{allDue > 0 ? 'Due today' : 'All caught up'}</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-                      <View style={{ flex: 1 }}>
-                        {allDue > 0 ? (
-                          <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 38, color: brand.onHero, letterSpacing: -1.2 }}>
-                            {allDue}
-                            <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15, color: brand.onHeroMuted, letterSpacing: 0 }}>
-                              {' '}card{allDue !== 1 ? 's' : ''} · ~{estMin} min
-                            </Text>
-                          </Text>
-                        ) : (
-                          <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: brand.onHero, letterSpacing: -0.4, marginTop: 4 }}>
-                            {totalCards === 0
-                              ? 'Add cards to begin'
-                              : nextDue < Infinity
-                              ? `Next review ${relativeDue(nextDue, clock)}`
-                              : 'Nothing scheduled'}
-                          </Text>
-                        )}
-                      </View>
+              {decks.length === 0 ? (
+                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 14, lineHeight: 20, color: brand.onHeroMuted, maxWidth: 300 }}>
+                  Flashcards that schedule themselves — review each card right before you would forget it.
+                </Text>
+              ) : (
+                <>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ ...microLabel, color: brand.onHeroMuted }}>{allDue > 0 ? 'Due today' : 'All caught up'}</Text>
                       {allDue > 0 ? (
-                        <AnimatedPressable
-                          onPress={() => startSession(null)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Study now, ${allDue} cards`}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            gap: 6,
-                            paddingHorizontal: 18,
-                            height: 44,
-                            borderRadius: Radius.full,
-                            backgroundColor: '#ffffff',
-                            borderBottomWidth: 3,
-                            borderBottomColor: 'rgba(0,0,0,0.18)',
-                          }}
-                        >
-                          <Ionicons name="play" size={16} color={brand.heroTo} />
-                          <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 15, color: brand.heroTo }}>Study</Text>
-                        </AnimatedPressable>
-                      ) : totalCards > 0 ? (
-                        <TouchableOpacity
-                          onPress={() => setCustomPath(null)}
-                          activeOpacity={0.75}
-                          accessibilityRole="button"
-                          accessibilityLabel="Custom study"
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            gap: 5,
-                            paddingHorizontal: 14,
-                            height: 38,
-                            borderRadius: Radius.full,
-                            backgroundColor: brand.well,
-                            borderWidth: 1,
-                            borderColor: brand.wellLine,
-                          }}
-                        >
-                          <Ionicons name="flash-outline" size={14} color={brand.onHero} />
-                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 13, color: brand.onHero }}>Custom</Text>
-                        </TouchableOpacity>
-                      ) : null}
+                        <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 38, color: brand.onHero, letterSpacing: -1.2, marginTop: 2 }}>
+                          {allDue}
+                          <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 15, color: brand.onHeroMuted, letterSpacing: 0 }}>
+                            {' '}card{allDue !== 1 ? 's' : ''} · ~{estMin} min
+                          </Text>
+                        </Text>
+                      ) : (
+                        <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: brand.onHero, letterSpacing: -0.4, marginTop: 6 }}>
+                          {totalCards === 0
+                            ? 'Add cards to begin'
+                            : nextDue < Infinity
+                            ? `Next review ${relativeDue(nextDue, clock)}`
+                            : 'Nothing scheduled'}
+                        </Text>
+                      )}
+                      {allDue > 0 && (
+                        <View style={{ marginTop: 4 }}>
+                          <QueueCounts c={allCounts} size={12} onBand />
+                        </View>
+                      )}
                     </View>
-                    {allDue > 0 && (
-                      <View style={{ marginTop: 6 }}>
-                        <QueueCounts c={allCounts} size={12} onBand />
-                      </View>
-                    )}
-                  </>
-                )}
-              </View>
+                    <TouchableOpacity onPress={() => setShowStats(true)} activeOpacity={0.75} accessibilityRole="button" accessibilityHint="Opens statistics">
+                      <GoalRing done={reviewedToday} goal={goal} track={brand.wellStrong} fill="#ffffff" ink={brand.onHero} inkMuted={brand.onHeroMuted} />
+                    </TouchableOpacity>
+                  </View>
+
+                  {allDue > 0 ? (
+                    <AnimatedPressable
+                      onPress={() => startSession(null)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Study now, ${allDue} cards`}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        marginTop: 16,
+                        height: 48,
+                        borderRadius: Radius.xl,
+                        backgroundColor: '#ffffff',
+                        borderBottomWidth: 3,
+                        borderBottomColor: 'rgba(0,0,0,0.18)',
+                      }}
+                    >
+                      <Ionicons name="play" size={17} color={brand.heroTo} />
+                      <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 16, color: brand.heroTo }}>Study now</Text>
+                    </AnimatedPressable>
+                  ) : totalCards > 0 ? (
+                    <TouchableOpacity
+                      onPress={() => setCustomPath(null)}
+                      activeOpacity={0.75}
+                      accessibilityRole="button"
+                      accessibilityLabel="Custom study"
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        marginTop: 16,
+                        height: 44,
+                        borderRadius: Radius.xl,
+                        backgroundColor: brand.well,
+                        borderWidth: 1,
+                        borderColor: brand.wellLine,
+                      }}
+                    >
+                      <Ionicons name="flash-outline" size={15} color={brand.onHero} />
+                      <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 14, color: brand.onHero }}>Custom study</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              )}
             </View>
 
-            {/* ══ Momentum, straddling the band ══ */}
-            {decks.length > 0 && (
-              <View style={{ paddingHorizontal: GUTTER, marginTop: -STAT_LIFT, marginBottom: 20 }}>
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'stretch',
-                    backgroundColor: theme.surface,
-                    borderRadius: Radius['3xl'],
-                    borderWidth: 1,
-                    borderColor: theme.cardBorder,
-                    borderBottomWidth: 2,
-                    borderBottomColor: theme.lip,
-                    paddingVertical: 13,
-                  }}
-                >
-                  {statTiles.map((tile, idx) => (
-                    <React.Fragment key={tile.key}>
-                      {idx > 0 && <View style={{ width: 1, marginVertical: 8, backgroundColor: theme.cardBorder }} />}
-                      <TouchableOpacity
-                        onPress={() => setShowStats(true)}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel={`${tile.label}: ${tile.value}. ${tile.caption}. Opens statistics.`}
-                        style={{ flex: 1, alignItems: 'center', paddingHorizontal: 6 }}
-                      >
-                        <View style={{ width: 28, height: 28, borderRadius: 10, marginBottom: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: tile.tint.fill }}>
-                          <Ionicons name={tile.icon} size={15} color={tile.tint.ink} />
-                        </View>
-                        <Text numberOfLines={1} adjustsFontSizeToFit style={{ fontFamily: 'Nunito_900Black', fontSize: 22, color: theme.text, letterSpacing: -0.8 }}>
-                          {tile.value}
-                        </Text>
-                        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} style={{ ...microLabel, letterSpacing: 0.4, marginTop: 3 }}>
-                          {tile.label}
-                        </Text>
-                        <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: tile.tint.ink, marginTop: 3 }}>
-                          {tile.caption}
-                        </Text>
-                      </TouchableOpacity>
-                    </React.Fragment>
-                  ))}
-                </View>
-              </View>
-            )}
-
-            <View style={{ paddingHorizontal: GUTTER }}>
+            {/* ══ The page, as a sheet pulled over the band ══ */}
+            <View
+              style={{
+                marginTop: -SHEET_LIFT,
+                paddingTop: 18,
+                paddingHorizontal: GUTTER,
+                backgroundColor: theme.background,
+                borderTopLeftRadius: Radius['4xl'],
+                borderTopRightRadius: Radius['4xl'],
+              }}
+            >
               {decks.length === 0 ? (
                 /* ══ First run ══ */
-                <Card padding={0} radius={Radius['3xl']} style={{ overflow: 'hidden', marginTop: 12 }}>
+                <Card padding={0} radius={Radius['3xl']} style={{ overflow: 'hidden' }}>
                   <View style={{ alignItems: 'center', paddingTop: 20, paddingBottom: 12, backgroundColor: brand.wash, borderBottomWidth: 1, borderBottomColor: brand.washLine }}>
                     <Image source={require('../../assets/images/studying.png')} style={{ width: 118, height: 118 }} resizeMode="contain" />
                   </View>
@@ -1726,7 +1702,46 @@ export default function FlashcardsScreen() {
                 </Card>
               ) : (
                 <>
-                  <View style={{ paddingHorizontal: 2, marginBottom: 24 }}>
+                  {/* ══ Momentum ══ */}
+                  <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
+                    {momentum.map((m) => (
+                      <TouchableOpacity
+                        key={m.key}
+                        onPress={() => setShowStats(true)}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${m.value}. ${m.caption}. Opens statistics.`}
+                        style={{
+                          flex: 1,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 9,
+                          paddingVertical: 9,
+                          paddingLeft: 9,
+                          paddingRight: 12,
+                          borderRadius: Radius.full,
+                          backgroundColor: m.tint.fill,
+                          borderWidth: 1,
+                          borderColor: m.tint.line,
+                        }}
+                      >
+                        <View style={{ width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.surface }}>
+                          <Ionicons name={m.icon} size={15} color={m.tint.ink} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85} style={{ fontFamily: 'Nunito_900Black', fontSize: 13.5, color: theme.text }}>
+                            {m.value}
+                          </Text>
+                          <Text numberOfLines={1} style={{ fontFamily: 'Nunito_700Bold', fontSize: 10.5, color: m.tint.ink }}>
+                            {m.caption}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={{ ...microLabel, marginBottom: 10, marginLeft: 2 }}>Practice</Text>
+                  <View style={{ marginBottom: 24 }}>
                     <ToolTiles node={null} />
                   </View>
 

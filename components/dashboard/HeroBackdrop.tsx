@@ -1,5 +1,5 @@
 import React from 'react';
-import Svg, { Defs, LinearGradient, RadialGradient, Stop, Path, Circle } from 'react-native-svg';
+import Svg, { Defs, LinearGradient, RadialGradient, Stop, Path, Circle, Rect } from 'react-native-svg';
 import { getBrand } from '@/constants/Theme';
 
 interface HeroBackdropProps {
@@ -12,6 +12,12 @@ interface HeroBackdropProps {
      * it echoes the roundness of the icon it borrows its colour from.
      */
     curve?: number;
+    /**
+     * What floats in the glow. The dashboard gets Fin's bubbles; the study tab
+     * gets a fanned stack of cards, so the two bands share a colour without
+     * being the same picture.
+     */
+    motif?: 'bubbles' | 'cards';
     isDark: boolean;
 }
 
@@ -26,7 +32,7 @@ interface HeroBackdropProps {
  * Purely decorative: it takes no children and reports nothing to accessibility.
  * Content is positioned over it by the caller.
  */
-export default function HeroBackdrop({ width, height, curve = 22, isDark }: HeroBackdropProps) {
+export default function HeroBackdrop({ width, height, curve = 22, motif = 'bubbles', isDark }: HeroBackdropProps) {
     const brand = getBrand(isDark);
     const w = Math.max(1, width);
     const h = Math.max(1, height);
@@ -79,11 +85,37 @@ export default function HeroBackdrop({ width, height, curve = 22, isDark }: Hero
             <Path d={path} fill="url(#heroFill)" />
             <Path d={path} fill="url(#heroGlow)" />
 
-            {/* Bubbles. Fin is a fish; a few faint circles are enough to say so
-                without putting an illustration back at the top of the page. */}
-            <Circle cx={w * 0.88} cy={h * 0.3} r={34} fill="#ffffff" opacity={0.05} />
-            <Circle cx={w * 0.72} cy={h * 0.56} r={13} fill="#ffffff" opacity={0.055} />
-            <Circle cx={w * 0.96} cy={h * 0.62} r={20} fill="#ffffff" opacity={0.045} />
+            {motif === 'cards' ? (
+                // Three cards fanned from a common pivot, kept inside the same
+                // 0.2h-0.65h window as the bubbles for the same reasons.
+                [-16, -4, 8].map((deg, i) => {
+                    const ch = Math.min(78, h * 0.4);
+                    const cw = ch * 0.74;
+                    const cx = w * 0.6;
+                    const cy = h * 0.42;
+                    return (
+                        <Rect
+                            key={deg}
+                            x={cx - cw / 2}
+                            y={cy - ch / 2}
+                            width={cw}
+                            height={ch}
+                            rx={10}
+                            fill="#ffffff"
+                            opacity={0.04 + i * 0.015}
+                            transform={`rotate(${deg} ${cx} ${cy + ch})`}
+                        />
+                    );
+                })
+            ) : (
+                <>
+                    {/* Bubbles. Fin is a fish; a few faint circles are enough to say so
+                        without putting an illustration back at the top of the page. */}
+                    <Circle cx={w * 0.88} cy={h * 0.3} r={34} fill="#ffffff" opacity={0.05} />
+                    <Circle cx={w * 0.72} cy={h * 0.56} r={13} fill="#ffffff" opacity={0.055} />
+                    <Circle cx={w * 0.96} cy={h * 0.62} r={20} fill="#ffffff" opacity={0.045} />
+                </>
+            )}
         </Svg>
     );
 }
