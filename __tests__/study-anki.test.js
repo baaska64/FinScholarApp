@@ -15,6 +15,9 @@ import {
   pickNext,
   sessionRemaining,
   burySiblings,
+  unburySiblings,
+  resolveSettings,
+  isBuried,
   bumpDaily,
   newLimitLeft,
   examDaysLeft,
@@ -377,6 +380,41 @@ export function runStudyAnkiTests(describe, test) {
       assert.strictEqual(out[1].buriedUntil, studyDayKey(T + DAY));
       assert.strictEqual(deckDueCounts(deck(out), DEFAULT_SR_SETTINGS, T).new, 0);
       assert.strictEqual(deckDueCounts(deck(out), DEFAULT_SR_SETTINGS, T + DAY).new, 1);
+    });
+
+    test('A5.7b a three-cloze note gives c1 today, then c2 and c3 on later days — none is lost', () => {
+      const cz = buildNoteCards({ kind: 'cloze', front: '{{c1::A}} {{c2::B}} {{c3::C}}', back: '' }, [], mkId, T);
+      assert.strictEqual(cz.length, 3);
+      let d = deck(cz);
+      let q = buildQueue([d], null, DEFAULT_SR_SETTINGS, T);
+      assert.strictEqual(q.length, 1, 'one card of the note per day');
+      const first = answerCard(d.cards.find((c) => c.id === q[0].cardId), 3, DEFAULT_SR_SETTINGS, T).card;
+      d = { ...d, cards: burySiblings(d.cards.map((c) => (c.id === first.id ? first : c)), first, T) };
+      assert.strictEqual(d.cards.filter((c) => c.buriedReason === 'sibling').length, 2);
+      assert.strictEqual(buildQueue([d], null, DEFAULT_SR_SETTINGS, T).length, 0);
+      const next = buildQueue([d], null, DEFAULT_SR_SETTINGS, T + DAY);
+      assert.ok(next.some((r) => r.cardId !== first.id), 'a different cloze is due the next day');
+    });
+
+    test('A5.7c with spacing off, every sibling is in the same session', () => {
+      const cz = buildNoteCards({ kind: 'cloze', front: '{{c1::A}} {{c2::B}} {{c3::C}}', back: '' }, [], mkId, T);
+      const off = { ...DEFAULT_SR_SETTINGS, burySiblings: false };
+      assert.strictEqual(resolveSettings(off).burySiblings, false);
+      assert.strictEqual(resolveSettings({}).burySiblings, true, 'on by default, as in Anki');
+      assert.strictEqual(deckDueCounts(deck(cz), off, T).new, 3);
+      assert.strictEqual(buildQueue([deck(cz)], null, off, T).length, 3);
+    });
+
+    test('A5.7d unburySiblings releases sibling holds but keeps hand-buried cards', () => {
+      const [fwd, back] = buildNoteCards({ kind: 'reversed', front: 'a', back: 'b' }, [], mkId, T);
+      const held = burySiblings([fwd, back], fwd, T);
+      const hand = card({ buriedUntil: studyDayKey(T + DAY) });
+      const legacy = buildNoteCards({ kind: 'reversed', front: 'c', back: 'd' }, [], mkId, T).map((c, i) => (i === 1 ? { ...c, buriedUntil: studyDayKey(T + DAY) } : c));
+      const out = unburySiblings([...held, hand, ...legacy]);
+      assert.strictEqual(isBuried(out[1], T), false, 'sibling released');
+      assert.strictEqual(out[1].buriedReason, undefined);
+      assert.strictEqual(isBuried(out[2], T), true, 'a single card buried by hand stays buried');
+      assert.strictEqual(isBuried(out[4], T), false, 'an older sibling burial without a reason is released too');
     });
 
     test('A5.8 sessionRemaining counts what is still to come', () => {

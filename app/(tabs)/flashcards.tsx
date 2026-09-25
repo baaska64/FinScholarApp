@@ -76,6 +76,8 @@ import {
   pickNext,
   sessionRemaining,
   burySiblings,
+  unburySiblings,
+  resolveSettings,
   bumpDaily,
   cardState,
   deckDueCounts,
@@ -627,6 +629,7 @@ export default function FlashcardsScreen() {
                         lastReview: _l,
                         introducedOn: _i,
                         buriedUntil: _b,
+                        buriedReason: _br,
                         leech: _le,
                         ...rest
                       } = c;
@@ -954,7 +957,7 @@ export default function FlashcardsScreen() {
       if (s.mode !== 'cram') {
         res = answerCard(card, g, srSettings, now, { examDate: examDaysLeft(deck, now) !== null ? deck.examDate : null });
         let cards = (deck.cards || []).map((c) => (c.id === card.id ? res!.card : c));
-        cards = burySiblings(cards, res.card, now);
+        if (resolveSettings(srSettings).burySiblings) cards = burySiblings(cards, res.card, now);
         nextDecks = d.map((x) => (x.id === deck.id ? bumpDaily({ ...deck, cards }, prevState, now) : x));
       }
 
@@ -2207,15 +2210,24 @@ export default function FlashcardsScreen() {
             </View>
           ) : (
             visible.map((n) => {
-              const first = n.cards.find((card) => !card.suspended) || n.cards[0];
+              // Buried siblings are out of today's queue, so they must not
+              // make the row say "Due now" — that label is what made a
+              // 3-card cloze look like it only ever quizzed c1.
+              const live = n.cards.filter((card) => !isSidelined(card, clock));
+              const held = n.cards.filter((card) => !card.suspended && isSidelined(card, clock)).length;
+              const first = live[0] || n.cards.find((card) => !card.suspended) || n.cards[0];
               const st = cardState(first);
               const allSuspended = n.cards.every((card) => card.suspended);
               const flagged = n.cards.some((card) => card.flagged);
               const leech = n.cards.some((card) => card.leech);
               const tint = st === 'new' ? qt.new : st === 'review' ? qt.review : qt.learn;
-              const soonest = Math.min(...n.cards.filter((card) => !card.suspended).map((card) => card.nextDue));
+              const soonest = Math.min(...live.map((card) => card.nextDue));
               const dueText =
-                allSuspended ? 'Suspended' : st === 'new' ? 'New' : soonest <= clock ? 'Due now' : new Date(soonest).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                allSuspended ? 'Suspended'
+                  : live.length === 0 ? 'Tomorrow'
+                  : live.some((card) => cardState(card) === 'new') ? 'New'
+                  : soonest <= clock ? 'Due now'
+                  : new Date(soonest).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
               const sel = selectedNotes.has(selKey(n));
               const kind = n.kind;
               return (
@@ -2257,6 +2269,11 @@ export default function FlashcardsScreen() {
                           <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 10, color: theme.textTertiary }}>
                             {kindLabel(kind)}
                             {n.cards.length > 1 ? ` · ${n.cards.length} cards` : ''}
+                          </Text>
+                        )}
+                        {held > 0 && live.length > 0 && (
+                          <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 10, color: theme.textTertiary }}>
+                            · {held} more tomorrow
                           </Text>
                         )}
                         {flagged && <Ionicons name="flag" size={11} color={tints.danger.solid} />}
@@ -3527,7 +3544,11 @@ export default function FlashcardsScreen() {
           key: 'bury', icon: 'moon-outline', tint: tints.schedule, label: 'Bury until tomorrow', desc: 'Skip it today; it comes back tomorrow',
           onPress: () => {
             close();
-            patchCurrent((c) => ({ ...c, buriedUntil: studyDayKey(studyDayStart(Date.now(), 1)) }), true);
+            patchCurrent((c) => {
+              // A hand burial: no reason, so turning sibling burying off leaves it be.
+              const { buriedReason: _r, ...rest } = c;
+              return { ...rest, buriedUntil: studyDayKey(studyDayStart(Date.now(), 1)) };
+            }, true);
           },
         })}
         {sheetRow({

@@ -49,6 +49,7 @@ export const DEFAULT_SR_SETTINGS: SRSettings = {
   newPerDay: 20,
   reviewsPerDay: 200,
   maximumInterval: 36500,
+  burySiblings: true,
   studyTimeHour: 8,
   studyTimeMinute: 0,
 };
@@ -86,6 +87,7 @@ export function resolveSettings(sr?: Partial<SRSettings> | null): Required<SRSet
     newPerDay: Math.max(0, Math.floor(finite(s.newPerDay, 20))),
     reviewsPerDay: Math.max(0, Math.floor(finite(s.reviewsPerDay, 200))),
     maximumInterval: Math.max(1, Math.floor(finite(s.maximumInterval, 36500))),
+    burySiblings: s.burySiblings !== false,
     studyTimeHour: finite(s.studyTimeHour, 8),
     studyTimeMinute: finite(s.studyTimeMinute, 0),
   };
@@ -522,18 +524,21 @@ export function deckDueCounts(deck: FlashcardDeck, sr?: Partial<SRSettings> | nu
   const counts: DueCounts = { new: 0, learn: 0, review: 0 };
   if (!deck || !Array.isArray(deck.cards)) return counts;
   const endOfDay = studyDayStart(now, 1);
+  const bury = resolveSettings(sr).burySiblings;
   const newNotes = new Set<string>();
   const reviewNotes = new Set<string>();
   for (const c of deck.cards) {
     if (!c || isSidelined(c, now)) continue;
     const st = cardState(c);
+    // With burying on, one card per note a day — siblings wait. Off, every
+    // card counts on its own (the card id stands in for the note).
+    const key = bury ? noteIdOf(c) : c.id;
     if (st === 'new') {
-      // One new card per note a day — siblings wait, as with Anki's burying.
-      newNotes.add(noteIdOf(c));
+      newNotes.add(key);
     } else if (st === 'learning' || st === 'relearning') {
       if (c.nextDue < endOfDay) counts.learn++;
     } else if (c.nextDue <= now) {
-      reviewNotes.add(noteIdOf(c));
+      reviewNotes.add(key);
     }
   }
   counts.new = Math.min(newNotes.size, newLimitLeft(deck, sr, now));
@@ -570,6 +575,9 @@ export function buildQueue(
 ): QueueRef[] {
   const scope = (decks || []).filter((d) => d && Array.isArray(d.cards) && (!deckIds || deckIds.has(d.id)));
   const seenNotes = new Set<string>();
+  const bury = resolveSettings(sr).burySiblings;
+  // Off: each card is its own "note" here, so siblings can share a session.
+  const noteKey = (c: Flashcard) => (bury ? noteIdOf(c) : c.id);
 
   if (mode === 'cram') {
     const all: QueueRef[] = [];
@@ -590,7 +598,7 @@ export function buildQueue(
     let taken = 0;
     for (const c of deckReviews) {
       if (taken >= reviewCap) break;
-      const note = noteIdOf(c);
+      const note = noteKey(c);
       if (seenNotes.has(note)) continue;
       seenNotes.add(note);
       reviews.push({ ref: { deckId: d.id, cardId: c.id }, due: c.nextDue, note });
@@ -603,7 +611,7 @@ export function buildQueue(
     let added = 0;
     for (const { c } of deckNew) {
       if (added >= newCap) break;
-      const note = noteIdOf(c);
+      const note = noteKey(c);
       if (seenNotes.has(note)) continue;
       seenNotes.add(note);
       news.push({ ref: { deckId: d.id, cardId: c.id }, note });
@@ -749,7 +757,25 @@ export function burySiblings(cards: Flashcard[], answered: Flashcard, now: numbe
     const st = cardState(c);
     if (st === 'learning' || st === 'relearning') return c;
     if (st === 'review' && c.nextDue > studyDayStart(now, 1)) return c;
-    return { ...c, buriedUntil: tomorrow };
+    return { ...c, buriedUntil: tomorrow, buriedReason: 'sibling' as const };
+  });
+}
+
+/**
+ * Releases cards held back only because a sibling was answered — for when a
+ * student turns sibling burying off and expects the rest of the note today.
+ * Cards buried before the reason was recorded count as sibling burials when
+ * their note has other cards; a card buried by hand keeps its burial.
+ */
+export function unburySiblings(cards: Flashcard[]): Flashcard[] {
+  const perNote = new Map<string, number>();
+  for (const c of cards || []) if (c) perNote.set(noteIdOf(c), (perNote.get(noteIdOf(c)) || 0) + 1);
+  return (cards || []).map((c) => {
+    if (!c || !c.buriedUntil) return c;
+    const sibling = c.buriedReason === 'sibling' || (!c.buriedReason && (perNote.get(noteIdOf(c)) || 0) > 1);
+    if (!sibling) return c;
+    const { buriedUntil: _b, buriedReason: _r, ...rest } = c;
+    return rest as Flashcard;
   });
 }
 

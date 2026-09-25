@@ -92,6 +92,12 @@ export interface Flashcard {
   suspended?: boolean;
   /** Hidden from queues until this study day begins. */
   buriedUntil?: string;
+  /**
+   * Why it is buried. 'sibling' when a card of the same note was answered, so
+   * turning sibling burying off can release exactly those and not a card the
+   * student buried by hand.
+   */
+  buriedReason?: 'sibling';
   flagged?: boolean;
   /** Forgotten `LEECH_THRESHOLD` times — worth rewriting. */
   leech?: boolean;
@@ -153,6 +159,13 @@ export interface SRSettings {
   /** Review cards each deck shows per day. */
   reviewsPerDay?: number;
   maximumInterval?: number;
+  /**
+   * Hold a note's other cards back until tomorrow once one is answered (Anki's
+   * burying). On by default: a cloze sibling prints the other blanks as plain
+   * text, so seeing two the same day is a weak test. Off suits image and
+   * many-blank notes, which would otherwise take a day per card to introduce.
+   */
+  burySiblings?: boolean;
   studyTimeHour: number;
   studyTimeMinute: number;
 }
