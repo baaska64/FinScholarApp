@@ -41,7 +41,7 @@ export default function DevMenuModal({ visible, onClose, isDark, onShowPaywall }
                         <Switch 
                             value={isPremium} 
                             onValueChange={handleTogglePremium} 
-                            trackColor={{ true: '#6366f1', false: isDark ? '#334155' : '#cbd5e1' }}
+                            trackColor={{ true: '#6366f1', false: isDark ? '#2a3140' : '#cbd5e1' }}
                         />
                     </View>
 

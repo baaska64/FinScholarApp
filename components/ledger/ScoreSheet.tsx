@@ -297,7 +297,7 @@ export default function ScoreSheet({
                     style={{
                         flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 18,
                         paddingVertical: 12, paddingHorizontal: 12, borderRadius: Radius.lg,
-                        borderWidth: 1, borderStyle: 'dashed', borderColor: isDark ? '#3d4468' : '#cbd5e1',
+                        borderWidth: 1, borderStyle: 'dashed', borderColor: isDark ? '#2c3444' : '#cbd5e1',
                     }}
                 >
                     <Ionicons name="git-branch-outline" size={16} color={theme.textSecondary} />

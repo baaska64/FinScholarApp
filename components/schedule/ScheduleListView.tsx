@@ -57,11 +57,11 @@ export default function ScheduleListView({ classes, currentSem, currentYear }: a
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
 
-  const bgColor = isDark ? '#0F172A' : '#F8FAFC';
+  const bgColor = isDark ? '#0b0e14' : '#F8FAFC';
   const textColor = isDark ? '#F8FAFC' : '#0F172A';
   const subTextColor = isDark ? '#94A3B8' : '#64748B';
   const cardBgColor = isDark ? '#1E293B' : '#FFFFFF';
-  const cardBorderColor = isDark ? '#334155' : '#E2E8F0';
+  const cardBorderColor = isDark ? '#2a3140' : '#E2E8F0';
 
   const groupedClasses = useMemo(() => {
     if (!classes) return {};

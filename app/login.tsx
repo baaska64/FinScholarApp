@@ -32,8 +32,8 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
 // ─── Brand Palette (no gradients — solid, bold, original) ───────────────────
 const BRAND = {
-  // Deep navy-indigo hero zone
-  heroDark: '#12103d',
+  // Hero zone: the dark one matches the app's graphite base
+  heroDark: '#10141c',
   heroLight: '#f0f0ff',
   // Accent blobs
   blobIndigo: '#4f46e5',
@@ -42,14 +42,14 @@ const BRAND = {
   blobTeal: '#14b8a6',
   // Card
   cardLight: '#ffffff',
-  cardDark: '#1a1f3d',
+  cardDark: '#151a23',
   cardBorderLight: '#e8e8f4',
-  cardBorderDark: '#2d2f54',
+  cardBorderDark: '#232a37',
   // Inputs
   inputBgLight: '#f7f7fd',
-  inputBgDark: '#12103d',
+  inputBgDark: '#0f131a',
   inputBorderLight: '#e2e2f0',
-  inputBorderDark: '#2d2f54',
+  inputBorderDark: '#272e3c',
   inputFocusBorder: '#6366f1',
   // Primary button
   primaryBtn: '#4f46e5',
@@ -61,9 +61,9 @@ const BRAND = {
   textDarkSub: 'rgba(255,255,255,0.6)',
   // Google button
   googleBorderLight: '#e2e2f0',
-  googleBorderDark: '#2d2f54',
+  googleBorderDark: '#232a37',
   googleBgLight: '#ffffff',
-  googleBgDark: '#1a1f3d',
+  googleBgDark: '#151a23',
 };
 
 export default function LoginScreen() {
@@ -269,7 +269,7 @@ export default function LoginScreen() {
   const labelColor = isDark ? '#a5b4fc' : '#64748b';
   const textPrimary = isDark ? '#f1f5f9' : '#1e293b';
   const textSecondary = isDark ? '#94a3b8' : '#64748b';
-  const pageBg = isDark ? '#0c0b2b' : '#f0f0ff';
+  const pageBg = isDark ? '#0b0e14' : '#f0f0ff';
 
   // Hero zone height
   const HERO_H = SCREEN_H * 0.45;
@@ -407,7 +407,7 @@ export default function LoginScreen() {
                 style={{
                   flexDirection: 'row',
                   marginBottom: 24,
-                  backgroundColor: isDark ? '#0c0b2b' : '#ededfa',
+                  backgroundColor: isDark ? '#0b0e14' : '#ededfa',
                   borderRadius: 14,
                   padding: 4,
                 }}
@@ -605,7 +605,7 @@ export default function LoginScreen() {
 
               {/* ─── "or" Divider ─── */}
               <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 20 }}>
-                <View style={{ flex: 1, height: 1, backgroundColor: isDark ? '#2d2f54' : '#e2e2f0' }} />
+                <View style={{ flex: 1, height: 1, backgroundColor: isDark ? '#232a37' : '#e2e2f0' }} />
                 <Text
                   style={{
                     marginHorizontal: 14,
@@ -620,7 +620,7 @@ export default function LoginScreen() {
                 >
                   or
                 </Text>
-                <View style={{ flex: 1, height: 1, backgroundColor: isDark ? '#2d2f54' : '#e2e2f0' }} />
+                <View style={{ flex: 1, height: 1, backgroundColor: isDark ? '#232a37' : '#e2e2f0' }} />
               </View>
 
               {/* ─── Continue with Google ─── */}

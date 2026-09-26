@@ -246,7 +246,7 @@ export default function OcclusionEditor({ visible, isDark, initial, onClose, onD
                 >
                     {!data ? (
                         /* ── No picture yet ── */
-                        <View style={{ alignItems: 'center', paddingVertical: 28, paddingHorizontal: 12, borderRadius: Radius.xl, borderWidth: 1, borderStyle: 'dashed', borderColor: isDark ? '#3d4468' : '#cbd5e1' }}>
+                        <View style={{ alignItems: 'center', paddingVertical: 28, paddingHorizontal: 12, borderRadius: Radius.xl, borderWidth: 1, borderStyle: 'dashed', borderColor: isDark ? '#2c3444' : '#cbd5e1' }}>
                             {busy ? (
                                 <ActivityIndicator color={theme.primary} />
                             ) : (
@@ -285,7 +285,7 @@ export default function OcclusionEditor({ visible, isDark, initial, onClose, onD
                                 }}
                                 style={{ width: '100%' }}
                             >
-                                <View style={{ width: canvas.w, height: canvas.h, borderRadius: 10, overflow: 'hidden', backgroundColor: isDark ? '#0d0e21' : '#e9ebf3' }}>
+                                <View style={{ width: canvas.w, height: canvas.h, borderRadius: 10, overflow: 'hidden', backgroundColor: isDark ? '#07090d' : '#e9ebf3' }}>
                                     {uri ? <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="stretch" /> : null}
                                     {canvas.w > 0 && (
                                         <Svg width={canvas.w} height={canvas.h} viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: 'absolute', left: 0, top: 0 }} pointerEvents="none">

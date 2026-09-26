@@ -155,7 +155,7 @@ function ItemRow({
                 {hasParts ? (
                     <NumberTile small={depth > 0} value={pct === null ? '—' : `${Math.round(pct)}%`} caption="PARTS" fill={wash.fill} line={wash.line} ink={color} />
                 ) : pct === null ? (
-                    <NumberTile small={depth > 0} value="—" caption={`OF ${trimNumber(item.max ?? 100)}`} fill="transparent" line={isDark ? '#464d75' : '#c3c8d9'} ink={theme.textTertiary} dashed />
+                    <NumberTile small={depth > 0} value="—" caption={`OF ${trimNumber(item.max ?? 100)}`} fill="transparent" line={isDark ? '#39425a' : '#c3c8d9'} ink={theme.textTertiary} dashed />
                 ) : (
                     <NumberTile small={depth > 0} value={trimNumber(item.score)} caption={`OF ${trimNumber(item.max ?? 100)}`} fill={wash.fill} line={wash.line} ink={color} />
                 )}
@@ -981,7 +981,7 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack, u
                     style={{
                         flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 46,
                         borderRadius: Radius.lg, borderWidth: 1, borderStyle: 'dashed',
-                        borderColor: isDark ? '#3d4468' : '#cbd5e1',
+                        borderColor: isDark ? '#2c3444' : '#cbd5e1',
                     }}
                 >
                     <Ionicons name="add" size={16} color={theme.textSecondary} />
@@ -1385,7 +1385,7 @@ export default function ActiveSubjectView({ subject, system, onChange, onBack, u
                         height: 120, borderRadius: Radius.lg, marginBottom: 12,
                         alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
                         borderWidth: 1, borderStyle: autoConfigImage ? 'solid' : 'dashed',
-                        borderColor: autoConfigImage ? theme.cardBorder : (isDark ? '#3d4468' : '#cbd5e1'),
+                        borderColor: autoConfigImage ? theme.cardBorder : (isDark ? '#2c3444' : '#cbd5e1'),
                         backgroundColor: theme.inputBg,
                     }}
                 >

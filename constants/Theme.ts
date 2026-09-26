@@ -38,6 +38,17 @@ export const Colors = {
     inputBorder: '#e3e5f0',
     inputFocus: '#818cf8',
   },
+  /**
+   * Near-neutral graphite, not indigo-navy. The old base (#12132b) was violet
+   * enough to fight the azure brand band, and every low-alpha tint laid over
+   * it mixed toward mud — amber came out brown, emerald a murky teal. On a
+   * neutral base those washes stay recognisably their own hue.
+   *
+   * Surfaces step *lighter* as they rise (background → surface →
+   * surfaceSecondary): in the dark there is no shadow to read, so elevation
+   * is carried by tone, with hairline borders only a step above the fill.
+   * `__tests__/theme.test.js` holds the base neutral and the text contrast.
+   */
   dark: {
     primary: '#818cf8',
     primaryLight: '#a5b4fc',
@@ -45,32 +56,32 @@ export const Colors = {
     secondary: '#38bdf8',
     secondaryLight: '#7dd3fc',
     accent: '#f472b6',
-    accentLight: '#831843',
+    accentLight: 'rgba(244,114,182,0.14)',
     success: '#34d399',
-    successLight: '#065f46',
+    successLight: 'rgba(52,211,153,0.14)',
     warning: '#fbbf24',
-    warningLight: '#b45309',
+    warningLight: 'rgba(251,191,36,0.14)',
     error: '#f87171',
-    errorLight: '#991b1b',
-    background: '#12132b',
-    surface: '#1b1d3a',
-    surfaceSecondary: '#262a4d',
-    card: '#1b1d3a',
-    cardBorder: '#32365c',
-    lip: '#0d0e21',
-    text: '#f1f2f9',
-    textSecondary: '#c2c6dc',
-    textTertiary: '#8a90b0',
-    textInverse: '#12132b',
-    tabBg: '#171936',
-    tabBorder: '#32365c',
+    errorLight: 'rgba(248,113,113,0.14)',
+    background: '#0b0e14',
+    surface: '#151a23',
+    surfaceSecondary: '#1d2330',
+    card: '#151a23',
+    cardBorder: '#232a37',
+    lip: '#07090d',
+    text: '#f2f4f8',
+    textSecondary: '#aeb6c5',
+    textTertiary: '#8690a2',
+    textInverse: '#0b0e14',
+    tabBg: '#10141b',
+    tabBorder: '#1d2330',
     tabActive: '#818cf8',
-    tabInactive: '#8a90b0',
-    overlay: 'rgba(0, 0, 0, 0.7)',
-    skeleton: '#262a4d',
-    skeletonHighlight: '#32365c',
-    inputBg: '#12132b',
-    inputBorder: '#32365c',
+    tabInactive: '#8690a2',
+    overlay: 'rgba(3, 5, 9, 0.72)',
+    skeleton: '#1a1f29',
+    skeletonHighlight: '#252c39',
+    inputBg: '#0f131a',
+    inputBorder: '#272e3c',
     inputFocus: '#818cf8',
   },
 };
@@ -170,13 +181,16 @@ export const Tints = {
     tools:      { fill: '#e2f2fb', line: '#c5e4f6', ink: '#116691', solid: '#0e8ac2' },
     danger:     { fill: '#fdeae7', line: '#f8ccc5', ink: '#b23227', solid: '#dc4436' },
   },
+  // Washes stay faint and outlines barely there. At 30% the outline was the
+  // loudest thing on a tile and glowed a muddy ring around it; the colour
+  // should come from the ink, with the fill only hinting at it.
   dark: {
-    grades:     { fill: 'rgba(139,105,255,0.14)', line: 'rgba(139,105,255,0.30)', ink: '#b9a3ff', solid: '#8b69ff' },
-    attendance: { fill: 'rgba(45,197,151,0.14)',  line: 'rgba(45,197,151,0.30)',  ink: '#6fe0bb', solid: '#2dc597' },
-    tasks:      { fill: 'rgba(232,155,42,0.14)',  line: 'rgba(232,155,42,0.30)',  ink: '#f5c37a', solid: '#e89b2a' },
-    schedule:   { fill: 'rgba(129,140,248,0.14)', line: 'rgba(129,140,248,0.30)', ink: '#a9b2fb', solid: '#818cf8' },
-    tools:      { fill: 'rgba(56,189,248,0.14)',  line: 'rgba(56,189,248,0.30)',  ink: '#84d3f7', solid: '#38bdf8' },
-    danger:     { fill: 'rgba(248,113,113,0.14)', line: 'rgba(248,113,113,0.32)', ink: '#f7a099', solid: '#f87171' },
+    grades:     { fill: 'rgba(139,105,255,0.10)', line: 'rgba(139,105,255,0.18)', ink: '#b9a3ff', solid: '#8b69ff' },
+    attendance: { fill: 'rgba(45,197,151,0.10)',  line: 'rgba(45,197,151,0.18)',  ink: '#6fe0bb', solid: '#2dc597' },
+    tasks:      { fill: 'rgba(232,155,42,0.10)',  line: 'rgba(232,155,42,0.18)',  ink: '#f5c37a', solid: '#e89b2a' },
+    schedule:   { fill: 'rgba(129,140,248,0.10)', line: 'rgba(129,140,248,0.18)', ink: '#a9b2fb', solid: '#818cf8' },
+    tools:      { fill: 'rgba(56,189,248,0.10)',  line: 'rgba(56,189,248,0.18)',  ink: '#84d3f7', solid: '#38bdf8' },
+    danger:     { fill: 'rgba(248,113,113,0.10)', line: 'rgba(248,113,113,0.18)', ink: '#f7a099', solid: '#f87171' },
   },
 };
 
@@ -199,7 +213,7 @@ export const ClassPalette = {
     { solid: '#e0524a', edge: '#ad3d37' },
   ],
   // Deeper than the light fills, not the same hues reused. The bright versions
-  // glared against the #0f172a grid and left white block text at ~2.2:1; these
+  // glared against the dark grid and left white block text at ~2.2:1; these
   // sit at ~5:1 for the text while staying ~3.5:1 against the background.
   dark: [
     { solid: '#5a5ec8', edge: '#3b3e8c' },
@@ -279,20 +293,27 @@ export const Brand = {
     ink: '#125aad',
     solid: '#2e86f0',
   },
+  /**
+   * The band keeps its saturation in the dark. It used to be dimmed to a
+   * greyed denim (#27508f), which with the faint bubbles over it read as
+   * haze rather than colour — the brand is the one vivid thing on a dark
+   * page, so it stays vivid and only ends deeper, into navy, where it meets
+   * the graphite background.
+   */
   dark: {
     base: '#5aa6fb',
-    heroFrom: '#27508f',
-    heroTo: '#142a54',
-    glow: '#5f9de0',
-    well: 'rgba(255,255,255,0.10)',
-    wellStrong: 'rgba(255,255,255,0.18)',
-    wellLine: 'rgba(255,255,255,0.18)',
-    markRing: 'rgba(255,255,255,0.6)',
+    heroFrom: '#1f5fcf',
+    heroTo: '#0c2560',
+    glow: '#4d9bff',
+    well: 'rgba(255,255,255,0.14)',
+    wellStrong: 'rgba(255,255,255,0.22)',
+    wellLine: 'rgba(255,255,255,0.24)',
+    markRing: 'rgba(255,255,255,0.88)',
     onHero: '#ffffff',
-    onHeroMuted: 'rgba(255,255,255,0.82)',
-    wash: 'rgba(90,166,251,0.13)',
-    washLine: 'rgba(90,166,251,0.28)',
-    ink: '#8fc3fd',
+    onHeroMuted: 'rgba(255,255,255,0.86)',
+    wash: 'rgba(74,151,245,0.10)',
+    washLine: 'rgba(74,151,245,0.20)',
+    ink: '#8cc4ff',
     solid: '#4a97f5',
   },
 };

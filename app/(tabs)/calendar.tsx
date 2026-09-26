@@ -1137,7 +1137,7 @@ function NoTermsState({
 }) {
     return (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 }}>
-            <Ionicons name="school-outline" size={54} color={isDark ? '#32365c' : '#cbd5e1'} />
+            <Ionicons name="school-outline" size={54} color={isDark ? '#2c3444' : '#cbd5e1'} />
             <Text style={{ fontFamily: 'Nunito_900Black', fontSize: 18, color: theme.text, marginTop: 16 }}>
                 No academic years yet
             </Text>

@@ -96,7 +96,7 @@ Two systems coexist. Prefer the second for new code:
 
 **Never pass a function to a `style` prop.** `patches/react-native-css-interop+0.2.6.patch` wraps every RN component and remaps `style`; a `style={({ pressed }) => ({...})}` callback on `Pressable` is silently dropped, taking that element's layout with it. Use a static object plus `TouchableOpacity`'s `activeOpacity` — that is what every component in this repo does.
 
-Dark mode comes from `useColorScheme()` **from `nativewind`**, not React Native. Fonts are Nunito only (`Nunito_400Regular` … `Nunito_900Black`), loaded in `app/_layout.tsx`; a missing weight silently falls back to the system font.
+Dark mode comes from `useColorScheme()` **from `nativewind`**, not React Native. Which scheme is active is the student's choice, owned by `services/ThemeService.ts` (Light by default, Light/Dark/Auto in Settings): change it through `ThemeService.set`, never `toggleColorScheme`, and keep `app.json`'s `userInterfaceStyle` at `"automatic"` — the dev client pins `Appearance` to that value, so anything else makes the in-app choice a no-op. New dark colours come from the graphite tokens in `constants/Theme.ts`; `__tests__/theme.test.js` fails on the old indigo-navy hexes. Fonts are Nunito only (`Nunito_400Regular` … `Nunito_900Black`), loaded in `app/_layout.tsx`; a missing weight silently falls back to the system font.
 
 Shared primitives in `components/ui/` are the design system — `Card`, `ProgressBar`, `SectionHeader`, `Badge`, `AnimatedPressable`, `LoadingSkeleton`. Build from these instead of restyling a `View` by hand; `APP_CONTEXT.md` documents the intent behind each.
 

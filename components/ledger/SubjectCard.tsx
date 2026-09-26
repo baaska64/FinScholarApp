@@ -176,7 +176,7 @@ export default function SubjectCard({
                             width: 24, height: 24, borderRadius: 8,
                             alignItems: 'center', justifyContent: 'center',
                             borderWidth: 2,
-                            borderColor: isSelected ? theme.primary : (isDark ? '#464d75' : '#cbd5e1'),
+                            borderColor: isSelected ? theme.primary : (isDark ? '#39425a' : '#cbd5e1'),
                             backgroundColor: isSelected ? theme.primary : 'transparent',
                         }}
                     >

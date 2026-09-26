@@ -22,7 +22,7 @@ const TYPOGRAPHY = {
 };
 
 const getThemeStyles = (isDark: boolean, isExportMode: boolean) => ({
-  gridBg: isDark ? '#0F172A' : '#FCFCFD',
+  gridBg: isDark ? '#0b0e14' : '#FCFCFD',
   headerBg: isDark ? 'rgba(59, 130, 246, 0.12)' : '#EFF6FF',
   hourBg: isDark ? 'rgba(59, 130, 246, 0.12)' : '#EFF6FF', 
   gridLine: isDark ? 'rgba(255,255,255,0.08)' : '#E2E8F0',
@@ -762,7 +762,7 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
           <ScrollView ref={headerScrollRef} horizontal showsHorizontalScrollIndicator={false} bounces={false} scrollEnabled={false}>
             <View style={{ flexDirection: 'row', width: displayDayIndices.length * DAY_WIDTH }}>
               {displayDayIndices.map((dayIdx, idx) => (
-                <View key={idx} style={{ width: DAY_WIDTH, alignItems: 'center', borderRightWidth: 1, borderColor: isDark ? '#1e293b' : '#e2e8f0' }}>
+                <View key={idx} style={{ width: DAY_WIDTH, alignItems: 'center', borderRightWidth: 1, borderColor: isDark ? '#1a202a' : '#e2e8f0' }}>
                   <Text style={{ fontSize: Math.max(9, 12 * zoomScale), fontWeight: 'bold', color: isDark ? '#94a3b8' : '#64748b', paddingVertical: 8 * zoomScale }}>{DAYS[dayIdx]}</Text>
                 </View>
               ))}
@@ -776,10 +776,10 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: 'row' }}>
             {/* Time Column */}
-            <View style={{ width: timeColWidth, borderRightWidth: 2, borderColor: isDark ? '#334155' : '#e2e8f0', paddingTop: 10 }}>
+            <View style={{ width: timeColWidth, borderRightWidth: 2, borderColor: isDark ? '#2a3140' : '#e2e8f0', paddingTop: 10 }}>
               {HOURS.map((h, i) => (
                 <View key={i} style={{ height: hourHeight, justifyContent: 'flex-start', alignItems: 'center' }}>
-                  <Text style={{ fontSize: 15, fontWeight: '800', color: isDark ? '#64748b' : '#94a3b8', marginTop: i === 0 ? 0 : -9, backgroundColor: isDark ? '#1e293b' : '#ffffff', paddingHorizontal: 6 }}>
+                  <Text style={{ fontSize: 15, fontWeight: '800', color: isDark ? '#64748b' : '#94a3b8', marginTop: i === 0 ? 0 : -9, backgroundColor: isDark ? '#1a202a' : '#ffffff', paddingHorizontal: 6 }}>
                     {formatTime(h)}
                   </Text>
                 </View>
@@ -797,11 +797,11 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
                 ))}
                 {/* Grid Lines */}
                 {HOURS.map((_, i) => (
-                  <View key={i} style={{ position: 'absolute', top: i * hourHeight + 10, width: '100%', height: 2, backgroundColor: isDark ? '#1e293b' : '#f1f5f9' }} />
+                  <View key={i} style={{ position: 'absolute', top: i * hourHeight + 10, width: '100%', height: 2, backgroundColor: isDark ? '#1a202a' : '#f1f5f9' }} />
                 ))}
                 <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', flexDirection: 'row', pointerEvents: 'none' }}>
                   {displayDayIndices.map((_, i) => (
-                    <View key={i} style={{ width: DAY_WIDTH, borderRightWidth: 2, borderColor: isDark ? '#1e293b' : '#f1f5f9' }} />
+                    <View key={i} style={{ width: DAY_WIDTH, borderRightWidth: 2, borderColor: isDark ? '#1a202a' : '#f1f5f9' }} />
                   ))}
                 </View>
 
@@ -850,7 +850,7 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
     >
           <View style={{ flexDirection: 'row' }}>
             {/* Time Column */}
-            <View style={{ width: timeColWidth, borderRightWidth: 1, borderColor: isDark ? '#334155' : '#e2e8f0', paddingTop: 10 * zoomScale }}>
+            <View style={{ width: timeColWidth, borderRightWidth: 1, borderColor: isDark ? '#2a3140' : '#e2e8f0', paddingTop: 10 * zoomScale }}>
               {HOURS.map((h, i) => (
                 <View key={i} style={{ height: hourHeight, justifyContent: 'flex-start', alignItems: 'center' }}>
                   <Text style={{ fontSize: Math.max(7, 10 * zoomScale), fontWeight: '700', color: isDark ? '#64748b' : '#94a3b8', marginTop: i === 0 ? 0 : -6 * zoomScale, backgroundColor: styles.gridBg, paddingHorizontal: 3 * zoomScale }}>
@@ -884,7 +884,7 @@ export default function TimetableGrid({ classes, isDark, isQuickEditMode = false
                 ))}
                 <View style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', flexDirection: 'row', pointerEvents: 'none' }}>
                   {displayDayIndices.map((_, i) => (
-                    <View key={i} style={{ width: DAY_WIDTH, borderRightWidth: 1, borderColor: isDark ? '#1e293b' : '#e2e8f0' }} />
+                    <View key={i} style={{ width: DAY_WIDTH, borderRightWidth: 1, borderColor: isDark ? '#1a202a' : '#e2e8f0' }} />
                   ))}
                 </View>
 

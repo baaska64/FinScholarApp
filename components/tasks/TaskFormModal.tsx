@@ -695,7 +695,7 @@ export default function TaskFormModal({
               borderRadius: 16,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: !title.trim() || !subjectId ? (isDark ? '#334155' : '#c7d2fe') : theme.primary,
+              backgroundColor: !title.trim() || !subjectId ? (isDark ? '#2a3140' : '#c7d2fe') : theme.primary,
               marginTop: 10,
               ...Shadows.md,
             }}

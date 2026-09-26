@@ -2282,7 +2282,7 @@ export default function FlashcardsScreen() {
                       <View
                         style={{
                           width: 22, height: 22, borderRadius: 7, marginRight: 11, marginTop: 1, alignItems: 'center', justifyContent: 'center',
-                          borderWidth: 2, borderColor: sel ? theme.primary : isDark ? '#464d75' : '#cbd5e1', backgroundColor: sel ? theme.primary : 'transparent',
+                          borderWidth: 2, borderColor: sel ? theme.primary : isDark ? '#39425a' : '#cbd5e1', backgroundColor: sel ? theme.primary : 'transparent',
                         }}
                       >
                         {sel && <Ionicons name="checkmark" size={14} color="#ffffff" />}
@@ -3182,7 +3182,7 @@ export default function FlashcardsScreen() {
           accessibilityLabel="Upload a text or CSV file"
           style={{
             flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: Radius.lg, marginBottom: 16,
-            borderWidth: 1, borderStyle: 'dashed', borderColor: isDark ? '#3d4468' : '#cbd5e1',
+            borderWidth: 1, borderStyle: 'dashed', borderColor: isDark ? '#2c3444' : '#cbd5e1',
           }}
         >
           {importLoading ? (
