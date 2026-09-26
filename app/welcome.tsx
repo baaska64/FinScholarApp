@@ -22,13 +22,13 @@ export default function WelcomeScreen() {
   const isDark = false;
 
   // ─── Colors ────────────────────────────────────────────────────────────
-  const heroBg = isDark ? '#12103d' : '#4f46e5';
-  const pageBg = isDark ? '#1a1f3d' : '#ffffff'; // Match cardBg to prevent ugly gaps at the bottom
-  const cardBg = isDark ? '#1a1f3d' : '#ffffff';
-  const cardBorder = isDark ? '#2d2f54' : '#e3e5f0';
+  const heroBg = isDark ? '#4338ca' : '#4f46e5';
+  const pageBg = isDark ? '#151a23' : '#ffffff'; // Match cardBg to prevent ugly gaps at the bottom
+  const cardBg = isDark ? '#151a23' : '#ffffff';
+  const cardBorder = isDark ? '#232a37' : '#e3e5f0';
   const textPrimary = isDark ? '#f1f2f9' : '#1e293b';
   const textSecondary = isDark ? '#c2c6dc' : '#525f78';
-  const lip = isDark ? '#0d0e21' : '#d8dbea';
+  const lip = isDark ? '#07090d' : '#d8dbea';
 
   // ─── Animations ────────────────────────────────────────────────────────
   const mascotFloat = useRef(new Animated.Value(0)).current;

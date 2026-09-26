@@ -14,6 +14,8 @@ import { WIDGET_GALLERY, renderWidgetPreview } from '../../widget/WidgetTaskHand
 import { buildDemoSnapshot } from '../../widget/widgetData';
 import { getTheme, Typography, Radius, Shadows } from '@/constants/Theme';
 import { OnboardingService } from '@/services/OnboardingService';
+import { ThemeService } from '@/services/ThemeService';
+import { THEME_OPTIONS, ThemePreference } from '@/utils/themePreference';
 import { useSpotlight } from '@/components/spotlight/SpotlightProvider';
 import { ALL_TOUR_KEYS, MAIN_TOUR, TOUR_KEYS } from '@/constants/tours';
 import { useTabBarHeight } from '@/components/CustomTabBar';
@@ -59,7 +61,7 @@ const SectionLabel = ({ title, theme }: { title: string; theme: any }) => (
 
 export default function ProfileScreen() {
     const [email, setEmail] = useState('Loading...');
-    const { colorScheme, toggleColorScheme } = useColorScheme();
+    const { colorScheme } = useColorScheme();
     const isDark = colorScheme === 'dark';
     const theme = getTheme(isDark);
     const tabBarHeight = useTabBarHeight();
@@ -74,11 +76,14 @@ export default function ProfileScreen() {
     const [data, setData] = useState<any>(null);
     const { startTour } = useSpotlight();
 
-    const handleToggleTheme = () => {
-        // Wrap in setTimeout to avoid 'React state update on unmounted component' warnings 
-        // that NativeWind v2 sometimes throws when toggling global theme
+    const [themePref, setThemePref] = useState<ThemePreference>(ThemeService.get());
+    useEffect(() => ThemeService.subscribe(setThemePref), []);
+
+    const handleSetTheme = (preference: ThemePreference) => {
+        // Wrap in setTimeout to avoid 'React state update on unmounted component' warnings
+        // that NativeWind sometimes throws when switching the global theme
         setTimeout(() => {
-            toggleColorScheme();
+            ThemeService.set(preference);
         }, 0);
     };
 
@@ -194,14 +199,46 @@ export default function ProfileScreen() {
                             overflow: 'hidden',
                             ...(!isDark ? { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 8 } : {}),
                         }}>
-                            <SettingsRow
-                                icon={isDark ? 'moon' : 'sunny'}
-                                iconColor={isDark ? '#818cf8' : '#f59e0b'}
-                                label={isDark ? 'Dark Mode' : 'Light Mode'}
-                                onPress={handleToggleTheme}
-                                isDark={isDark}
-                                theme={theme}
-                            />
+                            <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16 }}>
+                                <View style={{
+                                    width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+                                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f8fafc',
+                                }}>
+                                    <Ionicons
+                                        name={themePref === 'system' ? 'phone-portrait-outline' : isDark ? 'moon' : 'sunny'}
+                                        size={20}
+                                        color={isDark ? '#818cf8' : '#f59e0b'}
+                                    />
+                                </View>
+                                <Text style={{ fontFamily: 'Nunito_700Bold', fontSize: 15, marginLeft: 14, color: theme.text, flex: 1 }}>Theme</Text>
+                                <View accessibilityRole="radiogroup" style={{ flexDirection: 'row', padding: 3, borderRadius: 12, backgroundColor: theme.surfaceSecondary }}>
+                                    {THEME_OPTIONS.map((option) => {
+                                        const active = themePref === option.value;
+                                        return (
+                                            <TouchableOpacity
+                                                key={option.value}
+                                                onPress={() => handleSetTheme(option.value)}
+                                                activeOpacity={0.7}
+                                                accessibilityRole="radio"
+                                                accessibilityState={{ selected: active }}
+                                                accessibilityLabel={option.value === 'system' ? 'Match device theme' : `${option.label} theme`}
+                                                style={{
+                                                    paddingVertical: 7, paddingHorizontal: 12, borderRadius: 9,
+                                                    borderWidth: 1,
+                                                    borderColor: active ? theme.cardBorder : 'transparent',
+                                                    // In the dark the raised segment has to be lighter than
+                                                    // its track, not the surface colour, which is darker.
+                                                    backgroundColor: active ? (isDark ? '#2b3342' : '#ffffff') : 'transparent',
+                                                }}
+                                            >
+                                                <Text style={{ fontFamily: 'Nunito_800ExtraBold', fontSize: 12.5, color: active ? theme.text : theme.textTertiary }}>
+                                                    {option.label}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                            </View>
                             <View style={{ height: 1, backgroundColor: theme.cardBorder, marginHorizontal: 16 }} />
                             <SettingsRow
                                 icon="apps"

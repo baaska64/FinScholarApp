@@ -71,7 +71,7 @@ export default function OcclusionImage({ data, states, showLabels, onPressPoint,
     const labelled = showLabels ? masks.filter((m) => states[m.id] === 'revealed' && (m.label || '').trim()) : [];
 
     const content = (
-        <View ref={contentRef} collapsable={false} style={{ width: drawW, height: drawH, alignSelf: 'center', borderRadius: 12, overflow: 'hidden', backgroundColor: isDark ? '#0d0e21' : '#e9ebf3' }}>
+        <View ref={contentRef} collapsable={false} style={{ width: drawW, height: drawH, alignSelf: 'center', borderRadius: 12, overflow: 'hidden', backgroundColor: isDark ? '#07090d' : '#e9ebf3' }}>
             {uri ? (
                 <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="stretch" accessibilityIgnoresInvertColors />
             ) : uri === undefined ? (

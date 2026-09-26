@@ -1178,7 +1178,7 @@ export default function ScheduleScreen() {
                         paddingTop: 10,
                     }}>
                         <View style={{ alignItems: 'center', marginBottom: 10 }}>
-                            <View style={{ width: 44, height: 5, borderRadius: 3, backgroundColor: isDark ? '#334155' : '#cbd5e1' }} />
+                            <View style={{ width: 44, height: 5, borderRadius: 3, backgroundColor: isDark ? '#2a3140' : '#cbd5e1' }} />
                         </View>
 
                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 12 }}>

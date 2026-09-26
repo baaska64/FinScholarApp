@@ -9,6 +9,8 @@ import './global.css';
 
 import { NotificationService } from '../services/NotificationService';
 import { OnboardingService } from '../services/OnboardingService';
+import { ThemeService } from '../services/ThemeService';
+import { getTheme } from '../constants/Theme';
 import { widgetTaskHandler } from '../widget/WidgetTaskHandler';
 import { LogBox, View, ActivityIndicator, Text, Appearance, Image, Platform } from 'react-native';
 import Purchases, { LOG_LEVEL } from 'react-native-purchases';
@@ -47,7 +49,14 @@ export default function RootLayout() {
     Nunito_900Black,
   });
 
-  const loaded = loadedNative && loadedNunito;
+  // The splash stays up until the stored theme is applied, so a student who
+  // chose dark never sees the first screen flash light (or the reverse).
+  const [themeReady, setThemeReady] = useState(false);
+  useEffect(() => {
+    ThemeService.load().finally(() => setThemeReady(true));
+  }, []);
+
+  const loaded = loadedNative && loadedNunito && themeReady;
   const error = errorNative || errorNunito;
 
   const [showSplash, setShowSplash] = useState(true);
@@ -121,8 +130,11 @@ function RootLayoutNav() {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
 
+  // The navigator paints behind screens during transitions; drawn from the
+  // tokens so a push never flashes a slate that no screen uses.
+  const t = getTheme(isDark);
   const navTheme = isDark
-    ? { ...DarkTheme, colors: { ...DarkTheme.colors, primary: '#818cf8', background: '#0f172a', card: '#1e293b', text: '#f1f5f9', border: '#334155', notification: '#818cf8' } }
+    ? { ...DarkTheme, colors: { ...DarkTheme.colors, primary: t.primary, background: t.background, card: t.surface, text: t.text, border: t.cardBorder, notification: t.primary } }
     : { ...DefaultTheme, colors: { ...DefaultTheme.colors, primary: '#6366f1', background: '#f8fafc', card: '#ffffff', text: '#1e293b', border: '#e2e8f0', notification: '#6366f1' } };
 
   return (

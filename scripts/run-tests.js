@@ -200,6 +200,9 @@ async function run() {
     const { runSyncPlanTests } = await import('../__tests__/sync-plan.test.js');
     runSyncPlanTests(harness.describe, harness.test);
 
+    const { runThemeTests } = await import('../__tests__/theme.test.js');
+    runThemeTests(harness.describe, harness.test);
+
   } catch (err) {
     console.error(`\n${RED}Fatal runner error:${RESET}`, err);
     process.exit(1);
